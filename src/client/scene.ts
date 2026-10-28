@@ -136,6 +136,12 @@ export class WorldView {
     if (this.selected && !this.exists(this.selected)) this.select(null);
   }
 
+  clear(): void {
+    this.select(null);
+    this.buildRoom(null);
+    this.roomKey = '';
+  }
+
   select(pick: Pick | null): void {
     this.selected = pick;
     this.selectionRing.visible = pick?.kind === 'character' && this.actors.has(pick.id);

@@ -143,7 +143,9 @@ export class GameMaster {
   private async check(engine: GameEngine, changes: string[], input: string, narration: string, emit: Emit): Promise<Verdict | null> {
     try {
       const state = compileBrief(engine, { recentTurns: 0 });
-      return await this.opts.provider.verify(verifierPrompt({ state, changes, input, narration }));
+      const { verdict, usage } = await this.opts.provider.verify(verifierPrompt({ state, changes, input, narration }));
+      if (usage) emit({ type: 'usage', usage });
+      return verdict;
     } catch (err) {
       emit({ type: 'status', text: `Verificador indisponível (${err instanceof Error ? err.message : String(err)}); seguindo sem checagem.` });
       return null;

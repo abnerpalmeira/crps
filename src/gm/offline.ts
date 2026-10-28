@@ -146,7 +146,7 @@ export class OfflineProvider implements ModelProvider {
     return new OfflineSession(opts);
   }
 
-  async verify(): Promise<Verdict> {
-    return { consistent: true, issues: [] };
+  async verify(): Promise<{ verdict: Verdict }> {
+    return { verdict: { consistent: true, issues: [] } };
   }
 }

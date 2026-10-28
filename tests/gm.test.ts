@@ -38,9 +38,9 @@ class FakeProvider implements ModelProvider {
     this.options.push(opts);
     return session;
   }
-  async verify(prompt: string): Promise<Verdict> {
+  async verify(prompt: string): Promise<{ verdict: Verdict }> {
     this.verifyPrompts.push(prompt);
-    return this.verdicts.shift() ?? { consistent: true, issues: [] };
+    return { verdict: this.verdicts.shift() ?? { consistent: true, issues: [] } };
   }
 }
 

@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
-import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, StepStop, Verdict } from './provider';
+import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, StepStop, Usage, Verdict } from './provider';
 
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const DEFAULT_VERIFIER_MODEL = 'claude-haiku-5-5';
@@ -40,16 +40,23 @@ export class ClaudeProvider implements ModelProvider {
     return new ClaudeSession(this.client, this.model, this.maxTokens, opts);
   }
 
-  async verify(prompt: string): Promise<Verdict> {
+  async verify(prompt: string): Promise<{ verdict: Verdict; usage: Usage }> {
     const response = await this.client.messages.parse({
       model: this.verifierModel,
       max_tokens: 4000,
       output_config: { effort: 'low', format: zodOutputFormat(VerdictSchema) },
       messages: [{ role: 'user', content: prompt }],
     });
+    const usage: Usage = {
+      model: response.model,
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+    };
     // Na dúvida o verificador não trava o jogo.
-    if (response.stop_reason === 'refusal' || !response.parsed_output) return { consistent: true, issues: [] };
-    return response.parsed_output;
+    if (response.stop_reason === 'refusal' || !response.parsed_output) return { verdict: { consistent: true, issues: [] }, usage };
+    return { verdict: response.parsed_output, usage };
   }
 }
 
@@ -94,7 +101,8 @@ class ClaudeSession implements ModelSession {
         continue;
       }
 
-      const usage = {
+      const usage: Usage = {
+        model: message.model,
         inputTokens: message.usage.input_tokens,
         outputTokens: message.usage.output_tokens,
         cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,

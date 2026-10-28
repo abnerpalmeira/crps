@@ -235,6 +235,15 @@ export class Ui {
     if (this.inspected) this.showInspector(world, this.inspected);
   }
 
+  renderNoWorld(): void {
+    $('#hud-location').textContent = 'CRPS';
+    $('#hud-clock').textContent = '';
+    $('#stage-empty').hidden = false;
+    $('#tab-sheet').replaceChildren(el('p', 'muted', 'Seu personagem aparece aqui assim que o mundo estiver pronto.'));
+    $('#tab-journal').replaceChildren();
+    this.closeInspector();
+  }
+
   showInspector(world: WorldState | null, pick: Pick | null): void {
     this.inspected = pick;
     if (!world || !pick) return this.closeInspector();

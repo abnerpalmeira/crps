@@ -85,10 +85,19 @@ const server = createServer(async (req, res) => {
       if (!premise) return json(res, 400, { error: 'Escreva a premissa da campanha.' });
       if (busy) return json(res, 409, { error: 'O mestre ainda está narrando.' });
       busy = true;
-      store.archive();
+      // Se a criação falhar (créditos, login), a campanha anterior continua sendo a atual.
+      const previous = engine;
       const fresh = GameEngine.create(premise);
       engine = fresh;
-      await streamTurn(res, (emit) => gm.setup(fresh, emit));
+      await streamTurn(res, async (emit) => {
+        try {
+          await gm.setup(fresh, emit);
+          store.archive();
+        } catch (err) {
+          engine = previous;
+          throw err;
+        }
+      });
       return;
     }
     if (pathname === '/api/turn' && req.method === 'POST') {

@@ -58,14 +58,35 @@ async function run(path: '/api/new' | '/api/turn', body: Record<string, string>,
   ui.setBusy(true);
   const turn = ui.beginTurn(input);
   turn.setStatus(path === '/api/new' ? 'Montando o mundo…' : 'O mestre está pensando…');
+  let failure: string | null = null;
   try {
-    await streamEvents(path, body, (event) => handle(event, turn));
+    await streamEvents(path, body, (event) => {
+      if (event.type === 'error') failure = event.message;
+      handle(event, turn);
+    });
   } catch (err) {
-    turn.error(err instanceof Error ? err.message : String(err));
+    failure = err instanceof Error ? err.message : String(err);
+    turn.error(failure);
   } finally {
     turn.finish();
     busy = false;
     ui.setBusy(false);
+  }
+  if (failure !== null && path === '/api/new') await resync(failure);
+}
+
+/** Depois de uma criação que falhou, volta a mostrar a campanha que o servidor manteve (ou nenhuma). */
+async function resync(failure: string): Promise<void> {
+  const state = await fetchState().catch(() => null);
+  if (!state) return;
+  if (state.world) {
+    applyWorld(state.world);
+    ui.renderHistory(state.world);
+    ui.notice(`Não deu para criar a campanha nova: ${failure} A campanha anterior continua salva.`);
+  } else {
+    world = null;
+    view.clear();
+    ui.renderNoWorld();
   }
 }
 

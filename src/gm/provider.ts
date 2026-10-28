@@ -15,6 +15,8 @@ export interface ToolCall {
 export type StepStop = 'tool_use' | 'end_turn' | 'refusal' | 'max_tokens' | 'other';
 
 export interface Usage {
+  /** Modelo que atendeu (pode ser um fallback), para calcular custo por modelo. */
+  model: string;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
@@ -57,5 +59,5 @@ export interface ModelProvider {
   readonly label: string;
   startSession(opts: SessionOptions): ModelSession;
   /** Juiz barato que compara narração e estado. */
-  verify(prompt: string): Promise<Verdict>;
+  verify(prompt: string): Promise<{ verdict: Verdict; usage?: Usage }>;
 }

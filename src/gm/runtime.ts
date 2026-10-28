@@ -38,7 +38,10 @@ export function describeError(err: unknown): string {
   }
   if (err instanceof Anthropic.RateLimitError) return 'Limite de uso da API atingido. Espere um pouco e tente de novo.';
   if (err instanceof Anthropic.APIConnectionError) return 'Sem conexão com a API do Claude.';
-  if (err instanceof Anthropic.APIError) return `Erro da API do Claude (${err.status ?? '?'}): ${err.message}`;
+  if (err instanceof Anthropic.APIError) {
+    const body = err.error as { error?: { message?: string } } | undefined;
+    return `Erro da API do Claude (${err.status ?? '?'}): ${body?.error?.message ?? err.message}`;
+  }
   return err instanceof Error ? err.message : String(err);
 }
 
