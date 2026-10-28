@@ -177,9 +177,9 @@ describe('runTool', () => {
     expect(told.summary).toMatch(/^👂 Kenji agora sabe/);
   });
 
-  it('publica 17 tools com JSON Schema estável', () => {
+  it('publica 18 tools com JSON Schema estável', () => {
     const specs = toolSpecs();
-    expect(specs).toHaveLength(17);
+    expect(specs).toHaveLength(18);
     expect(JSON.stringify(toolSpecs())).toBe(JSON.stringify(specs));
     expect(JSON.stringify(specs)).not.toContain('9007199254740991');
   });

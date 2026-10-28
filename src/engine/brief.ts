@@ -1,7 +1,7 @@
-import { DIFFICULTY_LABEL, type GameEngine } from './engine';
+import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { LEGEND } from './layout';
 import { formatClock, truncate } from './text';
-import type { Character, DifficultyName, Location } from './types';
+import type { Character, DifficultyName, Location, PerkDef, Visibility } from './types';
 
 const MARKERS = '123456789AEFGHIJKLMNOPQRUVXYZ'.split('');
 
@@ -26,6 +26,16 @@ export function renderMap(engine: GameEngine, loc: Location): { map: string; mar
 
 function shortId(loc: Location, id: string): string {
   return id.startsWith(`${loc.id}/`) ? id.slice(loc.id.length + 1) : id;
+}
+
+export function describePerk(perk: PerkDef): string {
+  const effects = perk.grants.map((g) => {
+    if (g.kind === 'see_stat') return `vê ${g.stat} de todos`;
+    if (g.kind === 'see_thoughts') return 'percebe o que os outros pensam';
+    const scope = [g.attribute && `de ${g.attribute}`, g.skill && `com ${g.skill}`].filter(Boolean).join(' ');
+    return `${g.bonus > 0 ? '+' : ''}${g.bonus} em testes${scope ? ` ${scope}` : ''}`;
+  });
+  return effects.join(', ') || perk.description;
 }
 
 function statLine(values: Record<string, number>): string {
@@ -61,11 +71,14 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
   out.push('# ESTADO DO MUNDO (compilado pelo motor; é a fonte da verdade)');
   out.push(`Turno ${s.turn} · ${formatClock(s.clock)}`);
   out.push(`Premissa: ${s.premise}`);
+  const vis = (v: Visibility) => (v === 'self' ? '' : `, ${VISIBILITY_LABEL[v]}`);
   out.push(
-    `Regras "${rules.name}": teste = ${rules.dice} + atributo + perícia (+ modificador) ≥ dificuldade (${diffs}). ` +
-      `Atributos: ${rules.attributes.map((a) => `${a.id} (${a.name})`).join(', ')}. ` +
-      `Recursos: ${rules.resources.map((r) => `${r.id} (máx ${r.max})`).join(', ') || 'nenhum'}. ${rules.notes}`,
+    `Regras "${rules.name}": teste = ${rules.dice} + atributo + perícia (+ modificador + perks) ≥ dificuldade (${diffs}). ` +
+      `Atributos: ${rules.attributes.map((a) => `${a.id} (${a.name}${vis(a.visibility)})`).join(', ')}. ` +
+      `Recursos: ${rules.resources.map((r) => `${r.id} (máx ${r.max}${vis(r.visibility)}${r.core ? ', universal' : ''})`).join(', ') || 'nenhum'}. ` +
+      `${rules.notes}`,
   );
+  if (rules.perks.length) out.push(`Perks: ${rules.perks.map((perk) => `${perk.id} (${perk.name}: ${describePerk(perk)})`).join('; ')}.`);
 
   const loc = engine.currentLocation;
   const sceneIds = new Set<string>();
@@ -118,9 +131,11 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       sceneIds.add(c.id);
       const where = c.seatId ? `sentado(a) em ${shortId(loc, c.seatId)}` : 'em pé';
       const res = resourceLine(engine, c, !c.isPlayer);
+      const perks = engine.perksOf(c).map((perk) => perk.name);
       return (
         `- ${markers.get(c.id) ?? '?'} ${c.name} [${c.id}]${c.isPlayer ? ' (VOCÊ, jogador)' : ''}: ${c.role}; ${where} (${c.pos?.x},${c.pos?.y}), olhando ${c.facing}; ` +
-        `${c.detail === 'sketch' ? 'esboço' : 'completo'}; traços: ${c.traits.join(', ') || '—'}${res ? `; ${res}` : ''}`
+        `${c.detail === 'sketch' ? 'esboço' : 'completo'}; traços: ${c.traits.join(', ') || '—'}${res ? `; ${res}` : ''}` +
+        `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${c.thoughts ? `; pensa: "${truncate(c.thoughts, 160)}"` : ''}`
       );
     });
     out.push(`\nPersonagens aqui:\n${people.join('\n') || '(ninguém)'}`);
@@ -141,6 +156,11 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     out.push(`${p.role}. ${p.appearance}`);
     out.push(`Atributos: ${statLine(p.attributes)}. Perícias: ${statLine(p.skills)}. Recursos: ${resourceLine(engine, p, false) || '—'}.`);
     out.push(`Inventário: ${inv.map((i) => `${i.name} [${i.id}]${i.quantity > 1 ? ` ×${i.quantity}` : ''}`).join(', ') || 'vazio'}`);
+    const perks = engine.perksOf(p);
+    out.push(
+      `Perks: ${perks.map((perk) => `${perk.name} (${describePerk(perk)})`).join('; ') || 'nenhum'}. ` +
+        'O jogador só percebe valores ocultos e pensamentos alheios por perks; sem eles, não os revele na narração.',
+    );
   } else {
     out.push('\n(Ainda não há personagem do jogador.)');
   }

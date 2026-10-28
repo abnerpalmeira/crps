@@ -53,7 +53,10 @@ export function snapshotScene(world: WorldState): SceneFrame {
     turn: world.turn,
     clock: { ...world.clock },
     characters: Object.fromEntries(
-      Object.values(world.characters).map((c) => [c.id, { locationId: c.locationId, pos: c.pos && { ...c.pos }, seatId: c.seatId, facing: c.facing }]),
+      Object.values(world.characters).map((c) => [
+        c.id,
+        { locationId: c.locationId, pos: c.pos && { ...c.pos }, seatId: c.seatId, facing: c.facing, resources: { ...c.resources } },
+      ]),
     ),
     items: Object.fromEntries(Object.values(world.items).map((i) => [i.id, structuredClone(i.holder)])),
     fixtures: Object.fromEntries(

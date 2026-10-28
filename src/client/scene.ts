@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { tileDef } from '../engine/layout';
+import { lifeStatId, perceptionOf } from '../engine/perception';
 import type { Character, Location, WorldState } from '../engine/types';
 import {
   DIR_VEC,
@@ -339,6 +340,9 @@ export class WorldView {
 
   private syncActors(world: WorldState, loc: Location): void {
     const present = new Set<string>();
+    const view = perceptionOf(world, world.playerId);
+    const life = lifeStatId(world);
+    const lifeMax = world.ruleset.resources.find((r) => r.id === life)?.max ?? 1;
     for (const c of Object.values(world.characters)) {
       if (c.locationId !== loc.id || !c.pos) continue;
       present.add(c.id);
@@ -359,7 +363,19 @@ export class WorldView {
         actor = { obj, label, target: pos.clone(), yaw, seated: false };
         this.actors.set(c.id, actor);
       }
-      actor.label.element.textContent = c.isPlayer ? `${c.name} (você)` : c.name.split(' ')[0];
+      const label = actor.label.element;
+      label.replaceChildren(c.isPlayer ? `${c.name} (você)` : c.name.split(' ')[0]);
+      // Barra de vida só quando o jogador pode ver a vida desse personagem (pública ou por perk).
+      if (life && view.canSeeStat(life, c.id)) {
+        const value = c.resources[life] ?? lifeMax;
+        const bar = document.createElement('span');
+        bar.className = 'hp';
+        bar.title = `${value}/${lifeMax}`;
+        const fill = document.createElement('i');
+        fill.style.width = `${(100 * value) / lifeMax}%`;
+        bar.append(fill);
+        label.append(bar);
+      }
       actor.target.copy(pos);
       actor.yaw = yaw;
       if (actor.seated !== seated) setSeated(actor.obj, seated);

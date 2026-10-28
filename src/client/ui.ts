@@ -1,3 +1,4 @@
+import { perceptionOf } from '../engine/perception';
 import { formatClock } from '../engine/text';
 import type { Character, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
@@ -14,6 +15,14 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+/** Atributos e recursos de um personagem como texto, com o id da regra para checar visibilidade. */
+function statTexts(world: WorldState, c: Character): { id: string; text: string }[] {
+  return [
+    ...world.ruleset.attributes.map((a) => ({ id: a.id, text: `${a.name} ${c.attributes[a.id] ?? 0}` })),
+    ...world.ruleset.resources.map((r) => ({ id: r.id, text: `${r.name} ${c.resources[r.id] ?? r.max}/${r.max}` })),
+  ];
 }
 
 type ChipKind = 'dice' | 'world' | 'backstage';
@@ -55,8 +64,10 @@ export class TurnView {
   }
 
   tool(e: Extract<GmEvent, { type: 'tool' }>): void {
-    const chip = el('span', `chip ${chipKind(e.summary, e.ok)}`, e.summary);
-    chip.title = `${e.name}\n\nentrada: ${JSON.stringify(e.input, null, 1)}\n\nresultado: ${e.result.slice(0, 800)}`;
+    const kind = chipKind(e.summary, e.ok);
+    const chip = el('span', `chip ${kind}`, e.summary);
+    // Entrada e resultado podem ter valores ocultos: o detalhe fica só nos chips de bastidores.
+    if (kind === 'backstage') chip.title = `${e.name}\n\nentrada: ${JSON.stringify(e.input, null, 1)}\n\nresultado: ${e.result.slice(0, 800)}`;
     this.chips.append(chip);
     this.scroll();
   }
@@ -298,10 +309,20 @@ export class Ui {
       } else body.append(el('p', 'hint', 'Ainda um esboço: o mestre aprofunda quando a pessoa ficar importante.'));
       const held = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === c.id);
       if (held.length) body.append(el('p', 'muted', `Com: ${held.map((i) => i.name).join(', ')}`));
-      const secrets = world.facts.filter((f) => f.knownBy !== 'all' && f.knownBy.includes(c.id));
-      if (!c.isPlayer && secrets.length) {
+      if (!c.isPlayer) {
+        const view = perceptionOf(world, world.playerId);
+        const stats = statTexts(world, c);
+        const visible = stats.filter((s) => view.canSeeStat(s.id, c.id)).map((s) => s.text);
+        if (visible.length) body.append(el('p', 'muted', visible.join(' · ')));
+        if (c.thoughts && view.canSeeThoughts(c.id)) body.append(el('p', 'thought', `💭 ${c.thoughts}`));
+        // Bastidores: tudo o que o mestre sabe sobre o NPC.
         const box = el('div', 'backstage-only');
-        box.append(el('p', 'hint', `Sabe (bastidores): ${secrets.map((f) => f.text).join(' · ')}`));
+        const perks = c.perks.flatMap((id) => world.ruleset.perks.filter((p) => p.id === id).map((p) => p.name));
+        const secrets = world.facts.filter((f) => f.knownBy !== 'all' && f.knownBy.includes(c.id));
+        box.append(el('p', 'hint', `Ficha (bastidores): ${stats.map((s) => s.text).join(' · ')}`));
+        if (perks.length) box.append(el('p', 'hint', `Perks (bastidores): ${perks.join(', ')}`));
+        if (c.thoughts) box.append(el('p', 'hint', `Pensa (bastidores): ${c.thoughts}`));
+        if (secrets.length) box.append(el('p', 'hint', `Sabe (bastidores): ${secrets.map((f) => f.text).join(' · ')}`));
         body.append(box);
       }
       if (!c.isPlayer) {
@@ -378,11 +399,12 @@ export class Ui {
       return;
     }
     const rules = world.ruleset;
+    const view = perceptionOf(world, player.id);
     const parts: HTMLElement[] = [el('h2', '', player.name), el('p', 'muted', player.role), el('p', '', player.appearance)];
     if (player.traits.length) parts.push(this.traits(player.traits));
 
     parts.push(el('h3', '', `Atributos · ${rules.name}`));
-    for (const a of rules.attributes) {
+    for (const a of rules.attributes.filter((def) => view.canSeeStat(def.id, player.id))) {
       const row = el('div', 'stat');
       row.title = a.description;
       const pips = el('span', 'pips');
@@ -390,9 +412,10 @@ export class Ui {
       row.append(el('span', '', a.name), pips);
       parts.push(row);
     }
-    if (rules.resources.length) {
+    const resources = rules.resources.filter((def) => view.canSeeStat(def.id, player.id));
+    if (resources.length) {
       parts.push(el('h3', '', 'Recursos'));
-      for (const r of rules.resources) {
+      for (const r of resources) {
         const value = player.resources[r.id] ?? r.max;
         const row = el('div', 'resource');
         const bar = el('span', 'bar');
@@ -407,6 +430,20 @@ export class Ui {
     if (skills.length) {
       parts.push(el('h3', '', 'Perícias'));
       parts.push(el('p', '', skills.map(([k, v]) => `${k.replace(/_/g, ' ')} ${v}`).join(' · ')));
+    }
+    if (view.perks.length) {
+      parts.push(el('h3', '', 'Perks'));
+      for (const p of view.perks) {
+        const row = el('div', 'item');
+        row.append(el('strong', '', p.name), el('span', 'muted', p.description));
+        parts.push(row);
+      }
+    }
+    const hidden = statTexts(world, player).filter((s) => !view.canSeeStat(s.id, player.id));
+    if (hidden.length) {
+      const box = el('div', 'backstage-only');
+      box.append(el('p', 'hint', `Ocultos para você (bastidores): ${hidden.map((s) => s.text).join(' · ')}`));
+      parts.push(box);
     }
     parts.push(el('h3', '', 'Inventário'));
     const items = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === player.id);

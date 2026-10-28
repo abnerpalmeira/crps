@@ -40,7 +40,7 @@ Outros comandos:
 | Comando | O que faz |
 |---|---|
 | `npm run play` | Joga no terminal (`/estado` mostra o resumo do motor, `/novo`, `/sair`) |
-| `npm run demo` | Interface com o provedor **offline**: roteiro fixo de sala de aula, sem modelo nem tokens |
+| `npm run demo` | Interface com o provedor **offline**: roteiro fixo de sala de aula, sem modelo nem tokens (API em :8788, roda junto com o jogo real) |
 | `npm test` | Testes do motor, do layout e do loop do mestre (com um provedor roteirizado) |
 | `npm run build` | Typecheck e bundle de produção em `dist/` |
 | `npm start` | Build e servidor único que serve a interface e a API em :8787 |
@@ -73,7 +73,8 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   types.ts      modelo de dados: personagens, itens, locais, móveis, fatos, fios, relógio
   layout.ts     layout ASCII → local validado (paredes, conectividade, acesso, orientação)
   engine.ts     regras: posicionamento, caminhos, alcance, testes, fatos, tempo
-  tools.ts      as 17 tools (schemas zod → JSON Schema) e a execução atômica
+  tools.ts      as 18 tools (schemas zod → JSON Schema) e a execução atômica
+  perception.ts o que o jogador percebe (visibilidade e perks)
   brief.ts      o resumo do estado que o modelo recebe a cada turno
   frames.ts     falas `@id:` → passos do replay; retratos da cena por turno
 src/gm/       o mestre
@@ -102,8 +103,16 @@ Princípios que o motor impõe:
   usa um fato que não conhece, ou quando a narração mostra alguém descobrindo algo sem o
   registro. Segredos que o personagem do jogador não conhece não aparecem para o jogador,
   só nos bastidores.
-- **Regras como dados.** Cada campanha define atributos, recursos e mecânica de teste
-  adequados ao gênero; o motor rola os dados e o jogador vê o resultado.
+- **Regras como dados, e vivas.** Cada campanha define atributos, recursos, perks e mecânica
+  de teste adequados ao gênero; o motor rola os dados. A história pode mudar de gênero no
+  meio (a aula vira epidemia): `extend_ruleset` cria atributos (pontaria), recursos
+  (infecção) e perks, e quem já existe recebe o valor padrão.
+- **Vida universal e visibilidade.** Todo personagem tem vida, mesmo oculta. Cada atributo
+  e recurso é `public` (o jogador vê de todos), `self` (só o próprio) ou `hidden` (só o mestre).
+- **Perks ligados a traços**, com efeito aplicado pelo motor: `see_stat` (ver a vida de
+  todos), `see_thoughts` (ler o pensamento dos NPCs, que o mestre mantém em `thoughts`) e
+  `check_bonus` (+N em testes). O verificador aponta quando a narração revela um valor oculto
+  ou um pensamento sem o perk, e os chips não mostram o que o jogador não percebe.
 - **O espaço importa.** Entregar algo exige estar a até 2 tiles; mover passa por
   busca de caminho; assentos e tiles não podem ser ocupados por dois.
 
@@ -111,14 +120,15 @@ Princípios que o motor impõe:
 
 | Tool | Para quê |
 |---|---|
-| `define_ruleset` | Atributos, recursos e mecânica de teste da campanha |
+| `define_ruleset` | Atributos, recursos, perks e mecânica de teste da campanha |
+| `extend_ruleset` | Regras novas no meio da campanha e mudanças de visibilidade |
 | `create_location` | Local a partir de layout ASCII |
 | `create_characters` | Personagens em lote (`seat: "random"` senta em assento livre) |
 | `create_items` | Itens no inventário, sobre um móvel ou no chão |
 | `random` | Sorteios (intervalo, lista ou dados) |
 | `skill_check` | Teste resolvido pelo motor |
 | `inspect` / `recall` | Consultar detalhes e fatos fora do resumo |
-| `update_character` | Aprofundar NPCs, mudar traços, gastar recursos |
+| `update_character` | Aprofundar NPCs, traços, dano e cura, perks e pensamentos |
 | `move_character` | Mover por caminho, sentar, ir até alguém, trocar de local |
 | `transfer_item` / `update_item` | Pegar, entregar, largar, consumir |
 | `update_fixture` | Escrever no quadro (aparece no 3D), abrir portas |

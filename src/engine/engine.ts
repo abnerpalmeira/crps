@@ -13,10 +13,14 @@ import type {
   ItemHolder,
   Location,
   LogKind,
+  PerkDef,
+  PerkGrant,
   Pos,
+  ResourceDef,
   Ruleset,
   Thread,
   ThreadStatus,
+  Visibility,
   WorldState,
 } from './types';
 
@@ -26,18 +30,80 @@ export class EngineError extends Error {}
 export const STAT_MIN = 0;
 export const STAT_MAX = 5;
 
+/** Recursos que todo personagem tem, em qualquer gênero, mesmo ocultos. */
+export const CORE_RESOURCES: ResourceDef[] = [
+  { id: 'vida', name: 'Vida', max: 10, description: 'saúde física; em 0 o personagem está fora de ação', visibility: 'hidden', core: true },
+];
+const CORE_ALIASES: Record<string, string[]> = { vida: ['vida', 'hp', 'saude', 'pontos_de_vida', 'health'] };
+
 export const DEFAULT_RULESET: Ruleset = {
   name: 'Sistema Universal CRPS',
   attributes: [
-    { id: 'corpo', name: 'Corpo', description: 'força, resistência e agilidade' },
-    { id: 'mente', name: 'Mente', description: 'raciocínio, memória e percepção' },
-    { id: 'presenca', name: 'Presença', description: 'carisma, empatia e autocontrole' },
+    { id: 'corpo', name: 'Corpo', description: 'força, resistência e agilidade', visibility: 'self', default: 1 },
+    { id: 'mente', name: 'Mente', description: 'raciocínio, memória e percepção', visibility: 'self', default: 1 },
+    { id: 'presenca', name: 'Presença', description: 'carisma, empatia e autocontrole', visibility: 'self', default: 1 },
   ],
-  resources: [{ id: 'energia', name: 'Energia', max: 10, description: 'disposição física e mental' }],
+  resources: [...CORE_RESOURCES, { id: 'energia', name: 'Energia', max: 10, description: 'disposição física e mental', visibility: 'self' }],
+  perks: [],
   dice: '2d6',
   difficulties: { facil: 7, normal: 9, dificil: 11, muito_dificil: 13 },
   notes: 'Atributos e perícias vão de 0 a 5 (1 = mediano, 3 = muito bom, 5 = lendário).',
 };
+
+export const VISIBILITY_LABEL: Record<Visibility, string> = { public: 'público', self: 'só o próprio', hidden: 'oculto' };
+
+/** Garante os recursos universais; um recurso equivalente definido pelo mestre (ex.: "HP") vira o universal. */
+function ensureCoreResources(rules: Ruleset): void {
+  for (const core of [...CORE_RESOURCES].reverse()) {
+    const same = rules.resources.find((r) => CORE_ALIASES[core.id].includes(r.id) || CORE_ALIASES[core.id].includes(slugify(r.name, 20)));
+    if (same) same.core = true;
+    else rules.resources.unshift({ ...core });
+  }
+}
+
+/** Saves antigos: campos que surgiram depois ganham valores padrão. */
+function migrate(state: WorldState): WorldState {
+  state.frames ??= [];
+  const rules = state.ruleset;
+  rules.perks ??= [];
+  for (const a of rules.attributes) {
+    a.visibility ??= 'self';
+    a.default ??= 1;
+  }
+  for (const r of rules.resources) r.visibility ??= 'self';
+  ensureCoreResources(rules);
+  for (const c of Object.values(state.characters)) {
+    c.perks ??= [];
+    c.thoughts ??= null;
+    for (const r of rules.resources) c.resources[r.id] ??= r.max;
+  }
+  return state;
+}
+
+export interface AttributeInput {
+  id?: string;
+  name: string;
+  description: string;
+  visibility?: Visibility;
+  default?: number;
+}
+
+export interface ResourceInput {
+  id?: string;
+  name: string;
+  max: number;
+  description: string;
+  visibility?: Visibility;
+  /** Valor inicial de quem já existe (padrão: o máximo). */
+  start?: number;
+}
+
+export interface PerkInput {
+  id?: string;
+  name: string;
+  description: string;
+  grants: PerkGrant[];
+}
 
 export const DIFFICULTY_LABEL: Record<DifficultyName, string> = {
   facil: 'fácil',
@@ -87,6 +153,8 @@ export interface CharacterInput {
   position?: Placement;
   offscreen?: boolean;
   facing?: string;
+  perks?: string[];
+  thoughts?: string;
 }
 
 export interface CharacterUpdate {
@@ -103,6 +171,9 @@ export interface CharacterUpdate {
   skills?: Record<string, number>;
   resource_deltas?: Record<string, number>;
   resources_set?: Record<string, number>;
+  perks_add?: string[];
+  perks_remove?: string[];
+  thoughts?: string;
 }
 
 interface Rect {
@@ -155,8 +226,7 @@ export class GameEngine {
   static fromJSON(json: string): GameEngine {
     const state = JSON.parse(json) as WorldState;
     if (state.version !== 1) throw new Error(`Versão de save não suportada: ${String(state.version)}`);
-    state.frames ??= []; // saves de antes do replay
-    return new GameEngine(state);
+    return new GameEngine(migrate(state));
   }
 
   toJSON(): string {
@@ -474,29 +544,155 @@ export class GameEngine {
 
   defineRuleset(input: {
     name: string;
-    attributes: { id?: string; name: string; description: string }[];
-    resources: { id?: string; name: string; max: number; description: string }[];
+    attributes: AttributeInput[];
+    resources: ResourceInput[];
+    perks?: PerkInput[];
     dice?: string;
     difficulties?: Partial<Record<DifficultyName, number>>;
     notes?: string;
   }): Ruleset {
     if (Object.keys(this.state.characters).length) {
-      throw new EngineError('As regras já estão em uso por personagens criados; defina o ruleset antes de criar personagens.');
+      throw new EngineError('As regras já estão em uso por personagens; para mudar no meio da campanha, use extend_ruleset.');
     }
     const dice = input.dice ?? DEFAULT_RULESET.dice;
     if (!parseDice(dice)) throw new EngineError(`Dados inválidos: "${dice}". Use o formato NdM, por exemplo 2d6.`);
-    const attributes = input.attributes.map((a) => ({ id: slugify(a.id ?? a.name, 20), name: a.name, description: a.description }));
-    const resources = input.resources.map((r) => ({ id: slugify(r.id ?? r.name, 20), name: r.name, max: r.max, description: r.description }));
-    const ids = [...attributes, ...resources].map((a) => a.id);
-    const dup = ids.find((id, i) => ids.indexOf(id) !== i);
-    if (dup) throw new EngineError(`Id repetido no ruleset: "${dup}".`);
     const difficulties = { ...DEFAULT_RULESET.difficulties, ...input.difficulties };
     const ladder = [difficulties.facil, difficulties.normal, difficulties.dificil, difficulties.muito_dificil];
     if (ladder.some((v, i) => i > 0 && v <= ladder[i - 1])) {
       throw new EngineError('As dificuldades precisam crescer: facil < normal < dificil < muito_dificil.');
     }
-    this.state.ruleset = { name: input.name, attributes, resources, dice, difficulties, notes: input.notes ?? DEFAULT_RULESET.notes };
-    return this.state.ruleset;
+    const rules: Ruleset = {
+      name: input.name,
+      attributes: input.attributes.map((a) => this.attributeDef(a, 1)),
+      resources: input.resources.map((r) => this.resourceDef(r)),
+      perks: [],
+      dice,
+      difficulties,
+      notes: input.notes ?? DEFAULT_RULESET.notes,
+    };
+    const ids = [...rules.attributes, ...rules.resources].map((a) => a.id);
+    const dup = ids.find((id, i) => ids.indexOf(id) !== i);
+    if (dup) throw new EngineError(`Id repetido no ruleset: "${dup}".`);
+    ensureCoreResources(rules);
+    const previous = this.state.ruleset;
+    this.state.ruleset = rules;
+    try {
+      for (const p of input.perks ?? []) rules.perks.push(this.perkDef(p));
+    } catch (err) {
+      this.state.ruleset = previous;
+      throw err;
+    }
+    return rules;
+  }
+
+  /**
+   * Regras que evoluem com a história: novos atributos (ex.: pontaria), recursos (ex.: infecção)
+   * e perks, e mudanças de visibilidade. Quem já existe recebe o valor padrão.
+   */
+  extendRuleset(input: {
+    attributes?: AttributeInput[];
+    resources?: ResourceInput[];
+    perks?: PerkInput[];
+    visibility?: Record<string, Visibility>;
+    reason: string;
+  }) {
+    const rules = this.state.ruleset;
+    const characters = Object.values(this.state.characters);
+    const added: { kind: 'atributo' | 'recurso' | 'perk' | 'visibilidade'; id: string; name: string; visibility?: Visibility }[] = [];
+    for (const a of input.attributes ?? []) {
+      const def = this.attributeDef(a, 0);
+      this.assertNewStat(def.id);
+      rules.attributes.push(def);
+      for (const c of characters) c.attributes[def.id] = def.default;
+      added.push({ kind: 'atributo', id: def.id, name: def.name, visibility: def.visibility });
+    }
+    for (const r of input.resources ?? []) {
+      const def = this.resourceDef(r);
+      this.assertNewStat(def.id);
+      rules.resources.push(def);
+      for (const c of characters) c.resources[def.id] = clamp(Math.round(r.start ?? def.max), 0, def.max);
+      added.push({ kind: 'recurso', id: def.id, name: def.name, visibility: def.visibility });
+    }
+    for (const p of input.perks ?? []) {
+      const def = this.perkDef(p);
+      rules.perks.push(def);
+      added.push({ kind: 'perk', id: def.id, name: def.name });
+    }
+    for (const [ref, visibility] of Object.entries(input.visibility ?? {})) {
+      const def = this.findStatDef(ref);
+      def.visibility = visibility;
+      added.push({ kind: 'visibilidade', id: def.id, name: def.name, visibility });
+    }
+    if (!added.length) throw new EngineError('Nada para estender: informe attributes, resources, perks ou visibility.');
+    if (rules.attributes.length > 10 || rules.resources.length > 8) {
+      throw new EngineError('Regras grandes demais (máx. 10 atributos e 8 recursos). Prefira perícias, que são livres.');
+    }
+    return { added, reason: input.reason };
+  }
+
+  private attributeDef(a: AttributeInput, fallbackDefault: number) {
+    return {
+      id: slugify(a.id ?? a.name, 20),
+      name: a.name,
+      description: a.description,
+      visibility: a.visibility ?? 'self',
+      default: clamp(Math.round(a.default ?? fallbackDefault), STAT_MIN, STAT_MAX),
+    };
+  }
+
+  private resourceDef(r: ResourceInput): ResourceDef {
+    if (!(r.max >= 1)) throw new EngineError(`O máximo de "${r.name}" precisa ser pelo menos 1.`);
+    return { id: slugify(r.id ?? r.name, 20), name: r.name, max: Math.round(r.max), description: r.description, visibility: r.visibility ?? 'self' };
+  }
+
+  private assertNewStat(id: string): void {
+    const rules = this.state.ruleset;
+    if ([...rules.attributes, ...rules.resources].some((s) => s.id === id)) {
+      throw new EngineError(`Já existe um atributo ou recurso com o id "${id}".`);
+    }
+  }
+
+  /** Atributo ou recurso por id ou nome. */
+  findStatDef(ref: string) {
+    const rules = this.state.ruleset;
+    const f = fold(ref);
+    const def = [...rules.attributes, ...rules.resources].find((s) => s.id === slugify(ref, 20) || fold(s.name) === f);
+    if (!def) {
+      const known = [...rules.attributes, ...rules.resources].map((s) => s.id).join(', ');
+      throw new EngineError(`"${ref}" não é atributo nem recurso das regras. Existentes: ${known}.`);
+    }
+    return def;
+  }
+
+  private perkDef(p: PerkInput): PerkDef {
+    const id = slugify(p.id ?? p.name, 24);
+    if (this.state.ruleset.perks.some((x) => x.id === id)) throw new EngineError(`Já existe um perk com o id "${id}".`);
+    const grants: PerkGrant[] = p.grants.map((g) => {
+      if (g.kind === 'see_stat') return { kind: 'see_stat', stat: this.findStatDef(g.stat).id };
+      if (g.kind === 'check_bonus') {
+        return {
+          kind: 'check_bonus',
+          bonus: clamp(Math.round(g.bonus), -5, 5),
+          ...(g.attribute ? { attribute: this.resolveAttributeId(g.attribute) } : {}),
+          ...(g.skill ? { skill: slugify(g.skill, 24) } : {}),
+        };
+      }
+      return { kind: 'see_thoughts' };
+    });
+    return { id, name: p.name, description: p.description, grants };
+  }
+
+  private resolvePerkId(ref: string): string {
+    const perk = this.state.ruleset.perks.find((p) => p.id === slugify(ref, 24) || fold(p.name) === fold(ref));
+    if (!perk) {
+      const known = this.state.ruleset.perks.map((p) => p.id).join(', ') || 'nenhum';
+      throw new EngineError(`Perk "${ref}" não existe. Crie com extend_ruleset antes. Perks: ${known}.`);
+    }
+    return perk.id;
+  }
+
+  perksOf(c: Character): PerkDef[] {
+    return c.perks.flatMap((id) => this.state.ruleset.perks.filter((p) => p.id === id));
   }
 
   createLocation(spec: Omit<LocationSpec, 'id'> & { id?: string }): { location: Location; warnings: string[] } {
@@ -549,7 +745,7 @@ export class GameEngine {
     const firstName = input.name.split(/\s+/).find((w) => w && !w.endsWith('.')) ?? input.name;
     const id = this.claimId(input.id, firstName, input.name);
     const rules = this.state.ruleset;
-    const attributes = Object.fromEntries(rules.attributes.map((a) => [a.id, 1]));
+    const attributes = Object.fromEntries(rules.attributes.map((a) => [a.id, a.default]));
     Object.assign(attributes, this.statBlock('atributo', input.attributes, rules.attributes.map((a) => a.id)));
     const resources = Object.fromEntries(rules.resources.map((r) => [r.id, r.max]));
     for (const [key, value] of Object.entries(input.resources ?? {})) {
@@ -566,6 +762,8 @@ export class GameEngine {
       attributes,
       skills: this.statBlock('perícia', input.skills, null),
       resources,
+      perks: [...new Set((input.perks ?? []).map((p) => this.resolvePerkId(p)))],
+      thoughts: input.thoughts ?? null,
       detail: input.personality || input.background ? 'full' : 'sketch',
       personality: input.personality ?? null,
       background: input.background ?? null,
@@ -656,9 +854,11 @@ export class GameEngine {
       c.traits = c.traits.filter((t) => !remove.has(fold(t)));
       changes.push('traits');
     }
+    const attributeChanges: string[] = [];
     if (input.attributes) {
-      Object.assign(c.attributes, this.statBlock('atributo', input.attributes, this.state.ruleset.attributes.map((a) => a.id)));
-      changes.push('attributes');
+      const values = this.statBlock('atributo', input.attributes, this.state.ruleset.attributes.map((a) => a.id));
+      Object.assign(c.attributes, values);
+      attributeChanges.push(...Object.keys(values));
     }
     if (input.skills) {
       for (const [key, value] of Object.entries(this.statBlock('perícia', input.skills, null))) {
@@ -667,18 +867,37 @@ export class GameEngine {
       }
       changes.push('skills');
     }
-    const resourceChanges: string[] = [];
+    if (input.perks_add?.length) {
+      for (const id of input.perks_add.map((p) => this.resolvePerkId(p))) if (!c.perks.includes(id)) c.perks.push(id);
+      changes.push('perks');
+    }
+    if (input.perks_remove?.length) {
+      const remove = new Set(input.perks_remove.map((p) => this.resolvePerkId(p)));
+      c.perks = c.perks.filter((id) => !remove.has(id));
+      changes.push('perks');
+    }
+    if (input.thoughts !== undefined) {
+      c.thoughts = input.thoughts.trim() || null;
+      changes.push('thoughts');
+    }
+    const resourceChanges: { id: string; before: number; after: number; max: number }[] = [];
     const applyResource = (key: string, next: (cur: number) => number) => {
       const rid = this.resolveResourceId(key);
       const max = this.state.ruleset.resources.find((r) => r.id === rid)!.max;
       const before = c.resources[rid] ?? max;
       c.resources[rid] = clamp(Math.round(next(before)), 0, max);
-      resourceChanges.push(`${rid} ${before}→${c.resources[rid]}/${max}`);
+      resourceChanges.push({ id: rid, before, after: c.resources[rid], max });
     };
     for (const [key, value] of Object.entries(input.resources_set ?? {})) applyResource(key, () => value);
     for (const [key, delta] of Object.entries(input.resource_deltas ?? {})) applyResource(key, (cur) => cur + delta);
     if (c.personality || c.background) c.detail = 'full';
-    return { character_id: c.id, changed: [...new Set(changes)], resources: resourceChanges, detail: c.detail };
+    return {
+      character_id: c.id,
+      changed: [...new Set(changes)],
+      attributes: attributeChanges,
+      resources: resourceChanges,
+      detail: c.detail,
+    };
   }
 
   private resolveHolder(ref: HolderRef, fallbackLocationId: string | null): ItemHolder {
@@ -791,7 +1010,14 @@ export class GameEngine {
     const dice = parseDice(this.state.ruleset.dice)!;
     const rolls = rollDice(this.state, dice.count, dice.sides);
     const modifier = Math.round(input.modifier ?? 0);
-    const total = rolls.reduce((a, b) => a + b, 0) + dice.bonus + (c.attributes[attrId] ?? 0) + skillValue + modifier;
+    // Perks com check_bonus que valem para este atributo/perícia (sem filtro = vale para todo teste).
+    const perks = this.perksOf(c).filter((p) =>
+      p.grants.some((g) => g.kind === 'check_bonus' && (!g.attribute || g.attribute === attrId) && (!g.skill || g.skill === skill)),
+    );
+    const perkBonus = perks
+      .flatMap((p) => p.grants)
+      .reduce((sum, g) => (g.kind === 'check_bonus' && (!g.attribute || g.attribute === attrId) && (!g.skill || g.skill === skill) ? sum + g.bonus : sum), 0);
+    const total = rolls.reduce((a, b) => a + b, 0) + dice.bonus + (c.attributes[attrId] ?? 0) + skillValue + modifier + perkBonus;
     const margin = total - target;
     const success = margin >= 0;
     const degree = margin >= 4 ? 'sucesso pleno' : success ? 'sucesso' : margin <= -4 ? 'falha grave' : 'falha';
@@ -801,6 +1027,8 @@ export class GameEngine {
       attribute: { id: attrId, name: attr.name, value: c.attributes[attrId] ?? 0 },
       skill: skill ? { id: skill, value: skillValue } : null,
       modifier,
+      perk_bonus: perkBonus,
+      perks: perks.map((p) => p.name),
       dice: this.state.ruleset.dice,
       rolls,
       total,
@@ -1004,6 +1232,8 @@ export class GameEngine {
       attributes: c.attributes,
       skills: c.skills,
       resources: Object.fromEntries(rules.resources.map((r) => [r.id, `${c.resources[r.id] ?? r.max}/${r.max}`])),
+      perks: this.perksOf(c).map((p) => ({ id: p.id, name: p.name, description: p.description })),
+      thoughts: c.thoughts,
       location: c.locationId,
       position: c.pos,
       seated_at: c.seatId,

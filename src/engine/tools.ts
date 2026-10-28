@@ -1,6 +1,7 @@
 import { z } from 'zod';
-import { EngineError, type GameEngine } from './engine';
+import { EngineError, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { legendSummary } from './layout';
+import { perceptionOf } from './perception';
 import { truncate } from './text';
 import type { Fact } from './types';
 
@@ -26,6 +27,46 @@ function playerKnows(engine: GameEngine, fact: Fact): boolean {
 }
 
 const statMap = z.record(z.string(), z.number());
+
+const visibility = z.enum(['public', 'self', 'hidden']).describe('public: o jogador vê de todos; self: só o próprio; hidden: só o mestre.');
+
+const perkGrant = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('see_stat'), stat: z.string().describe('Atributo ou recurso que o dono do perk vê em todos.') }),
+  z.object({ kind: z.literal('see_thoughts') }),
+  z.object({
+    kind: z.literal('check_bonus'),
+    bonus: z.number().int().min(-5).max(5),
+    attribute: z.string().optional().describe('Só em testes deste atributo.'),
+    skill: z.string().optional().describe('Só em testes com esta perícia.'),
+  }),
+]);
+
+const perkInput = z.object({
+  id: z.string().optional(),
+  name: z.string(),
+  description: z.string(),
+  grants: z.array(perkGrant).max(4).describe('Efeitos aplicados pelo motor; vazio = perk só narrativo.'),
+});
+
+const attributeInput = z.object({
+  id: z.string().optional(),
+  name: z.string(),
+  description: z.string(),
+  visibility: visibility.optional().describe('Padrão: self.'),
+  default: z.number().int().min(0).max(5).optional().describe('Valor de quem não informar.'),
+});
+
+const resourceInput = z.object({
+  id: z.string().optional(),
+  name: z.string(),
+  max: z.number().int().min(1).max(1000),
+  description: z.string(),
+  visibility: visibility.optional().describe('Padrão: self.'),
+  start: z.number().int().optional().describe('Valor de quem já existe (padrão: o máximo).'),
+});
+
+/** Campos de personagem que qualquer um percebe; o resto de um NPC só aparece nos bastidores. */
+const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'traits']);
 
 const placement = z
   .object({
@@ -63,6 +104,8 @@ const characterInput = z.object({
   position: placement.optional().describe('Padrão: perto da porta.'),
   offscreen: z.boolean().optional().describe('true = existe no mundo mas não está em nenhum local agora.'),
   facing: z.string().optional().describe('N/S/E/W ou id de algo para olhar.'),
+  perks: z.array(z.string()).optional().describe('Ids de perks do ruleset.'),
+  thoughts: z.string().optional().describe('O que pensa ou quer agora; oculto do jogador, salvo perk see_thoughts.'),
 });
 
 const itemInput = z.object({
@@ -94,15 +137,15 @@ export const TOOLS = [
   tool({
     name: 'define_ruleset',
     description:
-      'Define as regras da campanha: 2 a 6 atributos, até 4 recursos e a mecânica de teste, adequados ao gênero ' +
-      '(slice of life escolar: Paciência, Carisma, Didática; recursos Energia e Dinheiro). Chame uma única vez, ' +
-      'na criação do mundo, antes de criar personagens.',
+      'Define as regras da campanha: 2 a 6 atributos, até 4 recursos, perks e a mecânica de teste, adequados ao gênero ' +
+      '(slice of life escolar: Paciência, Carisma, Didática; recursos Energia e Dinheiro). O motor sempre inclui o recurso ' +
+      'universal vida, oculto por padrão; para mudar o máximo ou a visibilidade dele, inclua um recurso "Vida". Chame uma ' +
+      'única vez, na criação do mundo, antes de criar personagens; depois disso, use extend_ruleset.',
     schema: z.object({
       name: z.string(),
-      attributes: z.array(z.object({ id: z.string().optional(), name: z.string(), description: z.string() })).min(2).max(6),
-      resources: z
-        .array(z.object({ id: z.string().optional(), name: z.string(), max: z.number().int().min(1).max(1000), description: z.string() }))
-        .max(4),
+      attributes: z.array(attributeInput).min(2).max(6),
+      resources: z.array(resourceInput).max(4),
+      perks: z.array(perkInput).max(8).optional(),
       dice: z.string().optional().describe('Padrão "2d6".'),
       difficulties: z
         .object({ facil: z.number().int(), normal: z.number().int(), dificil: z.number().int(), muito_dificil: z.number().int() })
@@ -114,7 +157,36 @@ export const TOOLS = [
     mutates: true,
     run(engine, input) {
       const r = engine.defineRuleset(input);
-      return { content: r, summary: `📜 Regras: ${r.name} (${r.attributes.map((a) => a.name).join(', ')})` };
+      const shown = r.attributes.filter((a) => a.visibility !== 'hidden').map((a) => a.name);
+      return { content: r, summary: `📜 Regras: ${r.name} (${shown.join(', ')})` };
+    },
+  }),
+
+  tool({
+    name: 'extend_ruleset',
+    description:
+      'Muda as regras no meio da campanha, quando a história muda de rumo (a aula vira uma epidemia, a investigação vira ' +
+      'tiroteio): novos atributos (ex.: pontaria), recursos (ex.: infecção), perks, e a visibilidade de atributos e recursos ' +
+      'existentes. Quem já existe recebe o valor padrão (attributes.default, padrão 0; resources.start, padrão o máximo); ' +
+      'ajuste os relevantes com update_character. Chame antes de usar a regra nova.',
+    schema: z.object({
+      attributes: z.array(attributeInput).max(4).optional(),
+      resources: z.array(resourceInput).max(4).optional(),
+      perks: z.array(perkInput).max(6).optional(),
+      visibility: z.record(z.string(), visibility).optional().describe('Ex.: {"vida": "public"} quando o combate começa.'),
+      reason: z.string(),
+    }),
+    mutates: true,
+    run(engine, input) {
+      const r = engine.extendRuleset(input);
+      const label = (a: (typeof r.added)[number]) =>
+        a.kind === 'visibilidade' ? `${a.name} agora ${VISIBILITY_LABEL[a.visibility!]}` : `${a.kind} ${a.name}`;
+      // Perks do catálogo e regras ocultas não aparecem para o jogador.
+      const shown = r.added.filter((a) => a.kind !== 'perk' && a.visibility !== 'hidden');
+      return {
+        content: r,
+        summary: shown.length ? `📜 Regras ampliadas: ${shown.map(label).join(', ')}` : `🤫 Regras ampliadas: ${r.added.map(label).join(', ')}`,
+      };
     },
   }),
 
@@ -230,12 +302,14 @@ export const TOOLS = [
     mutates: true,
     run(engine, input) {
       const r = engine.skillCheck(input);
-      const extra = [r.attribute.value, r.skill?.value ?? 0, r.modifier].filter((v) => v !== 0);
-      const math = `${r.rolls.join('+')}${extra.map((v) => (v > 0 ? ` +${v}` : ` ${v}`)).join('')}`;
-      return {
-        content: r,
-        summary: `🎲 ${r.character} · ${r.attribute.name}${r.skill ? ` + ${r.skill.id}` : ''} (${r.reason}): ${math} = ${r.total} vs ${r.target} → ${r.degree}`,
-      };
+      const label = `🎲 ${r.character} · ${r.attribute.name}${r.skill ? ` + ${r.skill.id}` : ''} (${r.reason})`;
+      // Atributo que o jogador não vê (de um NPC, ou oculto): só os dados e o resultado.
+      if (!perceptionOf(engine.state, engine.state.playerId).canSeeStat(r.attribute.id, r.character_id)) {
+        return { content: r, summary: `${label}: ${r.rolls.join('+')} → ${r.degree}` };
+      }
+      const parts = [r.attribute.value, r.skill?.value ?? 0, r.modifier].filter((v) => v !== 0).map((v) => (v > 0 ? ` +${v}` : ` ${v}`));
+      if (r.perk_bonus) parts.push(` ${r.perk_bonus > 0 ? '+' : ''}${r.perk_bonus} (${r.perks.join(', ')})`);
+      return { content: r, summary: `${label}: ${r.rolls.join('+')}${parts.join('')} = ${r.total} vs ${r.target} → ${r.degree}` };
     },
   }),
 
@@ -255,7 +329,8 @@ export const TOOLS = [
     name: 'update_character',
     description:
       'Atualiza um personagem. Use para aprofundar um NPC esboço (personality, background, goals) ANTES de revelar esses ' +
-      'detalhes na narração, para mudar traços, atributos e perícias, e para gastar ou recuperar recursos (resource_deltas).',
+      'detalhes na narração; para mudar traços, atributos e perícias; para dano e cura (resource_deltas: {"vida": -3}) e ' +
+      'outros recursos; para dar ou tirar perks; e para registrar o que um NPC pensa ou quer agora (thoughts).',
     schema: z.object({
       character_id: z.string(),
       name: z.string().optional(),
@@ -270,12 +345,26 @@ export const TOOLS = [
       skills: statMap.optional().describe('Nível 0 remove a perícia.'),
       resource_deltas: statMap.optional().describe('Ex. {"energia": -2}.'),
       resources_set: statMap.optional(),
+      perks_add: z.array(z.string()).optional(),
+      perks_remove: z.array(z.string()).optional(),
+      thoughts: z.string().optional().describe('O que pensa ou quer agora; string vazia apaga.'),
     }),
     mutates: true,
     run(engine, input) {
       const r = engine.updateCharacter(input);
-      const name = engine.findCharacter(r.character_id).name;
-      return { content: r, summary: `✏️ ${name}: ${[...r.changed, ...r.resources].join(', ') || 'sem mudanças'}` };
+      const c = engine.findCharacter(r.character_id);
+      const view = perceptionOf(engine.state, engine.state.playerId);
+      // O chip mostra só o que o jogador percebe; o resto vai para os bastidores.
+      const shown: string[] = [];
+      const hidden: string[] = [];
+      for (const field of r.changed) {
+        const text = field === 'perks' ? `perks: ${engine.perksOf(c).map((p) => p.name).join(', ') || 'nenhum'}` : field;
+        (OPEN_FIELDS.has(field) || (c.isPlayer && field !== 'thoughts') ? shown : hidden).push(text);
+      }
+      for (const id of r.attributes) (view.canSeeStat(id, c.id) ? shown : hidden).push(id);
+      for (const x of r.resources) (view.canSeeStat(x.id, c.id) ? shown : hidden).push(`${x.id} ${x.before}→${x.after}/${x.max}`);
+      const summary = shown.length ? `✏️ ${c.name}: ${shown.join(', ')}` : `🤫 ${c.name}: ${hidden.join(', ') || 'sem mudanças'}`;
+      return { content: r, summary };
     },
   }),
 

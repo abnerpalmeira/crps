@@ -90,6 +90,27 @@ button {
   outline: 2px solid #fff;
 }
 
+.name .hp {
+  display: block;
+  min-width: 34px;
+  height: 3px;
+  margin: 2px 0 1px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 0.2);
+  overflow: hidden;
+}
+
+.name .hp i {
+  display: block;
+  height: 100%;
+  background: #e5776b;
+}
+
+.thought {
+  color: #b9c4ff;
+  font-style: italic;
+}
+
 #hud {
   position: absolute;
   top: 14px;

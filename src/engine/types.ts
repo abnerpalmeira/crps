@@ -11,10 +11,16 @@ export interface Clock {
   minutes: number;
 }
 
+/** Quem vê o valor: public (o jogador vê de todos), self (só o próprio), hidden (só o mestre). */
+export type Visibility = 'public' | 'self' | 'hidden';
+
 export interface AttributeDef {
   id: string;
   name: string;
   description: string;
+  visibility: Visibility;
+  /** Valor de quem não informou, inclusive de quem já existia quando o atributo surgiu. */
+  default: number;
 }
 
 export interface ResourceDef {
@@ -22,15 +28,32 @@ export interface ResourceDef {
   name: string;
   max: number;
   description: string;
+  visibility: Visibility;
+  /** Recurso universal do motor (a vida): todo personagem tem. */
+  core?: boolean;
+}
+
+/** Efeito mecânico de um perk, aplicado pelo motor. */
+export type PerkGrant =
+  | { kind: 'see_stat'; stat: string }
+  | { kind: 'see_thoughts' }
+  | { kind: 'check_bonus'; bonus: number; attribute?: string; skill?: string };
+
+export interface PerkDef {
+  id: string;
+  name: string;
+  description: string;
+  grants: PerkGrant[];
 }
 
 export type DifficultyName = 'facil' | 'normal' | 'dificil' | 'muito_dificil';
 
-/** Regras da campanha como dados: o modelo define, o motor valida e aplica. */
+/** Regras da campanha como dados: o modelo define (e estende), o motor valida e aplica. */
 export interface Ruleset {
   name: string;
   attributes: AttributeDef[];
   resources: ResourceDef[];
+  perks: PerkDef[];
   /** Teste = dados + atributo + perícia + modificador >= dificuldade. */
   dice: string;
   difficulties: Record<DifficultyName, number>;
@@ -50,6 +73,10 @@ export interface Character {
   attributes: Record<string, number>;
   skills: Record<string, number>;
   resources: Record<string, number>;
+  /** Ids de perks do ruleset. */
+  perks: string[];
+  /** O que o personagem pensa ou quer agora; só o mestre vê, ou quem tem see_thoughts. */
+  thoughts: string | null;
   detail: DetailLevel;
   personality: string | null;
   background: string | null;
@@ -154,7 +181,10 @@ export interface LogEntry {
 export interface SceneFrame {
   turn: number;
   clock: Clock;
-  characters: Record<string, { locationId: string | null; pos: Pos | null; seatId: string | null; facing: Dir }>;
+  characters: Record<
+    string,
+    { locationId: string | null; pos: Pos | null; seatId: string | null; facing: Dir; resources?: Record<string, number> }
+  >;
   items: Record<string, ItemHolder>;
   /** Só os móveis com texto ou estado. */
   fixtures: Record<string, { text: string; state: string }>;

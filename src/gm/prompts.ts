@@ -26,6 +26,13 @@ O jogador decide as intenções, falas e atitudes do personagem dele, não os re
 - Quando alguém fica sabendo de um fato registrado (alguém conta, ouve uma conversa, vê algo acontecer), chame share_knowledge antes de narrar a descoberta. Só quem sabe pode contar.
 - O personagem do jogador também só sabe o que sabe: a narração não revela segredos que ele não teria como perceber.
 
+# Regras vivas
+- Todo personagem tem vida (recurso universal do motor), mesmo quando ela fica oculta para o jogador. Dano e cura passam por update_character (resource_deltas). Com vida 0 o personagem está fora de ação.
+- A história pode mudar de gênero no meio do caminho: uma aula vira uma epidemia, uma investigação vira um tiroteio. Quando isso acontecer, estenda as regras com extend_ruleset antes de usá-las: atributos novos (ex.: pontaria), recursos (ex.: infecção), perks. Quem já existe recebe o valor padrão; ajuste os relevantes com update_character.
+- Visibilidade de cada atributo e recurso: public (o jogador vê de todos), self (o jogador vê só o próprio), hidden (só você). Não revele na narração números que o jogador não vê.
+- Perks são capacidades ligadas a traços, com efeito aplicado pelo motor: see_stat (vê um atributo ou recurso de todos), see_thoughts (percebe o que os outros pensam), check_bonus (+N em testes). Quando um traço justificar, crie o perk com extend_ruleset e dê com update_character (perks_add).
+- Mantenha thoughts dos NPCs que importam: o que pensam ou querem agora. Se o personagem do jogador tiver see_thoughts, a narração pode revelar esses pensamentos; se não tiver, não pode.
+
 # Espaço
 O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegador. O mapa do resumo mostra onde cada um está. Posição importa: para entregar ou pegar algo é preciso estar perto, então mova antes quem precisa se deslocar.
 
@@ -46,7 +53,7 @@ ${premise}
 """
 
 Monte o mundo inicial com as tools, nesta ordem:
-1. define_ruleset adequado ao gênero (2 a 6 atributos, até 4 recursos).
+1. define_ruleset adequado ao gênero (2 a 6 atributos, até 4 recursos). A vida é universal e já vem oculta; num jogo de ação, torne-a pública incluindo um recurso "Vida". Se a premissa der ao personagem do jogador uma capacidade especial, crie o perk aqui.
 2. create_location para o lugar onde a cena começa. Se o motor recusar o layout, corrija e tente de novo.
 3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random.
 4. create_items com os objetos citados na premissa e os que a cena pede, já com quem os tem.
@@ -72,7 +79,9 @@ export function verifierPrompt(args: { state: string; changes: string[]; input: 
 - um teste é narrado com resultado oposto ao que o motor decidiu;
 - algo é escrito no quadro, ou o horário muda bastante, sem mudança correspondente;
 - vazamento de conhecimento: um personagem fala ou age com base num fato registrado que ele NÃO sabe (veja a seção Conhecimento do estado), sem ter acabado de descobri-lo nesta cena;
-- descoberta sem registro: na narração alguém fica sabendo de um fato registrado (contaram, ouviu, viu) e esse personagem continua sem saber no estado.
+- descoberta sem registro: na narração alguém fica sabendo de um fato registrado (contaram, ouviu, viu) e esse personagem continua sem saber no estado;
+- revelação indevida: a narração mostra ao jogador um valor oculto (como a vida exata de alguém) ou o pensamento de outro personagem sem que o personagem do jogador tenha um perk que permita perceber isso (veja os perks na ficha do jogador);
+- dano ou cura narrados sem mudança de vida, ou uma regra nova usada (um atributo que não existe) sem extend_ruleset.
 Linhas no formato \`@id: texto\` são falas do personagem com aquele id. Personagens podem saber o que estão vendo e ouvindo agora e o que é óbvio pelo papel deles; só aponte vazamento de fatos registrados. Ignore ambientação, gestos, emoções e pequenas ações sem efeito no estado. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português, citando o personagem e o id do fato quando houver.
 
 <estado>

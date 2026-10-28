@@ -18,15 +18,15 @@ export const DEMO_CLASSROOM = [
   '#################',
 ];
 
-const STUDENTS: [string, string, string[]][] = [
-  ['Yuki Sato', 'tranças e caderno cheio de desenhos', ['tímida', 'desenhista']],
-  ['Haruto Mori', 'gravata frouxa e sorriso de quem aprontou', ['piadista']],
-  ['Aiko Ueda', 'óculos redondos e postura impecável', ['representante de classe']],
-  ['Ren Ito', 'cochila com o queixo apoiado na mão', ['dorminhoco']],
-  ['Mei Kato', 'mochila cheia de chaveiros', ['falante']],
-  ['Sora Abe', 'cabelo bagunçado, tênis de corrida', ['atleta']],
-  ['Hina Fujita', 'fones de ouvido escondidos sob o cabelo', ['distraída']],
-  ['Daichi Ono', 'mangas arregaçadas, mãos sujas de tinta', ['curioso']],
+const STUDENTS: { name: string; appearance: string; traits: string[]; thoughts?: string; vida?: number }[] = [
+  { name: 'Yuki Sato', appearance: 'tranças e caderno cheio de desenhos', traits: ['tímida', 'desenhista'], thoughts: 'torce para o professor não pedir o trabalho de história' },
+  { name: 'Haruto Mori', appearance: 'gravata frouxa e sorriso de quem aprontou', traits: ['piadista'], thoughts: 'inventou a prova surpresa só para ver a cara da turma' },
+  { name: 'Aiko Ueda', appearance: 'óculos redondos e postura impecável', traits: ['representante de classe'], thoughts: 'quer impressionar o professor' },
+  { name: 'Ren Ito', appearance: 'cochila com o queixo apoiado na mão', traits: ['dorminhoco', 'gripado'], thoughts: 'só pensa em voltar a dormir', vida: 6 },
+  { name: 'Mei Kato', appearance: 'mochila cheia de chaveiros', traits: ['falante'] },
+  { name: 'Sora Abe', appearance: 'cabelo bagunçado, tênis de corrida', traits: ['atleta'] },
+  { name: 'Hina Fujita', appearance: 'fones de ouvido escondidos sob o cabelo', traits: ['distraída'] },
+  { name: 'Daichi Ono', appearance: 'mangas arregaçadas, mãos sujas de tinta', traits: ['curioso'] },
 ];
 
 let nextId = 0;
@@ -46,6 +46,10 @@ function setupSteps(): StepResult[] {
             { name: 'Didática', description: 'explicar e conduzir a aula' },
           ],
           resources: [{ name: 'Energia', max: 10, description: 'fôlego até o fim do dia' }],
+          perks: [
+            { id: 'olho_clinico', name: 'Olho clínico', description: 'percebe na hora quem não está bem', grants: [{ kind: 'see_stat', stat: 'vida' }] },
+            { id: 'le_a_turma', name: 'Lê a turma', description: 'anos de sala de aula: adivinha o que os alunos pensam', grants: [{ kind: 'see_thoughts' }] },
+          ],
         }),
         call('create_location', { id: 'sala_2b', name: 'Sala 2-B', description: 'Sala de aula de uma escola japonesa, com janelas para o pátio.', layout: DEMO_CLASSROOM }),
         call('random', { min: 5, max: 8, reason: 'quantos alunos chegaram cedo' }),
@@ -66,8 +70,9 @@ function setupSteps(): StepResult[] {
               position: { near: 'sala_2b/quadro-1' },
               attributes: { paciencia: 3, carisma: 2, didatica: 3 },
               skills: { historia: 3, oratoria: 2 },
+              perks: ['olho_clinico', 'le_a_turma'],
             },
-            ...STUDENTS.map(([name, appearance, traits]) => ({ name, role: 'aluno(a) do 2º ano', appearance, traits, position: { seat: 'random' } })),
+            ...STUDENTS.map(({ vida, ...s }) => ({ ...s, role: 'aluno(a) do 2º ano', position: { seat: 'random' }, ...(vida ? { resources: { vida } } : {}) })),
           ],
         }),
         call('create_items', {
