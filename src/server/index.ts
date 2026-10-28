@@ -1,0 +1,114 @@
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { extname, join, normalize, resolve, sep } from 'node:path';
+import { GameEngine } from '../engine/engine';
+import type { Emit, GmEvent } from '../gm/gm';
+import { SaveStore, createGameMaster, describeError, loadEnv } from '../gm/runtime';
+
+loadEnv();
+// Variável própria: PORT costuma ser definida para o servidor web (Vite) por quem o inicia.
+const PORT = Number(process.env.CRPS_API_PORT ?? 8787);
+const DIST = resolve('dist');
+const MAX_TEXT = 2000;
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.json': 'application/json',
+  '.woff2': 'font/woff2',
+};
+
+const store = new SaveStore();
+const gm = createGameMaster();
+let engine: GameEngine | null = store.load();
+let busy = false;
+
+function json(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
+}
+
+async function readText(req: IncomingMessage, field: string): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > 64_000) throw new Error('Requisição grande demais.');
+    chunks.push(chunk);
+  }
+  const body = chunks.length ? (JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>) : {};
+  const value = body[field];
+  return typeof value === 'string' ? value.trim().slice(0, MAX_TEXT) : '';
+}
+
+/** Transmite os eventos do turno em NDJSON. Quem chama já marcou `busy`. */
+async function streamTurn(res: ServerResponse, run: (emit: Emit) => Promise<void>): Promise<void> {
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
+  const emit = (event: GmEvent) => {
+    if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+  };
+  try {
+    await run(emit);
+  } catch (err) {
+    console.error('[crps]', err);
+    emit({ type: 'error', message: describeError(err) });
+  } finally {
+    if (engine) store.save(engine);
+    busy = false;
+    emit({ type: 'done' });
+    res.end();
+  }
+}
+
+function serveStatic(pathname: string, res: ServerResponse): void {
+  if (!existsSync(DIST)) {
+    json(res, 404, { error: 'Interface não compilada: use `npm run dev` e abra http://localhost:5173, ou rode `npm run build`.' });
+    return;
+  }
+  let file = join(DIST, normalize(decodeURIComponent(pathname)));
+  if (!file.startsWith(DIST + sep) || !existsSync(file) || statSync(file).isDirectory()) file = join(DIST, 'index.html');
+  res.writeHead(200, { 'Content-Type': MIME[extname(file)] ?? 'application/octet-stream' });
+  res.end(readFileSync(file));
+}
+
+const server = createServer(async (req, res) => {
+  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+  try {
+    if (pathname === '/api/state' && req.method === 'GET') {
+      json(res, 200, { world: engine?.snapshot() ?? null, busy, model: gm.label });
+      return;
+    }
+    if (pathname === '/api/new' && req.method === 'POST') {
+      const premise = await readText(req, 'premise');
+      if (!premise) return json(res, 400, { error: 'Escreva a premissa da campanha.' });
+      if (busy) return json(res, 409, { error: 'O mestre ainda está narrando.' });
+      busy = true;
+      store.archive();
+      const fresh = GameEngine.create(premise);
+      engine = fresh;
+      await streamTurn(res, (emit) => gm.setup(fresh, emit));
+      return;
+    }
+    if (pathname === '/api/turn' && req.method === 'POST') {
+      const input = await readText(req, 'input');
+      if (!input) return json(res, 400, { error: 'Escreva sua ação.' });
+      if (!engine) return json(res, 400, { error: 'Nenhuma campanha em andamento.' });
+      if (busy) return json(res, 409, { error: 'O mestre ainda está narrando.' });
+      busy = true;
+      const current = engine;
+      await streamTurn(res, (emit) => gm.play(current, input, emit));
+      return;
+    }
+    if (pathname.startsWith('/api/')) return json(res, 404, { error: 'Rota desconhecida.' });
+    serveStatic(pathname, res);
+  } catch (err) {
+    console.error('[crps]', err);
+    if (!res.headersSent) json(res, 500, { error: describeError(err) });
+  }
+});
+
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`[crps] servidor em http://127.0.0.1:${PORT} · mestre: ${gm.label}${engine ? ` · campanha carregada (turno ${engine.state.turn})` : ''}`);
+});

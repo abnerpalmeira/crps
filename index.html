@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CRPS</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎲</text></svg>" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="stage">
+        <div id="stage-canvas"></div>
+        <div id="hud">
+          <strong id="hud-location">CRPS</strong>
+          <span id="hud-clock"></span>
+        </div>
+        <div id="stage-empty">Escolha um cenário para começar.</div>
+        <div id="inspector" hidden></div>
+        <div id="stage-hint">arraste para girar · role para aproximar · clique em pessoas e objetos</div>
+      </section>
+
+      <aside id="panel">
+        <header>
+          <div class="brand"><span class="logo">CRPS</span><span id="model" class="muted small"></span></div>
+          <button id="new-game-button" type="button">Novo jogo</button>
+        </header>
+        <nav class="tabs">
+          <button type="button" data-tab="log" class="active">Mestre</button>
+          <button type="button" data-tab="sheet">Ficha</button>
+          <button type="button" data-tab="journal">Diário</button>
+        </nav>
+        <div class="scroll">
+          <section id="tab-log" class="tab">
+            <p id="empty-log" class="muted">A história aparece aqui.</p>
+            <ol id="log"></ol>
+          </section>
+          <section id="tab-sheet" class="tab" hidden></section>
+          <section id="tab-journal" class="tab" hidden></section>
+        </div>
+        <form id="composer">
+          <textarea id="input" rows="2" placeholder="O que você faz? (Enter envia, Shift+Enter quebra a linha)"></textarea>
+          <div class="composer-row">
+            <label class="toggle"><input id="backstage" type="checkbox" /> bastidores</label>
+            <span class="typing">o mestre está narrando<span>.</span><span>.</span><span>.</span></span>
+            <button id="send" type="submit">Enviar</button>
+          </div>
+          <div id="usage" class="muted small"></div>
+        </form>
+      </aside>
+    </main>
+
+    <dialog id="new-game">
+      <form method="dialog">
+        <h2>Qual história você quer viver?</h2>
+        <p class="muted">Descreva o cenário e quem você é. O mestre monta o lugar, as pessoas e os objetos.</p>
+        <textarea id="premise" rows="4"></textarea>
+        <div id="suggestions"></div>
+        <menu>
+          <button id="cancel" type="button">Cancelar</button>
+          <button id="start" type="submit" class="primary">Começar</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/client/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,389 @@
+import { formatClock } from '../engine/text';
+import type { Character, LogEntry, WorldState } from '../engine/types';
+import type { GmEvent } from '../gm/gm';
+import type { Usage } from '../gm/provider';
+import type { Pick } from './scene';
+
+const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+}
+
+/** Narração em parágrafos, com **negrito** e *itálico*; o texto é escapado antes. */
+function formatNarration(text: string): string {
+  return text
+    .trim()
+    .split(/\n{2,}/)
+    .map((para) =>
+      `<p>${escapeHtml(para)
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[\s(“"])[*_](\S(?:.*?\S)?)[*_](?=[\s.,;:!?)”"]|$)/g, '$1<em>$2</em>')
+        .replace(/\n/g, '<br>')}</p>`,
+    )
+    .join('');
+}
+
+type ChipKind = 'dice' | 'world' | 'backstage';
+
+function chipKind(summary: string, ok: boolean): ChipKind {
+  if (!ok || /^(🔎|🧠|⚠️)/u.test(summary)) return 'backstage';
+  return summary.startsWith('🎲') ? 'dice' : 'world';
+}
+
+const SUGGESTIONS = [
+  'Um slice of life em que eu sou professor de uma escola japonesa e começo o meu dia na sala de aula com um giz.',
+  'Sou detetive particular numa Lisboa chuvosa de 1952 e acabo de abrir o escritório quando alguém bate à porta.',
+  'Sou a dona de uma taverna numa vila de fronteira, na noite em que uma caravana chega machucada.',
+];
+
+/** Um turno no registro: fala do jogador, chips do motor e a narração (que pode ser reescrita). */
+export class TurnView {
+  private readonly root = el('li', 'turn');
+  private readonly chips = el('div', 'chips');
+  private readonly narration = el('div', 'narration live');
+  private readonly status = el('div', 'status');
+  private raw = '';
+
+  constructor(
+    private readonly log: HTMLElement,
+    input: string | null,
+  ) {
+    if (input) this.root.append(el('div', 'player-line', input));
+    this.root.append(this.chips, this.status, this.narration);
+    log.append(this.root);
+    this.scroll();
+  }
+
+  tool(e: Extract<GmEvent, { type: 'tool' }>): void {
+    const chip = el('span', `chip ${chipKind(e.summary, e.ok)}`, e.summary);
+    chip.title = `${e.name}\n\nentrada: ${JSON.stringify(e.input, null, 1)}\n\nresultado: ${e.result.slice(0, 800)}`;
+    this.chips.append(chip);
+    this.scroll();
+  }
+
+  delta(text: string): void {
+    this.raw += text;
+    this.status.textContent = '';
+    this.narration.innerHTML = formatNarration(this.raw);
+    this.scroll();
+  }
+
+  reset(): void {
+    this.raw = '';
+    this.narration.innerHTML = '';
+  }
+
+  final(text: string): void {
+    this.raw = text;
+    this.status.textContent = '';
+    this.narration.innerHTML = formatNarration(text);
+    this.narration.classList.remove('live');
+    this.scroll();
+  }
+
+  setStatus(text: string): void {
+    this.status.textContent = text;
+  }
+
+  note(text: string): void {
+    this.chips.append(el('span', 'chip note', text));
+  }
+
+  error(message: string): void {
+    this.root.append(el('div', 'error', message));
+    this.scroll();
+  }
+
+  finish(): void {
+    this.status.textContent = '';
+    this.narration.classList.remove('live');
+  }
+
+  private scroll(): void {
+    const scroller = this.log.closest('.scroll');
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  }
+}
+
+export class Ui {
+  onSend: (text: string) => void = () => {};
+  onNewGame: (premise: string) => void = () => {};
+  onSelect: (pick: Pick | null) => void = () => {};
+
+  private readonly log = $('#log');
+  private readonly input = $<HTMLTextAreaElement>('#input');
+  private readonly send = $<HTMLButtonElement>('#send');
+  private readonly dialog = $<HTMLDialogElement>('#new-game');
+  private readonly premise = $<HTMLTextAreaElement>('#premise');
+  private readonly inspector = $('#inspector');
+  private usage = { input: 0, cached: 0, output: 0 };
+  private busy = false;
+  private inspected: Pick | null = null;
+
+  constructor() {
+    for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-tab]')) {
+      tab.addEventListener('click', () => this.showTab(tab.dataset.tab!));
+    }
+    $('#composer').addEventListener('submit', (e) => {
+      e.preventDefault();
+      this.submit();
+    });
+    this.input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        this.submit();
+      }
+    });
+    $('#new-game-button').addEventListener('click', () => this.openNewGame(false));
+    $('#backstage').addEventListener('change', (e) => document.body.classList.toggle('backstage', (e.target as HTMLInputElement).checked));
+    const suggestions = $('#suggestions');
+    for (const text of SUGGESTIONS) {
+      const b = el('button', 'suggestion', text);
+      b.type = 'button';
+      b.addEventListener('click', () => (this.premise.value = text));
+      suggestions.append(b);
+    }
+    $('#start').addEventListener('click', (e) => {
+      e.preventDefault();
+      const premise = this.premise.value.trim();
+      if (!premise) return this.premise.focus();
+      this.dialog.close();
+      this.onNewGame(premise);
+    });
+    $('#cancel').addEventListener('click', () => this.dialog.close());
+  }
+
+  openNewGame(firstTime: boolean): void {
+    $('#cancel').hidden = firstTime;
+    if (!this.premise.value) this.premise.value = SUGGESTIONS[0];
+    this.dialog.showModal();
+  }
+
+  setModel(label: string): void {
+    $('#model').textContent = label;
+  }
+
+  setBusy(busy: boolean): void {
+    this.busy = busy;
+    this.send.disabled = busy;
+    document.body.classList.toggle('busy', busy);
+    if (!busy) this.input.focus();
+  }
+
+  prefill(text: string): void {
+    this.input.value = text;
+    this.input.focus();
+    this.input.setSelectionRange(text.length, text.length);
+    this.showTab('log');
+  }
+
+  beginTurn(input: string | null): TurnView {
+    $('#empty-log').hidden = true;
+    return new TurnView(this.log, input);
+  }
+
+  clearLog(): void {
+    this.log.replaceChildren();
+    this.closeInspector();
+  }
+
+  notice(text: string): void {
+    this.log.append(el('li', 'notice', text));
+  }
+
+  addUsage(u: Usage): void {
+    this.usage.input += u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
+    this.usage.cached += u.cacheReadTokens;
+    this.usage.output += u.outputTokens;
+    const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+    $('#usage').textContent = `tokens nesta sessão: ${k(this.usage.input)} entrada (${k(this.usage.cached)} do cache) · ${k(this.usage.output)} saída`;
+  }
+
+  /** Reconstrói o registro a partir do log salvo no mundo. */
+  renderHistory(world: WorldState): void {
+    this.log.replaceChildren();
+    const byTurn = new Map<number, LogEntry[]>();
+    for (const entry of world.log) byTurn.set(entry.turn, [...(byTurn.get(entry.turn) ?? []), entry]);
+    for (const entries of byTurn.values()) {
+      const turn = new TurnView(this.log, entries.find((e) => e.kind === 'player')?.text ?? null);
+      for (const e of entries) {
+        if (e.kind === 'tool') turn.tool({ type: 'tool', name: '', ok: true, summary: e.text, input: null, result: '' });
+        if (e.kind === 'narration') turn.final(e.text);
+        if (e.kind === 'system') turn.note(e.text);
+      }
+      turn.finish();
+    }
+    $('#empty-log').hidden = world.log.length > 0;
+  }
+
+  renderWorld(world: WorldState): void {
+    const player = world.playerId ? world.characters[world.playerId] : null;
+    const loc = player?.locationId ? world.locations[player.locationId] : Object.values(world.locations).at(-1);
+    $('#hud-location').textContent = loc?.name ?? 'Montando o mundo…';
+    $('#hud-clock').textContent = `${formatClock(world.clock)} · turno ${world.turn}`;
+    $('#stage-empty').hidden = Boolean(loc);
+    this.renderSheet(world, player);
+    this.renderJournal(world, player);
+    if (this.inspected) this.showInspector(world, this.inspected);
+  }
+
+  showInspector(world: WorldState | null, pick: Pick | null): void {
+    this.inspected = pick;
+    if (!world || !pick) return this.closeInspector();
+    const body = el('div', 'inspector-body');
+    const actions: [string, string][] = [];
+    if (pick.kind === 'character') {
+      const c = world.characters[pick.id];
+      if (!c) return this.closeInspector();
+      body.append(el('h3', '', c.name), el('p', 'muted', c.role), el('p', '', c.appearance));
+      if (c.traits.length) body.append(this.traits(c.traits));
+      if (c.detail === 'full') {
+        if (c.personality) body.append(el('p', '', c.personality));
+        if (c.background) body.append(el('p', 'muted', c.background));
+      } else body.append(el('p', 'hint', 'Ainda um esboço: o mestre aprofunda quando a pessoa ficar importante.'));
+      const held = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === c.id);
+      if (held.length) body.append(el('p', 'muted', `Com: ${held.map((i) => i.name).join(', ')}`));
+      if (!c.isPlayer) {
+        const first = c.name.split(' ')[0];
+        actions.push([`Falar com ${first}`, `Digo a ${first}: "`], [`Ir até ${first}`, `Vou até ${first}.`]);
+      }
+    } else if (pick.kind === 'fixture') {
+      const f = Object.values(world.locations).flatMap((l) => l.fixtures).find((fx) => fx.id === pick.id);
+      if (!f) return this.closeInspector();
+      body.append(el('h3', '', f.label[0].toUpperCase() + f.label.slice(1)));
+      if (f.text) body.append(el('p', 'board-text', f.text));
+      if (f.state) body.append(el('p', 'muted', f.state));
+      const on = Object.values(world.items).filter((i) => i.holder.kind === 'fixture' && i.holder.id === f.id);
+      if (on.length) body.append(el('p', 'muted', `Aqui: ${on.map((i) => i.name).join(', ')}`));
+      const sitter = Object.values(world.characters).find((c) => c.seatId === f.id);
+      if (sitter) body.append(el('p', 'muted', `Ocupado por ${sitter.name}`));
+      actions.push([`Ir até ${f.label}`, `Vou até ${f.kind === 'board' ? 'o quadro' : `a ${f.label}`}.`]);
+      if (f.kind === 'board') actions.push(['Escrever no quadro', 'Escrevo no quadro: "']);
+    } else {
+      const item = world.items[pick.id];
+      if (!item) return this.closeInspector();
+      body.append(el('h3', '', item.name), el('p', '', item.description));
+      actions.push([`Pegar ${item.name}`, `Pego ${item.name.toLowerCase()}.`]);
+    }
+    if (actions.length) {
+      const row = el('div', 'actions');
+      for (const [label, text] of actions) {
+        const b = el('button', 'action', label);
+        b.addEventListener('click', () => this.prefill(text));
+        row.append(b);
+      }
+      body.append(row);
+    }
+    const close = el('button', 'close', '×');
+    close.setAttribute('aria-label', 'Fechar');
+    close.addEventListener('click', () => this.onSelect(null));
+    this.inspector.replaceChildren(close, body);
+    this.inspector.hidden = false;
+  }
+
+  private closeInspector(): void {
+    this.inspected = null;
+    this.inspector.hidden = true;
+  }
+
+  private submit(): void {
+    const text = this.input.value.trim();
+    if (!text || this.busy) return;
+    this.input.value = '';
+    this.onSend(text);
+  }
+
+  private showTab(name: string): void {
+    for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-tab]')) tab.classList.toggle('active', tab.dataset.tab === name);
+    for (const panel of document.querySelectorAll<HTMLElement>('.tab')) panel.hidden = panel.id !== `tab-${name}`;
+  }
+
+  private traits(list: string[]): HTMLElement {
+    const row = el('div', 'traits');
+    for (const t of list) row.append(el('span', 'trait', t));
+    return row;
+  }
+
+  private renderSheet(world: WorldState, player: Character | null): void {
+    const sheet = $('#tab-sheet');
+    if (!player) {
+      sheet.replaceChildren(el('p', 'muted', 'Seu personagem aparece aqui assim que o mundo estiver pronto.'));
+      return;
+    }
+    const rules = world.ruleset;
+    const parts: HTMLElement[] = [el('h2', '', player.name), el('p', 'muted', player.role), el('p', '', player.appearance)];
+    if (player.traits.length) parts.push(this.traits(player.traits));
+
+    parts.push(el('h3', '', `Atributos · ${rules.name}`));
+    for (const a of rules.attributes) {
+      const row = el('div', 'stat');
+      row.title = a.description;
+      const pips = el('span', 'pips');
+      for (let i = 1; i <= 5; i++) pips.append(el('i', i <= (player.attributes[a.id] ?? 0) ? 'on' : ''));
+      row.append(el('span', '', a.name), pips);
+      parts.push(row);
+    }
+    if (rules.resources.length) {
+      parts.push(el('h3', '', 'Recursos'));
+      for (const r of rules.resources) {
+        const value = player.resources[r.id] ?? r.max;
+        const row = el('div', 'resource');
+        const bar = el('span', 'bar');
+        const fill = el('i');
+        fill.style.width = `${(100 * value) / r.max}%`;
+        bar.append(fill);
+        row.append(el('span', '', r.name), bar, el('span', 'num', `${value}/${r.max}`));
+        parts.push(row);
+      }
+    }
+    const skills = Object.entries(player.skills);
+    if (skills.length) {
+      parts.push(el('h3', '', 'Perícias'));
+      parts.push(el('p', '', skills.map(([k, v]) => `${k.replace(/_/g, ' ')} ${v}`).join(' · ')));
+    }
+    parts.push(el('h3', '', 'Inventário'));
+    const items = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === player.id);
+    if (!items.length) parts.push(el('p', 'muted', 'Vazio.'));
+    for (const i of items) {
+      const row = el('div', 'item');
+      row.append(el('strong', '', `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}`), el('span', 'muted', i.description));
+      parts.push(row);
+    }
+    sheet.replaceChildren(...parts);
+  }
+
+  private renderJournal(world: WorldState, player: Character | null): void {
+    const journal = $('#tab-journal');
+    const parts: HTMLElement[] = [el('h3', '', 'Objetivos')];
+    const threads = Object.values(world.threads);
+    if (!threads.length) parts.push(el('p', 'muted', 'Nenhum por enquanto.'));
+    for (const t of threads) {
+      const row = el('div', `thread ${t.status}`);
+      row.append(el('strong', '', t.title), el('span', 'muted', t.description));
+      parts.push(row);
+    }
+    parts.push(el('h3', '', 'O que você sabe'));
+    const known = world.facts.filter((f) => f.knownBy === 'all' || (player && f.knownBy.includes(player.id))).reverse();
+    if (!known.length) parts.push(el('p', 'muted', 'Nada registrado ainda.'));
+    for (const f of known.slice(0, 60)) parts.push(el('p', 'fact', f.text));
+    if (player?.locationId) {
+      parts.push(el('h3', '', 'Pessoas aqui'));
+      for (const c of Object.values(world.characters)) {
+        if (c.locationId !== player.locationId || c.isPlayer) continue;
+        const b = el('button', 'person');
+        b.append(el('strong', '', c.name), el('span', 'muted', ` ${c.role}`));
+        b.addEventListener('click', () => this.onSelect({ kind: 'character', id: c.id }));
+        parts.push(b);
+      }
+    }
+    journal.replaceChildren(...parts);
+  }
+}
