@@ -19,7 +19,8 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?
 type ChipKind = 'dice' | 'world' | 'backstage';
 
 function chipKind(summary: string, ok: boolean): ChipKind {
-  if (!ok || /^(🔎|🧠|⚠️)/u.test(summary)) return 'backstage';
+  // 🤫 = fato que o personagem do jogador não conhece: só aparece nos bastidores.
+  if (!ok || /^(🔎|🧠|⚠️|🤫)/u.test(summary)) return 'backstage';
   return summary.startsWith('🎲') ? 'dice' : 'world';
 }
 
@@ -297,6 +298,12 @@ export class Ui {
       } else body.append(el('p', 'hint', 'Ainda um esboço: o mestre aprofunda quando a pessoa ficar importante.'));
       const held = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === c.id);
       if (held.length) body.append(el('p', 'muted', `Com: ${held.map((i) => i.name).join(', ')}`));
+      const secrets = world.facts.filter((f) => f.knownBy !== 'all' && f.knownBy.includes(c.id));
+      if (!c.isPlayer && secrets.length) {
+        const box = el('div', 'backstage-only');
+        box.append(el('p', 'hint', `Sabe (bastidores): ${secrets.map((f) => f.text).join(' · ')}`));
+        body.append(box);
+      }
       if (!c.isPlayer) {
         const first = c.name.split(' ')[0];
         actions.push([`Falar com ${first}`, `Digo a ${first}: "`], [`Ir até ${first}`, `Vou até ${first}.`]);

@@ -73,7 +73,7 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   types.ts      modelo de dados: personagens, itens, locais, móveis, fatos, fios, relógio
   layout.ts     layout ASCII → local validado (paredes, conectividade, acesso, orientação)
   engine.ts     regras: posicionamento, caminhos, alcance, testes, fatos, tempo
-  tools.ts      as 16 tools (schemas zod → JSON Schema) e a execução atômica
+  tools.ts      as 17 tools (schemas zod → JSON Schema) e a execução atômica
   brief.ts      o resumo do estado que o modelo recebe a cada turno
   frames.ts     falas `@id:` → passos do replay; retratos da cena por turno
 src/gm/       o mestre
@@ -95,6 +95,13 @@ Princípios que o motor impõe:
   (`update_character`) quando ficam importantes; o que foi registrado não muda sozinho.
 - **Estado subjetivo é dado.** Segredos, promessas e relações são fatos com `known_by`;
   fios narrativos têm status.
+- **Cada personagem só sabe o que sabe.** Quem fica sabendo de um fato é registrado
+  (`share_knowledge`), e só quem sabe pode contar. `known_by: "present"` registra quem
+  estava na cena naquele momento, então quem chega depois não sabe. O resumo do turno diz
+  ao mestre o que cada presente sabe e não sabe. O verificador aponta quando um personagem
+  usa um fato que não conhece, ou quando a narração mostra alguém descobrindo algo sem o
+  registro. Segredos que o personagem do jogador não conhece não aparecem para o jogador,
+  só nos bastidores.
 - **Regras como dados.** Cada campanha define atributos, recursos e mecânica de teste
   adequados ao gênero; o motor rola os dados e o jogador vê o resultado.
 - **O espaço importa.** Entregar algo exige estar a até 2 tiles; mover passa por
@@ -116,6 +123,7 @@ Princípios que o motor impõe:
 | `transfer_item` / `update_item` | Pegar, entregar, largar, consumir |
 | `update_fixture` | Escrever no quadro (aparece no 3D), abrir portas |
 | `add_fact` / `update_thread` | Memória da história |
+| `share_knowledge` | Quem ficou sabendo de um fato (só quem sabe pode contar) |
 | `advance_time` | Relógio |
 
 ### Replay com balões de fala

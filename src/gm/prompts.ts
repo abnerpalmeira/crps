@@ -17,8 +17,14 @@ O jogador decide as intenções, falas e atitudes do personagem dele, não os re
 
 # Memória
 - NPCs nascem como esboço: nome, papel, aparência e um ou dois traços. Quando um NPC ganhar importância (uma conversa de verdade, um conflito), aprofunde com update_character (personalidade, história, objetivos) antes de revelar esses detalhes. Depois de registrado, mantenha consistente.
-- Registre com add_fact, no momento em que acontece, o que a história vai precisar lembrar: segredos, promessas, relações que mudam, opiniões, quem viu o quê. known_by diz quem sabe dentro da ficção, e cada NPC só age com base no que sabe.
+- Registre com add_fact, no momento em que acontece, o que a história vai precisar lembrar: segredos, promessas, relações que mudam, opiniões, quem viu o quê.
 - Use update_thread para objetivos, mistérios e conflitos em aberto, e feche-os quando se resolverem.
+
+# Conhecimento
+- Cada personagem só sabe os fatos registrados para ele (seção Conhecimento do resumo) e o que está vendo e ouvindo agora. Você sabe tudo; eles não. Antes de um NPC falar ou agir sobre algo da história, confira o que ele sabe e o que NÃO sabe. Quem não sabe pode desconfiar, perguntar, errar ou inventar uma teoria, mas não acerta por acaso um segredo.
+- known_by de add_fact: "present" registra todos que estão no local agora; quem chegar depois não sabe.
+- Quando alguém fica sabendo de um fato registrado (alguém conta, ouve uma conversa, vê algo acontecer), chame share_knowledge antes de narrar a descoberta. Só quem sabe pode contar.
+- O personagem do jogador também só sabe o que sabe: a narração não revela segredos que ele não teria como perceber.
 
 # Espaço
 O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegador. O mapa do resumo mostra onde cada um está. Posição importa: para entregar ou pegar algo é preciso estar perto, então mova antes quem precisa se deslocar.
@@ -64,8 +70,10 @@ export function verifierPrompt(args: { state: string; changes: string[]; input: 
 - um personagem se desloca de forma relevante (troca de lugar, vai até alguém ou algo, sai da sala) sem mudança de posição;
 - surge com nome próprio um personagem que não existe no estado;
 - um teste é narrado com resultado oposto ao que o motor decidiu;
-- algo é escrito no quadro, ou o horário muda bastante, sem mudança correspondente.
-Ignore ambientação, gestos, falas, emoções e pequenas ações sem efeito no estado. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português.
+- algo é escrito no quadro, ou o horário muda bastante, sem mudança correspondente;
+- vazamento de conhecimento: um personagem fala ou age com base num fato registrado que ele NÃO sabe (veja a seção Conhecimento do estado), sem ter acabado de descobri-lo nesta cena;
+- descoberta sem registro: na narração alguém fica sabendo de um fato registrado (contaram, ouviu, viu) e esse personagem continua sem saber no estado.
+Linhas no formato \`@id: texto\` são falas do personagem com aquele id. Personagens podem saber o que estão vendo e ouvindo agora e o que é óbvio pelo papel deles; só aponte vazamento de fatos registrados. Ignore ambientação, gestos, emoções e pequenas ações sem efeito no estado. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português, citando o personagem e o id do fato quando houver.
 
 <estado>
 ${args.state}
@@ -87,5 +95,5 @@ ${args.narration}
 export function verifierFeedback(issues: string[]): string {
   return `[Verificador de consistência do motor] A narração afirma coisas que o estado não registra:
 ${issues.map((i) => `- ${i}`).join('\n')}
-Corrija chamando as tools que faltaram ou, se a ação não deveria acontecer, ajuste a história. Depois escreva de novo a narração final completa deste turno: ela substitui a anterior.`;
+Corrija chamando as tools que faltaram ou, se a ação não deveria acontecer, ajuste a história. Num vazamento de conhecimento, reescreva a fala para o personagem não saber o que não sabe (ou mostre como ele descobriu, com share_knowledge). Depois escreva de novo a narração final completa deste turno: ela substitui a anterior.`;
 }

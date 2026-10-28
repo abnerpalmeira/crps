@@ -848,13 +848,40 @@ export class GameEngine {
     return subject.trim();
   }
 
-  addFact(input: { subject: string; text: string; known_by: string[] | 'all' }): Fact {
-    const knownBy = input.known_by === 'all' ? 'all' : [...new Set(input.known_by.map((ref) => this.findCharacter(ref).id))];
+  /**
+   * Quem fica sabendo: 'all' (público), 'present' (quem está no local agora) ou uma lista
+   * de ids, que pode incluir 'present' e 'player'. 'present' vira uma lista fixa de ids:
+   * quem chegar depois não sabe.
+   */
+  private resolveKnowers(spec: string[] | 'all' | 'present', locationId: string | null): string[] | 'all' {
+    if (spec === 'all') return 'all';
+    const ids = new Set<string>();
+    for (const ref of spec === 'present' ? ['present'] : spec) {
+      if (['present', 'presentes'].includes(fold(ref))) {
+        const loc = locationId ?? this.player?.locationId ?? null;
+        if (!loc) throw new EngineError('Não há ninguém em cena para "present"; informe os ids.');
+        for (const c of this.charactersIn(loc)) ids.add(c.id);
+      } else ids.add(this.findCharacter(ref).id);
+    }
+    return [...ids];
+  }
+
+  knows(characterId: string, fact: Fact): boolean {
+    return fact.knownBy === 'all' || fact.knownBy.includes(characterId);
+  }
+
+  findFact(ref: string): Fact {
+    const fact = this.state.facts.find((f) => f.id === ref || f.id === slugify(ref));
+    if (!fact) throw new EngineError(`Fato "${ref}" não existe. Use recall para achar o id.`);
+    return fact;
+  }
+
+  addFact(input: { subject: string; text: string; known_by: string[] | 'all' | 'present' }): Fact {
     const fact: Fact = {
       id: `fato_${this.nextCounter('fact')}`,
       subject: this.resolveSubject(input.subject),
       text: input.text,
-      knownBy,
+      knownBy: this.resolveKnowers(input.known_by, null),
       turn: this.state.turn,
       clock: { ...this.state.clock },
     };
@@ -862,16 +889,32 @@ export class GameEngine {
     return fact;
   }
 
+  /** Alguém ficou sabendo de um fato. Só quem sabe pode contar. */
+  shareKnowledge(input: { fact_id: string; to: string[] | 'present'; from?: string; how?: string }) {
+    const fact = this.findFact(input.fact_id);
+    if (fact.knownBy === 'all') return { fact_id: fact.id, learned: [] as string[], known_by: 'all' as const };
+    const from = input.from ? this.findCharacter(input.from) : null;
+    if (from && !this.knows(from.id, fact)) {
+      const who = fact.knownBy.map((id) => this.state.characters[id]?.name ?? id).join(', ') || 'ninguém';
+      throw new EngineError(`${from.name} não sabe disso (${fact.id}), então não pode contar. Quem sabe: ${who}.`);
+    }
+    const targets = this.resolveKnowers(input.to, from?.locationId ?? null) as string[];
+    const learned = targets.filter((id) => !this.knows(id, fact));
+    fact.knownBy = [...fact.knownBy, ...learned];
+    return { fact_id: fact.id, learned, known_by: fact.knownBy };
+  }
+
   factsAbout(ids: Set<string>, limit: number): Fact[] {
     return this.state.facts.filter((f) => ids.has(f.subject)).slice(-limit).reverse();
   }
 
-  recall(input: { subject?: string; query?: string; limit?: number }) {
+  recall(input: { subject?: string; query?: string; known_by?: string; limit?: number }) {
     const limit = clamp(Math.round(input.limit ?? 12), 1, 40);
     const subject = input.subject ? this.resolveSubject(input.subject) : null;
+    const knower = input.known_by ? this.findCharacter(input.known_by).id : null;
     const tokens = input.query ? fold(input.query).split(/[^a-z0-9]+/).filter((t) => t.length >= 3) : [];
     const scored = this.state.facts
-      .filter((f) => !subject || f.subject === subject)
+      .filter((f) => (!subject || f.subject === subject) && (!knower || this.knows(knower, f)))
       .map((f) => {
         const hay = fold(`${f.subject} ${f.text}`);
         return { f, score: tokens.length ? tokens.filter((t) => hay.includes(t)).length : 1 };
@@ -967,6 +1010,10 @@ export class GameEngine {
       facing: c.facing,
       inventory: this.itemsHeldBy(c.id).map((i) => ({ id: i.id, name: i.name, quantity: i.quantity })),
       facts: this.factsAbout(new Set([c.id]), 12).map((f) => ({ id: f.id, text: f.text, known_by: f.knownBy })),
+      knows: this.state.facts
+        .filter((f) => f.knownBy !== 'all' && f.knownBy.includes(c.id))
+        .slice(-15)
+        .map((f) => ({ id: f.id, text: f.text })),
     };
   }
 

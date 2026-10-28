@@ -473,8 +473,13 @@ body.replaying #hud-replay {
   font-style: italic;
 }
 
-.chip.backstage {
+.chip.backstage,
+.backstage-only {
   display: none;
+}
+
+body.backstage .backstage-only {
+  display: block;
 }
 
 body.backstage .chip.backstage {

@@ -156,15 +156,30 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
   const open = Object.values(s.threads).filter((t) => t.status === 'open');
   out.push(`\n## Fios abertos\n${open.map((t) => `- [${t.id}] ${t.title}: ${t.description}`).join('\n') || '(nenhum)'}`);
 
+  // Conhecimento: fatos da cena e o que cada presente sabe e NÃO sabe, para o mestre não deduzir.
+  const present = loc ? engine.charactersIn(loc.id) : [];
+  const presentIds = new Set(present.map((c) => c.id));
   const facts = s.facts
-    .filter((f) => sceneIds.has(f.subject) || (p && f.knownBy !== 'all' && f.knownBy.includes(p.id)))
-    .slice(-maxFacts)
-    .reverse();
+    .filter((f) => sceneIds.has(f.subject) || f.knownBy === 'all' || f.knownBy.some((id) => presentIds.has(id)))
+    .slice(-maxFacts);
   const hidden = s.facts.length - facts.length;
+  const firstName = (id: string) => s.characters[id]?.name.split(' ')[0] ?? id;
   out.push(
-    `\n## Fatos relevantes à cena (mais recentes primeiro${hidden > 0 ? `; ${hidden} outros fatos só via recall` : ''})\n` +
-      (facts.map((f) => `- [${f.id}] (${f.subject}) ${f.text}. Sabem: ${f.knownBy === 'all' ? 'todos' : f.knownBy.join(', ')}`).join('\n') || '(nenhum)'),
+    `\n## Conhecimento: cada personagem só sabe os fatos marcados para ele e o que percebe agora na cena` +
+      `${hidden > 0 ? ` (${hidden} outros fatos só via recall)` : ''}\n` +
+      (facts
+        .map((f) => `- [${f.id}] (${f.subject}) ${f.text}. ${f.knownBy === 'all' ? 'Público' : `Sabem: ${f.knownBy.map(firstName).join(', ') || 'ninguém'}`}`)
+        .join('\n') || '(nenhum fato registrado)'),
   );
+  const restricted = facts.filter((f) => f.knownBy !== 'all');
+  if (restricted.length && present.length) {
+    out.push('Por personagem presente, entre os fatos restritos:');
+    for (const c of present) {
+      const knows = restricted.filter((f) => engine.knows(c.id, f)).map((f) => f.id);
+      const unknown = restricted.filter((f) => !engine.knows(c.id, f)).map((f) => f.id);
+      out.push(`- ${c.name}${c.isPlayer ? ' (você)' : ''}: sabe ${knows.join(', ') || 'nenhum'}; NÃO sabe ${unknown.join(', ') || 'nenhum'}`);
+    }
+  }
 
   const recent = s.log.filter((e) => (e.kind === 'player' || e.kind === 'narration') && e.turn > s.turn - recentTurns);
   out.push(

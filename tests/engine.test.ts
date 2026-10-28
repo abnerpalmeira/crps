@@ -101,6 +101,22 @@ describe('GameEngine', () => {
     expect(() => e.addFact({ subject: 'x', text: 'y', known_by: ['ninguem'] })).toThrow(/não existe/);
   });
 
+  it('registra quem estava presente e deixa de fora quem chega depois', () => {
+    const f = e.addFact({ subject: 'kenji', text: 'O professor derrubou café na mesa', known_by: 'present' });
+    expect(f.knownBy).toEqual(expect.arrayContaining(['kenji', 'yuki', 'haruto', 'aiko', 'ren', 'mei']));
+    const late = e.createCharacter({ name: 'Diretor Sato', role: 'diretor', appearance: 'terno', position: { near: 'sala/porta-1' } });
+    expect(e.knows(late.id, f)).toBe(false);
+  });
+
+  it('só quem sabe pode contar um segredo', () => {
+    const secret = e.addFact({ subject: 'mei', text: 'Mei escreveu o bilhete com coração', known_by: ['mei'] });
+    expect(() => e.shareKnowledge({ fact_id: secret.id, from: 'yuki', to: ['haruto'] })).toThrow(/Yuki Sato não sabe disso/);
+    expect(e.shareKnowledge({ fact_id: secret.id, from: 'mei', to: ['yuki', 'mei'], how: 'cochichou' }).learned).toEqual(['yuki']);
+    expect(e.recall({ known_by: 'yuki' }).facts.map((f) => f.id)).toContain(secret.id);
+    expect(e.recall({ known_by: 'haruto' }).facts.map((f) => f.id)).not.toContain(secret.id);
+    expect(e.inspect(['yuki'])[0]).toMatchObject({ knows: [{ id: secret.id }] });
+  });
+
   it('define o horário inicial na criação e depois só avança', () => {
     e.advanceTime({ to: '07:50' });
     expect(e.state.clock).toEqual({ day: 1, minutes: 470 });
@@ -152,9 +168,18 @@ describe('runTool', () => {
     expect(r.summary).toContain('1 com erro');
   });
 
-  it('publica 16 tools com JSON Schema estável', () => {
+  it('esconde dos chips os segredos que o jogador não conhece', () => {
+    const e = classroom();
+    const secret = runTool(e, 'add_fact', { subject: 'mei', text: 'Mei escreveu o bilhete', known_by: ['mei'] });
+    expect(secret.summary).toMatch(/^🤫/);
+    expect(runTool(e, 'add_fact', { subject: 'sala', text: 'A janela não fecha', known_by: 'all' }).summary).toMatch(/^📌/);
+    const told = runTool(e, 'share_knowledge', { fact_id: JSON.parse(secret.content).fact_id, from: 'mei', to: ['player'], how: 'ela confessou' });
+    expect(told.summary).toMatch(/^👂 Kenji agora sabe/);
+  });
+
+  it('publica 17 tools com JSON Schema estável', () => {
     const specs = toolSpecs();
-    expect(specs).toHaveLength(16);
+    expect(specs).toHaveLength(17);
     expect(JSON.stringify(toolSpecs())).toBe(JSON.stringify(specs));
     expect(JSON.stringify(specs)).not.toContain('9007199254740991');
   });
@@ -171,5 +196,14 @@ describe('compileBrief', () => {
     expect(brief).toContain('Inventário: Giz [giz]');
     expect(brief).toContain('Yuki desenha nos cantos do caderno');
     expect(brief).toMatch(/carteira: 15 no total, livres: /);
+  });
+
+  it('diz ao mestre o que cada presente sabe e NÃO sabe', () => {
+    const e = classroom();
+    e.addFact({ subject: 'mei', text: 'Mei escreveu o bilhete', known_by: ['mei'] });
+    const brief = compileBrief(e);
+    expect(brief).toContain('[fato_1] (mei) Mei escreveu o bilhete. Sabem: Mei');
+    expect(brief).toContain('- Mei Kato: sabe fato_1; NÃO sabe nenhum');
+    expect(brief).toContain('- Kenji Tanaka (você): sabe nenhum; NÃO sabe fato_1');
   });
 });

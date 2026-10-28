@@ -98,6 +98,7 @@ describe('GameMaster', () => {
     expect(events.find((e) => e.type === 'narration')).toMatchObject({ text: 'A sala 1-A cheira a giz e café requentado.' });
     expect(provider.options[0].effort).toBe('medium');
     expect(provider.verifyPrompts[0]).toContain('<narracao>\nA sala 1-A cheira a giz');
+    expect(provider.verifyPrompts[0]).toContain('vazamento de conhecimento');
     expect(engine.state.log.at(-1)).toMatchObject({ kind: 'narration' });
   });
 

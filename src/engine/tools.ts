@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { EngineError, type GameEngine } from './engine';
 import { legendSummary } from './layout';
 import { truncate } from './text';
+import type { Fact } from './types';
 
 /**
  * A API que o modelo enxerga. Cada tool valida a entrada com zod, chama o
@@ -17,6 +18,11 @@ interface ToolDef<S extends z.ZodType = z.ZodType> {
 
 function tool<S extends z.ZodType>(def: ToolDef<S>): ToolDef<S> {
   return def;
+}
+
+/** Fatos que o personagem do jogador não conhece aparecem só nos bastidores (🤫). */
+function playerKnows(engine: GameEngine, fact: Fact): boolean {
+  return engine.player ? engine.knows(engine.player.id, fact) : fact.knownBy === 'all';
 }
 
 const statMap = z.record(z.string(), z.number());
@@ -352,25 +358,59 @@ export const TOOLS = [
     name: 'add_fact',
     description:
       'Registra algo que a história precisa lembrar: segredos, promessas, relações, opiniões, o que alguém testemunhou. ' +
-      'known_by lista quem sabe dentro da ficção (ids ou "player"); "all" para fatos públicos. Registre no momento em que acontece.',
+      'known_by diz quem sabe dentro da ficção: "all" para fatos públicos, "present" para todos que estão no local agora ' +
+      '(quem chegar depois não sabe), ou uma lista de ids (pode incluir "player" e "present"). Registre no momento em que acontece.',
     schema: z.object({
       subject: z.string().describe('Id do personagem, local ou item principal; ou um tema curto.'),
       text: z.string(),
-      known_by: z.union([z.literal('all'), z.array(z.string())]),
+      known_by: z.union([z.literal('all'), z.literal('present'), z.array(z.string())]),
     }),
     mutates: true,
     run(engine, input) {
       const f = engine.addFact(input);
-      return { content: { fact_id: f.id, subject: f.subject }, summary: `📌 ${truncate(f.text, 70)}` };
+      return {
+        content: { fact_id: f.id, subject: f.subject, known_by: f.knownBy },
+        summary: `${playerKnows(engine, f) ? '📌' : '🤫'} ${truncate(f.text, 70)}`,
+      };
+    },
+  }),
+
+  tool({
+    name: 'share_knowledge',
+    description:
+      'Registra que personagens ficaram sabendo de um fato já registrado: alguém contou (from), ouviram uma conversa, viram ' +
+      'algo acontecer. Chame antes de narrar a descoberta. Só quem sabe pode contar: from precisa conhecer o fato. to aceita ' +
+      'ids, "player" ou "present" (todos no local de quem conta, ou do jogador).',
+    schema: z.object({
+      fact_id: z.string(),
+      to: z.union([z.literal('present'), z.array(z.string()).min(1)]),
+      from: z.string().optional().describe('Quem contou ou mostrou, se alguém contou.'),
+      how: z.string().describe('Como ficaram sabendo, em poucas palavras.'),
+    }),
+    mutates: true,
+    run(engine, input) {
+      const r = engine.shareKnowledge(input);
+      const fact = engine.findFact(r.fact_id);
+      if (!r.learned.length) return { content: r, summary: `🤫 ninguém novo ficou sabendo de ${fact.id}` };
+      const names = r.learned.map((id) => engine.state.characters[id]?.name.split(' ')[0] ?? id);
+      return {
+        content: r,
+        summary: `${playerKnows(engine, fact) ? '👂' : '🤫'} ${names.join(', ')} agora sabe${names.length > 1 ? 'm' : ''}: ${truncate(fact.text, 60)}`,
+      };
     },
   }),
 
   tool({
     name: 'recall',
     description:
-      'Busca fatos e fios registrados: por assunto (id) e/ou por palavras. Use antes de afirmar algo do passado que não ' +
-      'está no resumo do turno.',
-    schema: z.object({ subject: z.string().optional(), query: z.string().optional(), limit: z.number().int().optional() }),
+      'Busca fatos e fios registrados: por assunto (id), por palavras e/ou só o que um personagem sabe (known_by). Use ' +
+      'antes de afirmar algo do passado que não está no resumo do turno, ou para conferir o que um NPC sabe antes de ele falar.',
+    schema: z.object({
+      subject: z.string().optional(),
+      query: z.string().optional(),
+      known_by: z.string().optional().describe('Só fatos que este personagem conhece (inclui os públicos).'),
+      limit: z.number().int().optional(),
+    }),
     mutates: false,
     run(engine, input) {
       const r = engine.recall(input);
