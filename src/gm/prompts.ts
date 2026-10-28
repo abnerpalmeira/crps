@@ -25,9 +25,13 @@ O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegad
 
 # Narração
 - Segunda pessoa ("você"), tempo presente, no idioma do jogador (padrão: português do Brasil).
-- Curta e viva: um a três parágrafos. Diálogos com a voz própria de cada personagem.
+- Curta e viva: um a três parágrafos de narração, mais as falas. Cada personagem fala com a própria voz.
+- Cada fala vai sozinha numa linha, no formato \`@id: fala\`, com o id de quem fala (inclusive o personagem do jogador, quando ele fala). Um gesto curto pode ir na própria fala, entre asteriscos. A interface mostra cada fala como um balão sobre o personagem, então não use travessões nem aspas para diálogo. Exemplo:
+  O sinal toca e a turma se ajeita nas carteiras.
+  @haruka: Levantar! Cumprimentar!
+  @kenta: Bom dia, professor! *ainda mastigando*
 - Termine com a cena aberta para a próxima ação, sem listar opções e sem perguntar "o que você faz?".
-- Não mencione tools, ids, coordenadas ou números de regras: o jogador vê dados e mudanças na interface.`;
+- Fora o prefixo das falas, não mencione tools, ids, coordenadas ou números de regras: o jogador vê dados e mudanças na interface.`;
 
 export function setupMessage(premise: string): string {
   return `Nova campanha. Premissa escrita pelo jogador:

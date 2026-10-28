@@ -150,6 +150,16 @@ export interface LogEntry {
   text: string;
 }
 
+/** Retrato da cena no fim de um turno: o que o replay precisa para mostrar o passado. */
+export interface SceneFrame {
+  turn: number;
+  clock: Clock;
+  characters: Record<string, { locationId: string | null; pos: Pos | null; seatId: string | null; facing: Dir }>;
+  items: Record<string, ItemHolder>;
+  /** Só os móveis com texto ou estado. */
+  fixtures: Record<string, { text: string; state: string }>;
+}
+
 export interface WorldState {
   version: 1;
   id: string;
@@ -167,5 +177,6 @@ export interface WorldState {
   facts: Fact[];
   threads: Record<string, Thread>;
   log: LogEntry[];
+  frames: SceneFrame[];
   counters: Record<string, number>;
 }

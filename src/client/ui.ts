@@ -2,6 +2,9 @@ import { formatClock } from '../engine/text';
 import type { Character, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 import type { Usage } from '../gm/provider';
+import { escapeHtml, formatNarration, inline, type Speaker } from './format';
+import type { PlaybackState } from './playback';
+import { hash } from './props';
 import type { Pick } from './scene';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
@@ -11,24 +14,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-}
-
-/** Narração em parágrafos, com **negrito** e *itálico*; o texto é escapado antes. */
-function formatNarration(text: string): string {
-  return text
-    .trim()
-    .split(/\n{2,}/)
-    .map((para) =>
-      `<p>${escapeHtml(para)
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/(^|[\s(“"])[*_](\S(?:.*?\S)?)[*_](?=[\s.,;:!?)”"]|$)/g, '$1<em>$2</em>')
-        .replace(/\n/g, '<br>')}</p>`,
-    )
-    .join('');
 }
 
 type ChipKind = 'dice' | 'world' | 'backstage';
@@ -44,6 +29,11 @@ const SUGGESTIONS = [
   'Sou a dona de uma taverna numa vila de fronteira, na noite em que uma caravana chega machucada.',
 ];
 
+interface TurnContext {
+  speaker: (id: string) => Speaker | null;
+  onReplay: (turn: number) => void;
+}
+
 /** Um turno no registro: fala do jogador, chips do motor e a narração (que pode ser reescrita). */
 export class TurnView {
   private readonly root = el('li', 'turn');
@@ -55,6 +45,7 @@ export class TurnView {
   constructor(
     private readonly log: HTMLElement,
     input: string | null,
+    private readonly ctx: TurnContext,
   ) {
     if (input) this.root.append(el('div', 'player-line', input));
     this.root.append(this.chips, this.status, this.narration);
@@ -72,7 +63,7 @@ export class TurnView {
   delta(text: string): void {
     this.raw += text;
     this.status.textContent = '';
-    this.narration.innerHTML = formatNarration(this.raw);
+    this.narration.innerHTML = formatNarration(this.raw, this.ctx.speaker);
     this.scroll();
   }
 
@@ -84,9 +75,19 @@ export class TurnView {
   final(text: string): void {
     this.raw = text;
     this.status.textContent = '';
-    this.narration.innerHTML = formatNarration(text);
+    this.narration.innerHTML = formatNarration(text, this.ctx.speaker);
     this.narration.classList.remove('live');
     this.scroll();
+  }
+
+  /** Liga o turno ao replay: botão para rever no 3D. */
+  setTurn(turn: number): void {
+    if (this.root.querySelector('.replay')) return;
+    const button = el('button', 'replay', '▶ rever');
+    button.type = 'button';
+    button.title = 'Rever este turno no 3D, com os balões de fala';
+    button.addEventListener('click', () => this.ctx.onReplay(turn));
+    this.root.append(button);
   }
 
   setStatus(text: string): void {
@@ -117,6 +118,8 @@ export class Ui {
   onSend: (text: string) => void = () => {};
   onNewGame: (premise: string) => void = () => {};
   onSelect: (pick: Pick | null) => void = () => {};
+  onReplay: (turn: number) => void = () => {};
+  onControl: (command: string) => void = () => {};
 
   private readonly log = $('#log');
   private readonly input = $<HTMLTextAreaElement>('#input');
@@ -127,10 +130,18 @@ export class Ui {
   private usage = { input: 0, cached: 0, output: 0 };
   private busy = false;
   private inspected: Pick | null = null;
+  private world: WorldState | null = null;
+  private readonly ctx: TurnContext = {
+    speaker: (id) => this.speaker(id),
+    onReplay: (turn) => this.onReplay(turn),
+  };
 
   constructor() {
     for (const tab of document.querySelectorAll<HTMLButtonElement>('[data-tab]')) {
       tab.addEventListener('click', () => this.showTab(tab.dataset.tab!));
+    }
+    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-cmd]')) {
+      button.addEventListener('click', () => this.onControl(button.dataset.cmd!));
     }
     $('#composer').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -187,7 +198,7 @@ export class Ui {
 
   beginTurn(input: string | null): TurnView {
     $('#empty-log').hidden = true;
-    return new TurnView(this.log, input);
+    return new TurnView(this.log, input, this.ctx);
   }
 
   clearLog(): void {
@@ -207,16 +218,40 @@ export class Ui {
     $('#usage').textContent = `tokens nesta sessão: ${k(this.usage.input)} entrada (${k(this.usage.cached)} do cache) · ${k(this.usage.output)} saída`;
   }
 
+  /** Legenda do replay: narração, ação do jogador ou fala de quem não está em cena. */
+  caption(text: string | null, who?: string): void {
+    const caption = $('#caption');
+    caption.hidden = !text;
+    if (text) caption.innerHTML = `${who ? `<b>${escapeHtml(who)}</b> ` : ''}${inline(text)}`;
+  }
+
+  controls(s: PlaybackState): void {
+    $('#player-bar').hidden = !s.hasFrames;
+    $('#play-toggle').textContent = s.playing ? '❚❚' : '▶';
+    $('#play-toggle').title = s.playing ? 'Pausar (espaço)' : 'Tocar (espaço)';
+    $<HTMLButtonElement>('[data-cmd="prevFrame"]').disabled = !s.canPrevFrame;
+    $<HTMLButtonElement>('[data-cmd="nextFrame"]').disabled = !s.canNextFrame;
+    $('#player-label').textContent = s.turn === null ? 'ao vivo' : `turno ${s.turn} · ${s.beat}/${s.beats}`;
+    $('[data-cmd="live"]').hidden = s.turn === null;
+    document.body.classList.toggle('replaying', s.replaying);
+    const shown = s.replaying && s.clock ? { clock: s.clock, turn: s.turn } : this.world;
+    if (shown) $('#hud-clock').textContent = `${formatClock(shown.clock)} · turno ${shown.turn}`;
+  }
+
   /** Reconstrói o registro a partir do log salvo no mundo. */
   renderHistory(world: WorldState): void {
+    this.world = world;
     this.log.replaceChildren();
     const byTurn = new Map<number, LogEntry[]>();
     for (const entry of world.log) byTurn.set(entry.turn, [...(byTurn.get(entry.turn) ?? []), entry]);
-    for (const entries of byTurn.values()) {
-      const turn = new TurnView(this.log, entries.find((e) => e.kind === 'player')?.text ?? null);
+    for (const [turnNumber, entries] of byTurn) {
+      const turn = new TurnView(this.log, entries.find((e) => e.kind === 'player')?.text ?? null, this.ctx);
       for (const e of entries) {
         if (e.kind === 'tool') turn.tool({ type: 'tool', name: '', ok: true, summary: e.text, input: null, result: '' });
-        if (e.kind === 'narration') turn.final(e.text);
+        if (e.kind === 'narration') {
+          turn.final(e.text);
+          turn.setTurn(turnNumber);
+        }
         if (e.kind === 'system') turn.note(e.text);
       }
       turn.finish();
@@ -225,6 +260,7 @@ export class Ui {
   }
 
   renderWorld(world: WorldState): void {
+    this.world = world;
     const player = world.playerId ? world.characters[world.playerId] : null;
     const loc = player?.locationId ? world.locations[player.locationId] : Object.values(world.locations).at(-1);
     $('#hud-location').textContent = loc?.name ?? 'Montando o mundo…';
@@ -236,6 +272,7 @@ export class Ui {
   }
 
   renderNoWorld(): void {
+    this.world = null;
     $('#hud-location').textContent = 'CRPS';
     $('#hud-clock').textContent = '';
     $('#stage-empty').hidden = false;
@@ -296,6 +333,12 @@ export class Ui {
     close.addEventListener('click', () => this.onSelect(null));
     this.inspector.replaceChildren(close, body);
     this.inspector.hidden = false;
+  }
+
+  private speaker(id: string): Speaker | null {
+    const c = this.world?.characters[id];
+    if (!c) return null;
+    return { name: c.name, color: c.isPlayer ? 'var(--accent)' : `hsl(${hash(c.id) % 360} 62% 72%)` };
   }
 
   private closeInspector(): void {

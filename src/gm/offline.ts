@@ -83,11 +83,17 @@ function setupSteps(): StepResult[] {
       ],
     },
     {
-      text:
+      text: [
         'O sol da manhã entra enviesado pelas janelas da Sala 2-B e acende o pó de giz que ainda flutua perto do quadro. ' +
-        'Você gira o toco de giz entre os dedos enquanto a turma se acomoda: cadeiras arrastam, alguém ri baixo no fundo, ' +
-        'e o Ren já apoiou o queixo na mão como quem pretende dormir de olhos abertos.\n\n' +
+          'Você gira o toco de giz entre os dedos enquanto a turma se acomoda.',
+        '@haruto: Professor, é verdade que hoje tem prova surpresa?',
+        '@aiko: Haruto, para de inventar coisa. *ajeita os óculos* Bom dia, professor!',
+        '@ren: …zzz',
+        '',
+        'Alguém ri baixo no fundo. O Ren apoiou o queixo na mão como quem pretende dormir de olhos abertos.',
+        '',
         '(Modo offline: este é um roteiro fixo. Conecte o Claude para o mestre de verdade montar o mundo e narrar.)',
+      ].join('\n'),
       toolCalls: [],
       stop: 'end_turn',
     },
@@ -104,7 +110,14 @@ function turnSteps(action: string, playerId: string, boardId: string | null): St
   return [
     { text: '', stop: 'tool_use', toolCalls: tools },
     {
-      text: `Você: “${action}”. O motor rolou os dados e o relógio andou cinco minutos.\n\n(Modo offline: sem o modelo, o mestre só registra a ação.)`,
+      text: [
+        'O motor rolou os dados e o relógio andou cinco minutos.',
+        `@${playerId}: ${quoted ?? 'Muito bem, turma. Vamos começar.'}`,
+        '@aiko: Sim, professor!',
+        '@haruto: *cochicha para a Mei* Ele tá de bom humor hoje.',
+        '',
+        '(Modo offline: sem o modelo, o mestre só registra a ação.)',
+      ].join('\n'),
       toolCalls: [],
       stop: 'end_turn',
     },

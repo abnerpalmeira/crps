@@ -94,6 +94,7 @@ export class GameMaster {
 
     const text = result.text || SILENCE;
     engine.log('narration', text);
+    engine.recordFrame();
     emit({ type: 'narration', text, turn: engine.state.turn });
     emit({ type: 'state', world: engine.snapshot() });
   }

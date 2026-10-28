@@ -69,6 +69,7 @@ export class WorldView {
   private actors = new Map<string, Actor>();
   private items = new Map<string, THREE.Object3D>();
   private boards = new Map<string, { surface: THREE.Mesh; text: string; length: number }>();
+  private balloons = new Map<string, CSS2DObject>();
   private roomKey = '';
   private selected: Pick | null = null;
   private selectionRing = playerRing('#ffffff');
@@ -142,6 +143,47 @@ export class WorldView {
     this.roomKey = '';
   }
 
+  /**
+   * Balões de fala sobre os personagens: um por personagem (a fala mais recente dele).
+   * `age` 0 é a fala atual; 1 e 2 vão esmaecendo. Devolve os ids que não estão em cena.
+   */
+  setBalloons(lines: { speakerId: string; html: string; age: number }[]): string[] {
+    const wanted = new Map(lines.map((l) => [l.speakerId, l]));
+    for (const id of [...this.balloons.keys()]) if (!wanted.has(id)) this.removeBalloon(id);
+    const missing: string[] = [];
+    for (const [id, line] of wanted) {
+      const actor = this.actors.get(id);
+      if (!actor) {
+        missing.push(id);
+        continue;
+      }
+      let balloon = this.balloons.get(id);
+      if (!balloon) {
+        const anchor = document.createElement('div');
+        anchor.className = 'balloon-anchor';
+        anchor.append(document.createElement('div'));
+        anchor.firstElementChild!.className = 'balloon';
+        balloon = new CSS2DObject(anchor);
+        actor.obj.add(balloon);
+        this.balloons.set(id, balloon);
+      }
+      const age = Math.min(line.age, 2);
+      balloon.element.firstElementChild!.innerHTML = line.html;
+      balloon.element.dataset.age = String(age);
+      // Falas mais antigas sobem: vizinhos que falam em sequência não se sobrepõem.
+      balloon.position.set(0, (actor.seated ? 1.86 : 2.24) + age * 0.5, 0);
+    }
+    return missing;
+  }
+
+  private removeBalloon(id: string): void {
+    const balloon = this.balloons.get(id);
+    if (!balloon) return;
+    balloon.element.remove();
+    balloon.parent?.remove(balloon);
+    this.balloons.delete(id);
+  }
+
   select(pick: Pick | null): void {
     this.selected = pick;
     this.selectionRing.visible = pick?.kind === 'character' && this.actors.has(pick.id);
@@ -185,6 +227,7 @@ export class WorldView {
   }
 
   private clearRoom(): void {
+    for (const id of [...this.balloons.keys()]) this.removeBalloon(id);
     for (const a of this.actors.values()) a.label.element.remove();
     this.actors.clear();
     this.items.clear();
@@ -325,6 +368,7 @@ export class WorldView {
     }
     for (const [id, actor] of this.actors) {
       if (present.has(id)) continue;
+      this.removeBalloon(id);
       actor.label.element.remove();
       this.room.remove(actor.obj);
       this.actors.delete(id);

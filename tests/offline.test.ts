@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GameEngine } from '../src/engine/engine';
+import { parseBeats } from '../src/engine/frames';
 import { buildLocation } from '../src/engine/layout';
 import { GameMaster, type GmEvent } from '../src/gm/gm';
 import { DEMO_CLASSROOM, OfflineProvider } from '../src/gm/offline';
@@ -22,5 +23,9 @@ describe('OfflineProvider', () => {
     expect(Object.keys(engine.state.characters)).toHaveLength(9);
     expect(engine.findFixture('sala_2b/quadro-1').text).toBe('Período Edo');
     expect(engine.state.clock.minutes).toBe(8 * 60);
+    expect(engine.state.frames.map((f) => f.turn)).toEqual([0, 1]);
+    const speakers = parseBeats(engine.state.log.at(-1)!.text).flatMap((b) => (b.kind === 'speech' ? [b.speakerId] : []));
+    expect(speakers).toEqual(['voce', 'aiko', 'haruto']);
+    expect(speakers.every((id) => engine.state.characters[id])).toBe(true);
   });
 });

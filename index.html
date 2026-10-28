@@ -13,9 +13,20 @@
         <div id="hud">
           <strong id="hud-location">CRPS</strong>
           <span id="hud-clock"></span>
+          <span id="hud-replay">revendo o passado</span>
         </div>
         <div id="stage-empty">Escolha um cenário para começar.</div>
         <div id="inspector" hidden></div>
+        <div id="caption" hidden></div>
+        <div id="player-bar" hidden>
+          <button type="button" data-cmd="prevFrame" title="Turno anterior">⏮</button>
+          <button type="button" data-cmd="prev" title="Fala anterior (←)">‹</button>
+          <button type="button" data-cmd="toggle" id="play-toggle" title="Tocar (espaço)">▶</button>
+          <button type="button" data-cmd="next" title="Próxima fala (→)">›</button>
+          <button type="button" data-cmd="nextFrame" title="Próximo turno">⏭</button>
+          <span id="player-label">ao vivo</span>
+          <button type="button" data-cmd="live" class="live" title="Voltar ao estado atual (Esc)" hidden>ao vivo</button>
+        </div>
         <div id="stage-hint">arraste para girar · role para aproximar · clique em pessoas e objetos</div>
       </section>
 

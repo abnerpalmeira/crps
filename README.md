@@ -75,6 +75,7 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   engine.ts     regras: posicionamento, caminhos, alcance, testes, fatos, tempo
   tools.ts      as 16 tools (schemas zod → JSON Schema) e a execução atômica
   brief.ts      o resumo do estado que o modelo recebe a cada turno
+  frames.ts     falas `@id:` → passos do replay; retratos da cena por turno
 src/gm/       o mestre
   gm.ts         loop do turno, eventos, verificador e rollback se a API falhar
   provider.ts   interface do provedor de modelo
@@ -116,6 +117,19 @@ Princípios que o motor impõe:
 | `update_fixture` | Escrever no quadro (aparece no 3D), abrir portas |
 | `add_fact` / `update_thread` | Memória da história |
 | `advance_time` | Relógio |
+
+### Replay com balões de fala
+
+Cada turno é um frame. O mestre escreve cada fala numa linha própria, `@id: fala`
+(gestos curtos entre asteriscos). No 3D, cada fala vira um balão sobre quem fala, com até
+três na tela, os mais antigos esmaecendo, e a narração vira legenda. No fim de cada turno o
+motor guarda um retrato da cena (posições, itens, quadro, relógio), então voltar a um
+frame antigo mostra o mundo como estava naquele momento.
+
+Controles no palco: ⏮ turno anterior · ‹ fala anterior · ▶ tocar/pausar · › próxima fala ·
+⏭ próximo turno · "ao vivo" volta ao presente. Com o foco fora da caixa de texto: ← →,
+espaço e Esc. Cada turno do painel tem um botão "▶ rever", e o turno novo toca sozinho
+quando termina.
 
 ### Layout ASCII
 

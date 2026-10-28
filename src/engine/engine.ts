@@ -1,3 +1,4 @@
+import { MAX_FRAMES, snapshotScene } from './frames';
 import { buildLocation, fixtureAt, isPassable, rectCenter, tileDef, type LocationSpec } from './layout';
 import { parseDice, pickMany, randInt, rollDice } from './rng';
 import { chebyshev, dirTowards, fold, formatClock, parseHHMM, slugify } from './text';
@@ -146,6 +147,7 @@ export class GameEngine {
       facts: [],
       threads: {},
       log: [],
+      frames: [],
       counters: {},
     });
   }
@@ -153,6 +155,7 @@ export class GameEngine {
   static fromJSON(json: string): GameEngine {
     const state = JSON.parse(json) as WorldState;
     if (state.version !== 1) throw new Error(`Versão de save não suportada: ${String(state.version)}`);
+    state.frames ??= []; // saves de antes do replay
     return new GameEngine(state);
   }
 
@@ -160,11 +163,18 @@ export class GameEngine {
     return JSON.stringify(this.state);
   }
 
-  /** Cópia para o cliente, com o histórico encurtado. */
-  snapshot(maxLog = 200): WorldState {
+  /** Cópia para o cliente, com histórico e retratos encurtados. */
+  snapshot(maxLog = 200, maxFrames = 80): WorldState {
     const copy = structuredClone(this.state);
     copy.log = copy.log.slice(-maxLog);
+    copy.frames = copy.frames.slice(-maxFrames);
     return copy;
+  }
+
+  /** Guarda o retrato da cena do turno atual, para o replay. */
+  recordFrame(): void {
+    const frame = snapshotScene(this.state);
+    this.state.frames = [...this.state.frames.filter((f) => f.turn !== frame.turn), frame].slice(-MAX_FRAMES);
   }
 
   // ---------------------------------------------------------------- consultas

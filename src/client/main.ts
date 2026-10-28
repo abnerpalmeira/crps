@@ -1,21 +1,41 @@
 import type { WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 import { fetchState, streamEvents } from './api';
+import { Playback } from './playback';
 import { WorldView } from './scene';
 import './style.css';
 import { Ui, type TurnView } from './ui';
 
 const ui = new Ui();
 const view = new WorldView(document.querySelector<HTMLElement>('#stage-canvas')!);
+const playback = new Playback(view, ui, (id) => world?.characters[id]?.name ?? null);
 let world: WorldState | null = null;
 let busy = false;
 
 view.onPick = (pick) => ui.showInspector(world, pick);
 ui.onSelect = (pick) => view.select(pick);
+ui.onReplay = (turn) => playback.playTurn(turn);
+ui.onControl = (command) => {
+  if (command === 'live') playback.live();
+  if (command === 'toggle') playback.toggle();
+  if (command === 'next') playback.next();
+  if (command === 'prev') playback.prev();
+  if (command === 'nextFrame') playback.nextFrame();
+  if (command === 'prevFrame') playback.prevFrame();
+};
+
+// ← → passam as falas, espaço toca/pausa, Esc volta ao vivo (fora dos campos de texto).
+document.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement || document.querySelector('dialog[open]')) return;
+  const command = { ArrowRight: 'next', ArrowLeft: 'prev', ' ': 'toggle', Escape: 'live' }[e.key];
+  if (!command) return;
+  e.preventDefault();
+  ui.onControl(command);
+});
 
 function applyWorld(next: WorldState): void {
   world = next;
-  view.setWorld(next);
+  playback.setWorld(next);
   ui.renderWorld(next);
 }
 
@@ -35,6 +55,7 @@ function handle(event: GmEvent, turn: TurnView): void {
       break;
     case 'narration':
       turn.final(event.text);
+      turn.setTurn(event.turn);
       break;
     case 'verify':
       if (!event.consistent) turn.note('🔁 O verificador pediu uma correção ao mestre');
@@ -56,6 +77,7 @@ function handle(event: GmEvent, turn: TurnView): void {
 async function run(path: '/api/new' | '/api/turn', body: Record<string, string>, input: string | null): Promise<void> {
   busy = true;
   ui.setBusy(true);
+  playback.live();
   const turn = ui.beginTurn(input);
   turn.setStatus(path === '/api/new' ? 'Montando o mundo…' : 'O mestre está pensando…');
   let failure: string | null = null;
@@ -72,7 +94,8 @@ async function run(path: '/api/new' | '/api/turn', body: Record<string, string>,
     busy = false;
     ui.setBusy(false);
   }
-  if (failure !== null && path === '/api/new') await resync(failure);
+  if (failure === null) playback.playLatest();
+  else if (path === '/api/new') await resync(failure);
 }
 
 /** Depois de uma criação que falhou, volta a mostrar a campanha que o servidor manteve (ou nenhuma). */
