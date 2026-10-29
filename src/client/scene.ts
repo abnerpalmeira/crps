@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { tileDef } from '../engine/layout';
-import { lifeStatId, perceptionOf } from '../engine/perception';
+import { lightSources } from '../engine/light';
+import { lifeStatId, perceptionOf, visionOf } from '../engine/perception';
 import type { Character, Location, WorldState } from '../engine/types';
 import {
   DIR_VEC,
@@ -63,6 +64,11 @@ export class WorldView {
   private readonly camera = new THREE.PerspectiveCamera(38, 1, 0.1, 300);
   private readonly controls: OrbitControls;
   private readonly sun = new THREE.DirectionalLight('#fff1dc', 2.4);
+  private readonly sky = new THREE.HemisphereLight('#dfe8ff', '#6b5a48', 1.5);
+  /** Luzes acesas (lanternas, velas, poderes), presas a quem carrega ou ao item. */
+  private lamps = new Map<string, THREE.PointLight>();
+  /** Véu sobre o palco quando a visão do jogador falha (cegueira, vista turva). */
+  private readonly veil = document.createElement('div');
   private readonly raycaster = new THREE.Raycaster();
   private readonly clock = new THREE.Clock();
   private room = new THREE.Group();
@@ -85,6 +91,8 @@ export class WorldView {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.appendChild(this.renderer.domElement);
+    this.veil.className = 'vision-veil';
+    host.appendChild(this.veil);
     this.labels.domElement.className = 'labels';
     host.appendChild(this.labels.domElement);
 
@@ -95,7 +103,7 @@ export class WorldView {
     this.controls.maxDistance = 70;
     this.controls.screenSpacePanning = false;
 
-    this.scene.add(new THREE.HemisphereLight('#dfe8ff', '#6b5a48', 1.5));
+    this.scene.add(this.sky);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(2048, 2048);
     this.sun.shadow.bias = -0.0004;
@@ -135,6 +143,7 @@ export class WorldView {
     this.syncBoards(loc);
     this.syncActors(world, loc);
     this.syncItems(world, loc);
+    this.syncLight(world, loc);
     if (this.selected && !this.exists(this.selected)) this.select(null);
   }
 
@@ -229,6 +238,8 @@ export class WorldView {
   }
 
   private clearRoom(): void {
+    for (const lamp of this.lamps.values()) lamp.dispose();
+    this.lamps.clear();
     for (const id of [...this.balloons.keys()]) this.removeBalloon(id);
     for (const a of this.actors.values()) a.label.element.remove();
     this.actors.clear();
@@ -364,10 +375,14 @@ export class WorldView {
         actor = { obj, label, target: pos.clone(), yaw, seated: false };
         this.actors.set(c.id, actor);
       }
+      // Quem o jogador não enxerga fica sem nome; quem ele vê como vulto vira "?".
+      const sight = c.isPlayer ? 'nitido' : view.sight(c.id);
       const label = actor.label.element;
-      label.replaceChildren(c.isPlayer ? `${c.name} (você)` : c.name.split(' ')[0]);
-      // Barra de vida só quando o jogador pode ver a vida desse personagem (pública ou por perk).
-      if (life && view.canSeeStat(life, c.id)) {
+      label.replaceChildren(c.isPlayer ? `${c.name} (você)` : sight === 'nitido' ? c.name.split(' ')[0] : '?');
+      label.classList.toggle('vulto', sight === 'vulto');
+      actor.label.visible = sight !== 'nada';
+      // Barra de vida só quando o jogador vê a pessoa e pode ver a vida dela (pública ou por perk).
+      if (life && sight === 'nitido' && view.canSeeStat(life, c.id)) {
         const value = c.resources[life] ?? lifeMax;
         const bar = document.createElement('span');
         bar.className = 'hp';
@@ -429,6 +444,51 @@ export class WorldView {
       this.room.remove(obj);
       this.items.delete(id);
     }
+  }
+
+  /**
+   * Luz da cena: a ambiente do local, as lanternas e os poderes de luz. Depois a visão do jogador:
+   * cegueira e vista turva escurecem e borram o palco inteiro, sem chegar ao preto.
+   */
+  private syncLight(world: WorldState, loc: Location): void {
+    const vision = world.playerId ? visionOf(world, world.playerId) : { acuity: 1, darkvision: 0 };
+    const ambient = loc.light ?? 1;
+    // Quem enxerga no escuro vê a sala em tons apagados, mesmo sem luz.
+    const seen = vision.darkvision > 0 ? Math.max(ambient, 0.55) : ambient;
+    this.sky.intensity = 0.1 + 1.4 * seen;
+    this.sun.intensity = 2.4 * ambient;
+    const live = new Set<string>();
+    for (const s of lightSources(world, loc.id)) {
+      live.add(s.id);
+      let lamp = this.lamps.get(s.id);
+      if (!lamp) {
+        lamp = new THREE.PointLight(s.color, 1, 0, 1);
+        this.lamps.set(s.id, lamp);
+      }
+      const carrier = s.carrierId ? this.actors.get(s.carrierId)?.obj : undefined;
+      const parent = carrier ?? this.items.get(s.id) ?? this.room;
+      if (lamp.parent !== parent) parent.add(lamp);
+      if (carrier) lamp.position.set(0.22, 1.2, 0.3);
+      else if (parent === this.room) lamp.position.set(s.pos.x, 1.2, s.pos.y);
+      else lamp.position.set(0, 0.35, 0);
+      lamp.color.set(s.color);
+      // Alcance e queda parecidos com os do motor (light.ts), para o que se vê bater com o que conta.
+      lamp.intensity = 3 + 9 * s.intensity;
+      lamp.distance = s.radius + 2.5;
+    }
+    for (const [id, lamp] of this.lamps) {
+      if (live.has(id)) continue;
+      lamp.removeFromParent();
+      lamp.dispose();
+      this.lamps.delete(id);
+    }
+    const acuity = Math.min(1, vision.acuity);
+    const loss = 1 - acuity;
+    const filters = [];
+    if (loss > 0) filters.push(`brightness(${(0.22 + 0.78 * acuity).toFixed(2)})`, `blur(${(loss * 3).toFixed(1)}px)`, `saturate(${(0.35 + 0.65 * acuity).toFixed(2)})`);
+    if (vision.darkvision > 0 && ambient < 0.5) filters.push('grayscale(0.7)');
+    this.renderer.domElement.style.filter = filters.join(' ');
+    this.veil.style.opacity = (loss * 0.85).toFixed(2);
   }
 
   private tick(): void {

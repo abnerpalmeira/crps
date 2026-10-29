@@ -90,8 +90,10 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   types.ts      modelo de dados: personagens, itens, locais, móveis, fatos, fios, relógio
   layout.ts     layout ASCII → local validado (paredes, conectividade, acesso, orientação)
   engine.ts     regras: posicionamento, caminhos, alcance, testes, fatos, tempo
-  tools.ts      as 18 tools (schemas zod → JSON Schema) e a execução atômica
-  perception.ts o que cada um percebe (visibilidade, sentidos e perks)
+  tools.ts      as 19 tools (schemas zod → JSON Schema) e a execução atômica
+  effects.ts    efeitos de perks e condições de cada personagem
+  light.ts      luz por tile: ambiente do local, itens acesos e poderes de luz
+  perception.ts o que cada um percebe (visibilidade, sentidos, visão e perks)
   speech.ts     falas: alcance de cada modo, quem ouve e o que o jogador vê
   brief.ts      o resumo do estado que o modelo recebe a cada turno
   frames.ts     falas `@id[modo>alvo]:` → passos do replay; retratos da cena por turno
@@ -150,10 +152,11 @@ Princípios que o motor impõe:
 | `random` | Sorteios (intervalo, lista ou dados) |
 | `skill_check` | Teste resolvido pelo motor |
 | `inspect` / `recall` | Consultar detalhes e fatos fora do resumo |
-| `update_character` | Aprofundar NPCs, traços, dano e cura, perks e pensamentos |
+| `update_character` | Aprofundar NPCs, traços, dano e cura, perks, condições e pensamentos |
 | `move_character` | Mover por caminho, sentar, ir até alguém, trocar de local |
-| `transfer_item` / `update_item` | Pegar, entregar, largar, consumir |
+| `transfer_item` / `update_item` | Pegar, entregar, largar, consumir, acender e apagar luzes |
 | `update_fixture` | Escrever no quadro (aparece no 3D), abrir portas |
+| `update_location` | Luz ambiente (acender ou apagar as luzes, anoitecer) e descrição do local |
 | `add_fact` / `update_thread` | Memória da história |
 | `share_knowledge` | Quem ficou sabendo de um fato (só quem sabe pode contar) |
 | `advance_time` | Relógio |
@@ -203,6 +206,36 @@ isso:
 
 Modos de fala, canais e alcances novos (um rádio, língua de sinais, telepatia como modo de
 fala) entram com `extend_ruleset` quando a história pede, sem mudar o código.
+
+### Luz e visão
+
+A luz é calculada por tile: a luz ambiente do local (de 0, breu, a 1, dia claro ou luzes
+acesas) ou a luz mais forte que chega até ali, de itens acesos (lanterna, vela, tocha) ou de
+personagens que emitem luz por um poder. O que cada personagem enxerga de outro sai da luz no
+alvo, da distância e da visão dele: nítido, só um vulto, ou nada.
+
+| Situação | O que o motor faz |
+|---|---|
+| Luzes apagadas | `update_location` com `light` baixo; quem não tem luz não vê ninguém |
+| Lanterna | item com `light` (`radius`, `intensity`), acesa com `update_item` (`light_on`); ilumina em volta de quem carrega |
+| Poder de luz | perk com `{ "kind": "light", "radius": 4 }`: o personagem brilha |
+| Experimento que dá errado | condição `cego` ou `visao_turva` (`update_character` com `conditions_add`, e `minutes` se passa sozinha) |
+| Visão no escuro | perk `{ "kind": "sense", "channel": "visao", "bonus": 6 }`: enxerga sem luz até 6 tiles |
+
+Condições são como perks que vêm e vão: `cego`, `visao_turva`, `ofuscado` e `surdo` vêm
+prontas, e o mestre cria outras com `extend_ruleset`. Elas multiplicam o alcance de um sentido
+(`factor`: 0 apaga, 0,5 turva) e acabam sozinhas quando o relógio passa do prazo. Ler lábios
+exige enxergar quem fala, e um `skill_check` contra quem o personagem não vê bem perde 1 (vulto)
+ou 3 (nada), salvo ações que não dependem de ver (`needs_sight: false`).
+
+No 3D, a luz ambiente controla a iluminação da cena, cada luz acesa vira um ponto de luz que
+acompanha quem a carrega, e quem o jogador não vê fica sem nome (vulto vira "?"). Quando a visão
+do próprio jogador falha, o palco escurece, borra e fecha nas bordas, sem chegar ao preto. O
+resumo do turno diz ao mestre a luz, as condições e quem o jogador não vê, e o verificador
+aponta narração que descreve o que ele não poderia enxergar.
+
+Na demo offline dá para testar sem gastar tokens: "Apago a luz e pego a lanterna", "Faço o
+experimento de química" e "Acendo a luz".
 
 ### Layout ASCII
 

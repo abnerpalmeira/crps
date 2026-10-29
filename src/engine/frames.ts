@@ -82,7 +82,14 @@ export function snapshotScene(world: WorldState): SceneFrame {
     characters: Object.fromEntries(
       Object.values(world.characters).map((c) => [
         c.id,
-        { locationId: c.locationId, pos: c.pos && { ...c.pos }, seatId: c.seatId, facing: c.facing, resources: { ...c.resources } },
+        {
+          locationId: c.locationId,
+          pos: c.pos && { ...c.pos },
+          seatId: c.seatId,
+          facing: c.facing,
+          resources: { ...c.resources },
+          conditions: structuredClone(c.conditions),
+        },
       ]),
     ),
     items: Object.fromEntries(Object.values(world.items).map((i) => [i.id, structuredClone(i.holder)])),
@@ -92,10 +99,14 @@ export function snapshotScene(world: WorldState): SceneFrame {
         .filter((f) => f.text || f.state)
         .map((f) => [f.id, { text: f.text, state: f.state }]),
     ),
+    light: {
+      locations: Object.fromEntries(Object.values(world.locations).map((l) => [l.id, l.light])),
+      items: Object.fromEntries(Object.values(world.items).flatMap((i) => (i.light ? [[i.id, i.light.on]] : []))),
+    },
   };
 }
 
-/** O mundo como estava no retrato: posições, itens, quadro e relógio. Sem retrato, o mundo atual. */
+/** O mundo como estava no retrato: posições, itens, quadro, luz e relógio. Sem retrato, o mundo atual. */
 export function sceneAt(world: WorldState, frame: SceneFrame | undefined): WorldState {
   if (!frame) return world;
   const w = structuredClone(world);
@@ -109,8 +120,12 @@ export function sceneAt(world: WorldState, frame: SceneFrame | undefined): World
   w.items = Object.fromEntries(
     Object.entries(w.items)
       .filter(([id]) => frame.items[id])
-      .map(([id, i]) => [id, { ...i, holder: frame.items[id] }]),
+      .map(([id, i]) => {
+        const on = frame.light?.items[id];
+        return [id, { ...i, holder: frame.items[id], ...(i.light && on !== undefined ? { light: { ...i.light, on } } : {}) }];
+      }),
   );
+  for (const l of Object.values(w.locations)) l.light = frame.light?.locations[l.id] ?? l.light;
   for (const f of Object.values(w.locations).flatMap((l) => l.fixtures)) {
     f.text = frame.fixtures[f.id]?.text ?? '';
     f.state = frame.fixtures[f.id]?.state ?? '';

@@ -27,6 +27,16 @@ export function formatClock(c: Clock): string {
   return `Dia ${c.day}, ${hhmm(c.minutes)}`;
 }
 
+/** Minutos desde o início da campanha (dia 1, 00:00), para comparar horários. */
+export function clockMinutes(c: Clock): number {
+  return (c.day - 1) * 1440 + c.minutes;
+}
+
+export function addMinutes(c: Clock, minutes: number): Clock {
+  const total = clockMinutes(c) + minutes;
+  return { day: Math.floor(total / 1440) + 1, minutes: total % 1440 };
+}
+
 export function truncate(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
 }

@@ -82,7 +82,7 @@ describe('falas com alcance', () => {
       e.skillCheck({ character_id: 'haruto', attribute: 'corpo', difficulty: 'normal', reason: 'empurrar', target_id: 'mei', reach: 'corpo_a_corpo' }),
     ).toThrow(/Mei Kato está a 8 tiles de Haruto Mori, e "corpo_a_corpo" alcança 1/);
     const thrown = e.skillCheck({ character_id: 'haruto', attribute: 'corpo', difficulty: 'normal', reason: 'jogar borracha', target_id: 'yuki', reach: 'arremesso' });
-    expect(thrown.against).toEqual({ id: 'yuki', name: 'Yuki Sato', distance: 2, reach: 'arremesso' });
+    expect(thrown.against).toEqual({ id: 'yuki', name: 'Yuki Sato', distance: 2, reach: 'arremesso', sight: 'nitido' });
     expect(() => e.skillCheck({ character_id: 'haruto', attribute: 'corpo', difficulty: 'normal', reason: 'x', target_id: 'yuki', reach: 'laser' })).toThrow(
       /Alcance "laser" não existe/,
     );

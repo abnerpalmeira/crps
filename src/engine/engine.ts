@@ -1,7 +1,8 @@
 import { MAX_FRAMES, snapshotScene } from './frames';
 import { buildLocation, fixtureAt, isPassable, rectCenter, tileDef, type LocationSpec } from './layout';
+import { DEFAULT_VISION, sightOf, type Sight } from './perception';
 import { parseDice, pickMany, randInt, rollDice } from './rng';
-import { chebyshev, dirTowards, fold, formatClock, parseHHMM, slugify } from './text';
+import { addMinutes, chebyshev, clockMinutes, dirTowards, fold, formatClock, hhmm, parseHHMM, slugify } from './text';
 import type {
   Character,
   Clock,
@@ -12,6 +13,7 @@ import type {
   Item,
   ItemHolder,
   Location,
+  LightSpec,
   LogKind,
   PerkDef,
   PerkGrant,
@@ -48,8 +50,19 @@ export const DEFAULT_SPEECH: Record<string, SpeechMode> = {
   grito: { label: 'grita', reach: 40, channels: { som: 40, labios: 8 } },
 };
 
-/** Todo mundo ouve (som 1); ler lábios e mentes só com perk. */
-export const DEFAULT_SENSES: Record<string, number> = { som: 1, labios: 0, mente: 0 };
+/** Todo mundo ouve (som 1) e enxerga (visao 1); ler lábios e mentes só com perk. */
+export const DEFAULT_SENSES: Record<string, number> = { som: 1, labios: 0, mente: 0, visao: 1 };
+
+/** Ler lábios exige ver a boca de quem fala. */
+export const DEFAULT_SIGHT_CHANNELS = ['labios'];
+
+/** Condições prontas; o mestre cria outras com extend_ruleset. */
+export const DEFAULT_CONDITIONS: PerkDef[] = [
+  { id: 'cego', name: 'Cego', description: 'não enxerga nada', grants: [{ kind: 'sense', channel: 'visao', factor: 0 }] },
+  { id: 'visao_turva', name: 'Visão turva', description: 'enxerga de perto; de longe, só vultos', grants: [{ kind: 'sense', channel: 'visao', factor: 0.5 }] },
+  { id: 'ofuscado', name: 'Ofuscado', description: 'a vista ainda não voltou depois de um clarão', grants: [{ kind: 'sense', channel: 'visao', factor: 0.2 }] },
+  { id: 'surdo', name: 'Surdo', description: 'não ouve nada', grants: [{ kind: 'sense', channel: 'som', factor: 0 }] },
+];
 
 export const DEFAULT_REACHES: Record<string, number> = {
   toque: 1,
@@ -68,8 +81,11 @@ export const DEFAULT_RULESET: Ruleset = {
   ],
   resources: [...CORE_RESOURCES, { id: 'energia', name: 'Energia', max: 10, description: 'disposição física e mental', visibility: 'self' }],
   perks: [],
+  conditions: DEFAULT_CONDITIONS,
   speech: DEFAULT_SPEECH,
   senses: DEFAULT_SENSES,
+  sightChannels: DEFAULT_SIGHT_CHANNELS,
+  vision: DEFAULT_VISION,
   reaches: DEFAULT_REACHES,
   dice: '2d6',
   difficulties: { facil: 7, normal: 9, dificil: 11, muito_dificil: 13 },
@@ -94,7 +110,12 @@ function migrate(state: WorldState): WorldState {
   rules.perks ??= [];
   rules.speech ??= structuredClone(DEFAULT_SPEECH);
   rules.senses ??= { ...DEFAULT_SENSES };
+  rules.senses.visao ??= 1;
+  rules.sightChannels ??= [...DEFAULT_SIGHT_CHANNELS];
+  rules.vision ??= { ...DEFAULT_VISION };
+  rules.conditions ??= structuredClone(DEFAULT_CONDITIONS);
   rules.reaches ??= { ...DEFAULT_REACHES };
+  for (const l of Object.values(state.locations)) l.light ??= 1;
   for (const a of rules.attributes) {
     a.visibility ??= 'self';
     a.default ??= 1;
@@ -103,6 +124,7 @@ function migrate(state: WorldState): WorldState {
   ensureCoreResources(rules);
   for (const c of Object.values(state.characters)) {
     c.perks ??= [];
+    c.conditions ??= [];
     c.thoughts ??= null;
     for (const r of rules.resources) c.resources[r.id] ??= r.max;
   }
@@ -127,11 +149,31 @@ export interface ResourceInput {
   start?: number;
 }
 
+/** Como o mestre descreve um efeito: igual a PerkGrant, com a força da luz opcional. */
+export type PerkGrantInput = Exclude<PerkGrant, { kind: 'light' }> | { kind: 'light'; radius: number; intensity?: number; color?: string };
+
 export interface PerkInput {
   id?: string;
   name: string;
   description: string;
-  grants: PerkGrant[];
+  grants: PerkGrantInput[];
+}
+
+export interface LightInput {
+  radius: number;
+  intensity?: number;
+  color?: string;
+  on?: boolean;
+}
+
+/** Luz validada: raio de 0,5 a 40 tiles, força de 0,05 a 1 (padrão 0,9). */
+function lightSpec(l: LightInput): LightSpec {
+  if (!(l.radius > 0)) throw new EngineError('A luz precisa de radius maior que 0 (em tiles).');
+  return {
+    radius: clamp(Math.round(l.radius * 10) / 10, 0.5, 40),
+    intensity: clamp(l.intensity ?? 0.9, 0.05, 1),
+    ...(l.color ? { color: l.color } : {}),
+  };
 }
 
 export const DIFFICULTY_LABEL: Record<DifficultyName, string> = {
@@ -202,6 +244,9 @@ export interface CharacterUpdate {
   resources_set?: Record<string, number>;
   perks_add?: string[];
   perks_remove?: string[];
+  /** Condições novas; `minutes` = quanto tempo duram (sem minutes, até alguém tirar). */
+  conditions_add?: (string | { id: string; minutes?: number })[];
+  conditions_remove?: string[];
   thoughts?: string;
 }
 
@@ -576,6 +621,7 @@ export class GameEngine {
     attributes: AttributeInput[];
     resources: ResourceInput[];
     perks?: PerkInput[];
+    conditions?: PerkInput[];
     dice?: string;
     difficulties?: Partial<Record<DifficultyName, number>>;
     notes?: string;
@@ -595,8 +641,11 @@ export class GameEngine {
       attributes: input.attributes.map((a) => this.attributeDef(a, 1)),
       resources: input.resources.map((r) => this.resourceDef(r)),
       perks: [],
+      conditions: structuredClone(DEFAULT_CONDITIONS),
       speech: structuredClone(DEFAULT_SPEECH),
       senses: { ...DEFAULT_SENSES },
+      sightChannels: [...DEFAULT_SIGHT_CHANNELS],
+      vision: { ...DEFAULT_VISION },
       reaches: { ...DEFAULT_REACHES },
       dice,
       difficulties,
@@ -610,6 +659,7 @@ export class GameEngine {
     this.state.ruleset = rules;
     try {
       for (const p of input.perks ?? []) rules.perks.push(this.perkDef(p));
+      for (const p of input.conditions ?? []) rules.conditions.push(this.conditionDef(p));
     } catch (err) {
       this.state.ruleset = previous;
       throw err;
@@ -618,13 +668,16 @@ export class GameEngine {
   }
 
   /**
-   * Regras que evoluem com a história: novos atributos (ex.: pontaria), recursos (ex.: infecção)
-   * e perks, e mudanças de visibilidade. Quem já existe recebe o valor padrão.
+   * Regras que evoluem com a história: novos atributos (ex.: pontaria), recursos (ex.: infecção),
+   * perks e condições, sentidos, visão e mudanças de visibilidade. Quem já existe recebe o valor padrão.
    */
   extendRuleset(input: {
     attributes?: AttributeInput[];
     resources?: ResourceInput[];
     perks?: PerkInput[];
+    conditions?: PerkInput[];
+    vision?: { clear?: number; dim?: number; dim_penalty?: number; blind_penalty?: number };
+    sight_channels?: string[];
     visibility?: Record<string, Visibility>;
     speech_modes?: Record<string, SpeechMode>;
     senses?: Record<string, number>;
@@ -634,7 +687,7 @@ export class GameEngine {
     const rules = this.state.ruleset;
     const characters = Object.values(this.state.characters);
     const added: {
-      kind: 'atributo' | 'recurso' | 'perk' | 'visibilidade' | 'modo de fala' | 'sentido' | 'alcance';
+      kind: 'atributo' | 'recurso' | 'perk' | 'condição' | 'visibilidade' | 'modo de fala' | 'sentido' | 'alcance' | 'visão';
       id: string;
       name: string;
       visibility?: Visibility;
@@ -656,6 +709,29 @@ export class GameEngine {
       const id = slugify(channel, 20);
       rules.senses[id] = tiles(value, `O sentido "${id}"`);
       added.push({ kind: 'sentido', id, name: id, visibility: 'hidden' });
+    }
+    for (const channel of input.sight_channels ?? []) {
+      const id = slugify(channel, 20);
+      if (!rules.sightChannels.includes(id)) rules.sightChannels.push(id);
+      added.push({ kind: 'sentido', id, name: `${id} (exige ver)`, visibility: 'hidden' });
+    }
+    if (input.vision) {
+      const share = (v: number | undefined, fallback: number, what: string) => {
+        if (v === undefined) return fallback;
+        if (!(v >= 0 && v <= 1)) throw new EngineError(`vision.${what} precisa ficar entre 0 e 1.`);
+        return v;
+      };
+      const penalty = (v: number | undefined, fallback: number) => (v === undefined ? fallback : clamp(Math.round(v), 0, 6));
+      const v = input.vision;
+      const next = {
+        clear: share(v.clear, rules.vision.clear, 'clear'),
+        dim: share(v.dim, rules.vision.dim, 'dim'),
+        dimPenalty: penalty(v.dim_penalty, rules.vision.dimPenalty),
+        blindPenalty: penalty(v.blind_penalty, rules.vision.blindPenalty),
+      };
+      if (next.dim > next.clear) throw new EngineError('vision.dim (vulto) precisa ser menor que vision.clear (nítido).');
+      rules.vision = next;
+      added.push({ kind: 'visão', id: 'vision', name: `nítido ≥ ${next.clear}, vulto ≥ ${next.dim}`, visibility: 'hidden' });
     }
     for (const [action, value] of Object.entries(input.reaches ?? {})) {
       const id = slugify(action, 24);
@@ -681,13 +757,20 @@ export class GameEngine {
       rules.perks.push(def);
       added.push({ kind: 'perk', id: def.id, name: def.name });
     }
+    for (const p of input.conditions ?? []) {
+      const def = this.conditionDef(p);
+      rules.conditions.push(def);
+      added.push({ kind: 'condição', id: def.id, name: def.name });
+    }
     for (const [ref, visibility] of Object.entries(input.visibility ?? {})) {
       const def = this.findStatDef(ref);
       def.visibility = visibility;
       added.push({ kind: 'visibilidade', id: def.id, name: def.name, visibility });
     }
     if (!added.length) {
-      throw new EngineError('Nada para estender: informe attributes, resources, perks, visibility, speech_modes, senses ou reaches.');
+      throw new EngineError(
+        'Nada para estender: informe attributes, resources, perks, conditions, visibility, speech_modes, senses, sight_channels, vision ou reaches.',
+      );
     }
     if (rules.attributes.length > 10 || rules.resources.length > 8) {
       throw new EngineError('Regras grandes demais (máx. 10 atributos e 8 recursos). Prefira perícias, que são livres.');
@@ -732,28 +815,39 @@ export class GameEngine {
   private perkDef(p: PerkInput): PerkDef {
     const id = slugify(p.id ?? p.name, 24);
     if (this.state.ruleset.perks.some((x) => x.id === id)) throw new EngineError(`Já existe um perk com o id "${id}".`);
-    const grants: PerkGrant[] = p.grants.map((g) => {
-      if (g.kind === 'see_stat') return { kind: 'see_stat', stat: this.findStatDef(g.stat).id };
-      if (g.kind === 'sense') {
-        if (g.multiplier === undefined && g.bonus === undefined) throw new EngineError(`O perk "${p.name}" precisa de multiplier ou bonus no canal ${g.channel}.`);
-        return {
-          kind: 'sense',
-          channel: slugify(g.channel, 20),
-          ...(g.multiplier !== undefined ? { multiplier: clamp(g.multiplier, 0, 20) } : {}),
-          ...(g.bonus !== undefined ? { bonus: clamp(Math.round(g.bonus), -50, 200) } : {}),
-        };
+    return { id, name: p.name, description: p.description, grants: p.grants.map((g) => this.grantDef(g, p.name)) };
+  }
+
+  private conditionDef(p: PerkInput): PerkDef {
+    const id = slugify(p.id ?? p.name, 24);
+    if (this.state.ruleset.conditions.some((x) => x.id === id)) throw new EngineError(`Já existe uma condição com o id "${id}".`);
+    return { id, name: p.name, description: p.description, grants: p.grants.map((g) => this.grantDef(g, p.name)) };
+  }
+
+  private grantDef(g: PerkGrantInput, owner: string): PerkGrant {
+    if (g.kind === 'see_stat') return { kind: 'see_stat', stat: this.findStatDef(g.stat).id };
+    if (g.kind === 'sense') {
+      if (g.multiplier === undefined && g.bonus === undefined && g.factor === undefined) {
+        throw new EngineError(`"${owner}" precisa de multiplier, bonus ou factor no canal ${g.channel}.`);
       }
-      if (g.kind === 'check_bonus') {
-        return {
-          kind: 'check_bonus',
-          bonus: clamp(Math.round(g.bonus), -5, 5),
-          ...(g.attribute ? { attribute: this.resolveAttributeId(g.attribute) } : {}),
-          ...(g.skill ? { skill: slugify(g.skill, 24) } : {}),
-        };
-      }
-      return { kind: 'see_thoughts' };
-    });
-    return { id, name: p.name, description: p.description, grants };
+      return {
+        kind: 'sense',
+        channel: slugify(g.channel, 20),
+        ...(g.multiplier !== undefined ? { multiplier: clamp(g.multiplier, 0, 20) } : {}),
+        ...(g.bonus !== undefined ? { bonus: clamp(Math.round(g.bonus), -50, 200) } : {}),
+        ...(g.factor !== undefined ? { factor: clamp(g.factor, 0, 5) } : {}),
+      };
+    }
+    if (g.kind === 'check_bonus') {
+      return {
+        kind: 'check_bonus',
+        bonus: clamp(Math.round(g.bonus), -5, 5),
+        ...(g.attribute ? { attribute: this.resolveAttributeId(g.attribute) } : {}),
+        ...(g.skill ? { skill: slugify(g.skill, 24) } : {}),
+      };
+    }
+    if (g.kind === 'light') return { kind: 'light', ...lightSpec(g) };
+    return { kind: 'see_thoughts' };
   }
 
   private resolvePerkId(ref: string): string {
@@ -769,6 +863,28 @@ export class GameEngine {
     return c.perks.flatMap((id) => this.state.ruleset.perks.filter((p) => p.id === id));
   }
 
+  private resolveConditionId(ref: string): string {
+    const def = this.state.ruleset.conditions.find((d) => d.id === slugify(ref, 24) || fold(d.name) === fold(ref));
+    if (!def) {
+      const known = this.state.ruleset.conditions.map((d) => d.id).join(', ') || 'nenhuma';
+      throw new EngineError(`Condição "${ref}" não existe. Crie com extend_ruleset (conditions) antes. Condições: ${known}.`);
+    }
+    return def.id;
+  }
+
+  conditionsOf(c: Character): PerkDef[] {
+    return c.conditions.flatMap((a) => this.state.ruleset.conditions.filter((d) => d.id === a.id));
+  }
+
+  /** "Cego (até 08:20)", para o mestre e a interface. */
+  conditionLabels(c: Character): string[] {
+    return c.conditions.map((a) => {
+      const name = this.state.ruleset.conditions.find((d) => d.id === a.id)?.name ?? a.id;
+      if (!a.until) return name;
+      return `${name} (até ${a.until.day === this.state.clock.day ? hhmm(a.until.minutes) : formatClock(a.until)})`;
+    });
+  }
+
   createLocation(spec: Omit<LocationSpec, 'id'> & { id?: string }): { location: Location; warnings: string[] } {
     const id = this.claimId(spec.id, spec.name, 'o local');
     const result = buildLocation({ ...spec, id });
@@ -779,6 +895,22 @@ export class GameEngine {
     }
     this.state.locations[id] = result.location;
     return { location: result.location, warnings: result.warnings };
+  }
+
+  /** Luz ambiente (acender ou apagar as luzes, anoitecer), nome e descrição de um local. */
+  updateLocation(input: { location_id: string; light?: number; name?: string; description?: string }) {
+    const loc = this.findLocation(input.location_id);
+    const before = loc.light;
+    if (input.light === undefined && input.name === undefined && input.description === undefined) {
+      throw new EngineError('Nada para mudar: informe light, name ou description.');
+    }
+    if (input.light !== undefined) {
+      if (!(input.light >= 0 && input.light <= 1)) throw new EngineError('light vai de 0 (breu) a 1 (dia claro ou luzes acesas).');
+      loc.light = Math.round(input.light * 100) / 100;
+    }
+    if (input.name) loc.name = input.name;
+    if (input.description !== undefined) loc.description = input.description;
+    return { location_id: loc.id, name: loc.name, light: { before, after: loc.light } };
   }
 
   private statBlock(kind: 'atributo' | 'perícia', values: Record<string, number> | undefined, known: string[] | null): Record<string, number> {
@@ -837,6 +969,7 @@ export class GameEngine {
       skills: this.statBlock('perícia', input.skills, null),
       resources,
       perks: [...new Set((input.perks ?? []).map((p) => this.resolvePerkId(p)))],
+      conditions: [],
       thoughts: input.thoughts ?? null,
       detail: input.personality || input.background ? 'full' : 'sketch',
       personality: input.personality ?? null,
@@ -950,6 +1083,19 @@ export class GameEngine {
       c.perks = c.perks.filter((id) => !remove.has(id));
       changes.push('perks');
     }
+    for (const entry of input.conditions_add ?? []) {
+      const { id: ref, minutes } = typeof entry === 'string' ? { id: entry, minutes: undefined } : entry;
+      const id = this.resolveConditionId(ref);
+      if (minutes !== undefined && !(minutes >= 1 && minutes <= 525600)) throw new EngineError('minutes da condição vai de 1 a 525600 (um ano).');
+      const until = minutes === undefined ? null : addMinutes(this.state.clock, Math.round(minutes));
+      c.conditions = [...c.conditions.filter((x) => x.id !== id), { id, until }];
+      changes.push('conditions');
+    }
+    if (input.conditions_remove?.length) {
+      const remove = new Set(input.conditions_remove.map((x) => this.resolveConditionId(x)));
+      c.conditions = c.conditions.filter((x) => !remove.has(x.id));
+      changes.push('conditions');
+    }
     if (input.thoughts !== undefined) {
       c.thoughts = input.thoughts.trim() || null;
       changes.push('thoughts');
@@ -1000,7 +1146,7 @@ export class GameEngine {
     return c?.locationId && c.pos ? { locationId: c.locationId, rect: pointRect(c.pos) } : null;
   }
 
-  createItem(input: { id?: string; name: string; description: string; tags?: string[]; quantity?: number; holder: HolderRef }): Item {
+  createItem(input: { id?: string; name: string; description: string; tags?: string[]; quantity?: number; holder: HolderRef; light?: LightInput }): Item {
     const holder = this.resolveHolder(input.holder, this.currentLocation?.id ?? null);
     const quantity = Math.max(1, Math.round(input.quantity ?? 1));
     const item: Item = {
@@ -1010,6 +1156,7 @@ export class GameEngine {
       tags: input.tags ?? [],
       quantity,
       holder,
+      ...(input.light ? { light: { ...lightSpec(input.light), on: input.light.on ?? false } } : {}),
     };
     this.state.items[item.id] = item;
     return item;
@@ -1051,17 +1198,32 @@ export class GameEngine {
     return { item_id: moved.id, name: moved.name, quantity: qty, from, to: this.describeHolder(holder) };
   }
 
-  updateItem(input: { item_id: string; name?: string; description?: string; tags?: string[]; quantity_delta?: number; destroy?: boolean }) {
+  updateItem(input: {
+    item_id: string;
+    name?: string;
+    description?: string;
+    tags?: string[];
+    quantity_delta?: number;
+    destroy?: boolean;
+    light?: LightInput | null;
+    light_on?: boolean;
+  }) {
     const item = this.findItem(input.item_id);
     if (input.name) item.name = input.name;
     if (input.description) item.description = input.description;
     if (input.tags) item.tags = input.tags;
+    if (input.light === null) delete item.light;
+    else if (input.light) item.light = { ...lightSpec(input.light), on: input.light.on ?? item.light?.on ?? false };
+    if (input.light_on !== undefined) {
+      if (!item.light) throw new EngineError(`${item.name} não ilumina; para virar uma luz, informe light {radius, intensity}.`);
+      item.light.on = input.light_on;
+    }
     if (input.quantity_delta) item.quantity += Math.round(input.quantity_delta);
     if (input.destroy || item.quantity <= 0) {
       delete this.state.items[item.id];
       return { item_id: item.id, destroyed: true };
     }
-    return { item_id: item.id, destroyed: false, quantity: item.quantity, name: item.name };
+    return { item_id: item.id, destroyed: false, quantity: item.quantity, name: item.name, light: item.light ?? null };
   }
 
   updateFixture(input: { fixture_id: string; text?: string; append_text?: string; state?: string }) {
@@ -1093,9 +1255,10 @@ export class GameEngine {
     reason: string;
     target_id?: string;
     reach?: string | number;
+    needs_sight?: boolean;
   }) {
     const c = this.findCharacter(input.character_id);
-    let opponent: { id: string; name: string; distance: number; reach: string } | null = null;
+    let opponent: { id: string; name: string; distance: number; reach: string; sight: Sight } | null = null;
     if (input.target_id) {
       const t = this.findCharacter(input.target_id);
       const reach = this.resolveReach(input.reach);
@@ -1107,7 +1270,7 @@ export class GameEngine {
             'Aproxime os dois com move_character antes, ou escolha uma ação de alcance maior.',
         );
       }
-      opponent = { id: t.id, name: t.name, distance: d, reach: reach.name };
+      opponent = { id: t.id, name: t.name, distance: d, reach: reach.name, sight: sightOf(this.state, c.id, t.id) };
     }
     const attrId = this.resolveAttributeId(input.attribute);
     const attr = this.state.ruleset.attributes.find((a) => a.id === attrId)!;
@@ -1118,14 +1281,19 @@ export class GameEngine {
     const dice = parseDice(this.state.ruleset.dice)!;
     const rolls = rollDice(this.state, dice.count, dice.sides);
     const modifier = Math.round(input.modifier ?? 0);
-    // Perks com check_bonus que valem para este atributo/perícia (sem filtro = vale para todo teste).
-    const perks = this.perksOf(c).filter((p) =>
+    // Perks e condições com check_bonus que valem para este atributo/perícia (sem filtro = vale para todo teste).
+    const perks = [...this.perksOf(c), ...this.conditionsOf(c)].filter((p) =>
       p.grants.some((g) => g.kind === 'check_bonus' && (!g.attribute || g.attribute === attrId) && (!g.skill || g.skill === skill)),
     );
     const perkBonus = perks
       .flatMap((p) => p.grants)
       .reduce((sum, g) => (g.kind === 'check_bonus' && (!g.attribute || g.attribute === attrId) && (!g.skill || g.skill === skill) ? sum + g.bonus : sum), 0);
-    const total = rolls.reduce((a, b) => a + b, 0) + dice.bonus + (c.attributes[attrId] ?? 0) + skillValue + modifier + perkBonus;
+    // Agir contra quem não se enxerga bem custa caro, salvo ações que não dependem de ver.
+    const vision = this.state.ruleset.vision;
+    const sightPenalty =
+      !opponent || input.needs_sight === false ? 0 : opponent.sight === 'vulto' ? vision.dimPenalty : opponent.sight === 'nada' ? vision.blindPenalty : 0;
+    const total =
+      rolls.reduce((a, b) => a + b, 0) + dice.bonus + (c.attributes[attrId] ?? 0) + skillValue + modifier + perkBonus - sightPenalty;
     const margin = total - target;
     const success = margin >= 0;
     const degree = margin >= 4 ? 'sucesso pleno' : success ? 'sucesso' : margin <= -4 ? 'falha grave' : 'falha';
@@ -1138,6 +1306,7 @@ export class GameEngine {
       modifier,
       perk_bonus: perkBonus,
       perks: perks.map((p) => p.name),
+      sight_penalty: sightPenalty,
       dice: this.state.ruleset.dice,
       rolls,
       total,
@@ -1297,7 +1466,7 @@ export class GameEngine {
     return thread;
   }
 
-  advanceTime(input: { minutes?: number; to?: string; reason?: string }): { from: string; to: string } {
+  advanceTime(input: { minutes?: number; to?: string; reason?: string }) {
     const before: Clock = { ...this.state.clock };
     if ((input.minutes === undefined) === (input.to === undefined)) throw new EngineError('Informe minutes ou to (HH:MM), um dos dois.');
     if (input.to !== undefined) {
@@ -1320,7 +1489,22 @@ export class GameEngine {
       this.state.clock.minutes -= 1440;
       this.state.clock.day += 1;
     }
-    return { from: formatClock(before), to: formatClock(this.state.clock) };
+    return { from: formatClock(before), to: formatClock(this.state.clock), expired: this.expireConditions() };
+  }
+
+  /** Tira as condições cujo prazo passou e diz de quem. */
+  private expireConditions(): { character_id: string; character: string; condition: string }[] {
+    const now = clockMinutes(this.state.clock);
+    const out: { character_id: string; character: string; condition: string }[] = [];
+    for (const c of Object.values(this.state.characters)) {
+      const ended = c.conditions.filter((a) => a.until && clockMinutes(a.until) <= now);
+      if (!ended.length) continue;
+      c.conditions = c.conditions.filter((a) => !ended.includes(a));
+      for (const a of ended) {
+        out.push({ character_id: c.id, character: c.name, condition: this.state.ruleset.conditions.find((d) => d.id === a.id)?.name ?? a.id });
+      }
+    }
+    return out;
   }
 
   // ------------------------------------------------------------- descrições
@@ -1342,6 +1526,7 @@ export class GameEngine {
       skills: c.skills,
       resources: Object.fromEntries(rules.resources.map((r) => [r.id, `${c.resources[r.id] ?? r.max}/${r.max}`])),
       perks: this.perksOf(c).map((p) => ({ id: p.id, name: p.name, description: p.description })),
+      conditions: this.conditionLabels(c),
       thoughts: c.thoughts,
       location: c.locationId,
       position: c.pos,
@@ -1372,6 +1557,7 @@ export class GameEngine {
           name: l.name,
           description: l.description,
           size: `${l.width}×${l.height}`,
+          light: l.light,
           layout: l.tiles,
           fixtures: l.fixtures.map((f) => `${f.id} (${f.label}) em (${f.x},${f.y})${f.w > 1 || f.h > 1 ? ` ${f.w}×${f.h}` : ''}`),
           characters: this.charactersIn(l.id).map((c) => `${c.id} (${c.name}) em (${c.pos?.x},${c.pos?.y})`),

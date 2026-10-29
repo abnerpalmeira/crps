@@ -80,6 +80,8 @@ export interface LocationSpec {
   layout: string | string[];
   floor?: FloorStyle;
   outdoor?: boolean;
+  /** Luz ambiente de 0 (breu) a 1 (padrão). */
+  light?: number;
 }
 
 export type LayoutResult =
@@ -349,6 +351,7 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
       fixtures,
       floor: spec.floor ?? (spec.outdoor ? 'grass' : 'wood'),
       outdoor: spec.outdoor ?? false,
+      light: Math.round(Math.min(1, Math.max(0, spec.light ?? 1)) * 100) / 100,
     },
   };
 }

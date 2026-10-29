@@ -1,6 +1,7 @@
 import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { LEGEND } from './layout';
-import { perceptionOf } from './perception';
+import { lightAt, lightLabel, lightSources } from './light';
+import { perceptionOf, visionOf } from './perception';
 import { formatClock, truncate } from './text';
 import type { Character, DifficultyName, Location, PerkDef, Visibility } from './types';
 
@@ -33,10 +34,12 @@ export function describePerk(perk: PerkDef): string {
   const effects = perk.grants.map((g) => {
     if (g.kind === 'see_stat') return `vê ${g.stat} de todos`;
     if (g.kind === 'see_thoughts') return 'percebe o que os outros pensam';
+    if (g.kind === 'light') return `emite luz (raio ${g.radius})`;
     if (g.kind === 'sense') {
       const mult = g.multiplier !== undefined ? ` ×${g.multiplier}` : '';
       const bonus = g.bonus ? ` ${g.bonus > 0 ? '+' : ''}${g.bonus} tiles` : '';
-      return `sentido ${g.channel}${mult}${bonus}`;
+      const factor = g.factor === undefined ? '' : g.factor === 0 ? ' anulado' : ` fator ${g.factor}`;
+      return `sentido ${g.channel}${mult}${bonus}${factor}`;
     }
     const scope = [g.attribute && `de ${g.attribute}`, g.skill && `com ${g.skill}`].filter(Boolean).join(' ');
     return `${g.bonus > 0 ? '+' : ''}${g.bonus} em testes${scope ? ` ${scope}` : ''}`;
@@ -85,6 +88,7 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       `${rules.notes}`,
   );
   if (rules.perks.length) out.push(`Perks: ${rules.perks.map((perk) => `${perk.id} (${perk.name}: ${describePerk(perk)})`).join('; ')}.`);
+  if (rules.conditions.length) out.push(`Condições: ${rules.conditions.map((d) => `${d.id} (${describePerk(d)})`).join('; ')}.`);
 
   const loc = engine.currentLocation;
   const sceneIds = new Set<string>();
@@ -101,6 +105,13 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       `Legenda: ${used.map((d) => `'${d.char}' ${d.label}`).join(', ')}; '@' você; outros marcadores = personagens listados abaixo. ` +
         `x = coluna, y = linha. Ids de móveis começam com "${loc.id}/".`,
     );
+    const sources = lightSources(s, loc.id);
+    const lit = sources.map((src) => {
+      const carrier = src.carrierId ? s.characters[src.carrierId]?.name : null;
+      if (src.kind === 'character') return `${src.name} emite luz (raio ${src.radius})`;
+      return `${src.name} [${src.id}] ${carrier ? `com ${carrier}` : `em (${src.pos.x},${src.pos.y})`} (raio ${src.radius})`;
+    });
+    out.push(`Luz: ${lightLabel(loc.light)} (ambiente ${loc.light})${lit.length ? `; acesas: ${lit.join(', ')}` : ''}.`);
 
     const lines: string[] = [];
     const seatGroups = new Map<string, { free: string[]; total: number }>();
@@ -137,13 +148,20 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     const people = engine.charactersIn(loc.id).map((c) => {
       sceneIds.add(c.id);
       const mind = c.thoughts ? `; pensa${view.canSeeThoughts(c.id) ? ' (o jogador percebe)' : ''}: "${truncate(c.thoughts, 160)}"` : '';
+      const conditions = engine.conditionLabels(c);
+      const light = c.pos ? lightLabel(lightAt(s, loc.id, c.pos, sources)) : 'claro';
+      const sight = c.isPlayer || !s.playerId ? 'nitido' : view.sight(c.id);
+      const senses =
+        (conditions.length ? `; condições: ${conditions.join(', ')}` : '') +
+        (light !== 'claro' ? `; luz: ${light}` : '') +
+        (sight === 'vulto' ? '; o jogador vê só um vulto' : sight === 'nada' ? '; o jogador NÃO vê' : '');
       const where = c.seatId ? `sentado(a) em ${shortId(loc, c.seatId)}` : 'em pé';
       const res = resourceLine(engine, c, !c.isPlayer);
       const perks = engine.perksOf(c).map((perk) => perk.name);
       return (
         `- ${markers.get(c.id) ?? '?'} ${c.name} [${c.id}]${c.isPlayer ? ' (VOCÊ, jogador)' : ''}: ${c.role}; ${where} (${c.pos?.x},${c.pos?.y}), olhando ${c.facing}; ` +
         `${c.detail === 'sketch' ? 'esboço' : 'completo'}; traços: ${c.traits.join(', ') || '—'}${res ? `; ${res}` : ''}` +
-        `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${mind}`
+        `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${senses}${mind}`
       );
     });
     out.push(`\nPersonagens aqui:\n${people.join('\n') || '(ninguém)'}`);
@@ -168,6 +186,14 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     out.push(
       `Perks: ${perks.map((perk) => `${perk.name} (${describePerk(perk)})`).join('; ') || 'nenhum'}. ` +
         'O jogador só percebe os valores ocultos que os perks mostram e os pensamentos marcados com "(o jogador percebe)"; não revele os outros na narração.',
+    );
+    const { acuity, darkvision } = visionOf(s, p.id);
+    const sees = acuity <= 0 && darkvision <= 0 ? 'não enxerga nada' : acuity < 1 ? `turva (acuidade ${Math.round(acuity * 100) / 100})` : 'normal';
+    const here = p.locationId && p.pos ? lightLabel(lightAt(s, p.locationId, p.pos)) : null;
+    out.push(
+      `Visão: ${sees}${darkvision ? `, enxerga no escuro até ${darkvision} tiles` : ''}${here ? `; luz onde está: ${here}` : ''}. ` +
+        `Condições: ${engine.conditionLabels(p).join(', ') || 'nenhuma'}. ` +
+        'Narre só o que ele percebe: de quem ele vê como vulto, só a silhueta; de quem ele NÃO vê, nada visual (som, cheiro e toque valem).',
     );
   } else {
     out.push('\n(Ainda não há personagem do jogador.)');

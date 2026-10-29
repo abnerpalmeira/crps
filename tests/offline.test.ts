@@ -34,4 +34,18 @@ describe('OfflineProvider', () => {
     const readsMind = distanceBetween(engine.state, 'voce', 'haruto')! <= 3;
     expect(whisper.knownBy).toEqual(readsMind ? ['voce', 'haruto', 'mei'] : ['haruto', 'mei']);
   });
+
+  it('testa luz e visão sem modelo: apagar a luz, acender a lanterna e o experimento que cega', async () => {
+    const gm = new GameMaster({ provider: new OfflineProvider() });
+    const engine = GameEngine.create('demo', 3);
+    const events: GmEvent[] = [];
+    await gm.setup(engine, (e) => events.push(e));
+    await gm.play(engine, 'Apago a luz e pego a lanterna.', (e) => events.push(e));
+    expect(engine.state.locations.sala_2b.light).toBe(0.06);
+    expect(engine.state.items.lanterna).toMatchObject({ holder: { kind: 'character', id: 'voce' }, light: { on: true } });
+    await gm.play(engine, 'Faço o experimento de química.', (e) => events.push(e));
+    expect(engine.state.characters.voce.conditions.map((c) => c.id)).toEqual(['cego']);
+    expect(engine.state.log.at(-1)!.text).toContain('passos apressados');
+    expect(events.filter((e) => e.type === 'tool' && !e.ok)).toEqual([]);
+  }, 20_000);
 });

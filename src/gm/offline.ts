@@ -83,6 +83,13 @@ function setupSteps(): StepResult[] {
         call('create_items', {
           items: [
             { id: 'giz', name: 'Giz', description: 'um toco de giz branco, já gasto', holder: { character_id: 'voce' } },
+            {
+              id: 'lanterna',
+              name: 'Lanterna',
+              description: 'lanterna de emergência guardada na gaveta',
+              holder: { fixture_id: 'sala_2b/mesa-prof-1' },
+              light: { radius: 5, intensity: 0.9, on: false },
+            },
             { name: 'Caderno de chamada', description: 'capa azul, nomes em ordem alfabética', holder: { fixture_id: 'sala_2b/mesa-prof-1' } },
             { name: 'Apagador', description: 'apagador de feltro cheio de pó', holder: { fixture_id: 'sala_2b/quadro-1' } },
           ],
@@ -110,8 +117,20 @@ function setupSteps(): StepResult[] {
   ];
 }
 
-function turnSteps(action: string, playerId: string, boardId: string | null): StepResult[] {
+interface TurnContext {
+  playerId: string;
+  boardId: string | null;
+  locationId: string | null;
+  /** O que o resumo do motor diz do jogador agora. */
+  holdsLantern: boolean;
+  blind: boolean;
+  dark: boolean;
+}
+
+function turnSteps(action: string, ctx: TurnContext): StepResult[] {
+  const { playerId, boardId, locationId } = ctx;
   const quoted = /["“](.+?)["”]/.exec(action)?.[1];
+  const said = action.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
   const tools = [
     call('skill_check', { character_id: playerId, attribute: 'didatica', difficulty: 'normal', reason: action.slice(0, 60) }),
     call('advance_time', { minutes: 5, reason: 'o turno passou' }),
@@ -119,14 +138,40 @@ function turnSteps(action: string, playerId: string, boardId: string | null): St
     call('move_character', { character_id: 'haruto', to: { near: 'mei' } }),
   ];
   if (boardId && /quadro/i.test(action)) tools.push(call('update_fixture', { fixture_id: boardId, append_text: quoted ?? new Date().toLocaleDateString('pt-BR') }));
+  // Palavras-chave para testar luz e visão sem modelo.
+  const events: string[] = [];
+  let { blind, dark } = ctx;
+  if (locationId && /apag\w*.{0,6}luz|luz.{0,6}apag/.test(said)) {
+    tools.push(call('update_location', { location_id: locationId, light: 0.06, reason: 'as luzes foram apagadas' }));
+    events.push('O interruptor estala e a sala mergulha no escuro; só a fresta da porta deixa passar um fio de claridade.');
+    dark = true;
+  }
+  if (locationId && /acend\w*.{0,6}luz|luz.{0,6}acend/.test(said)) {
+    tools.push(call('update_location', { location_id: locationId, light: 1, reason: 'as luzes foram acesas' }));
+    events.push('As lâmpadas piscam e voltam; a turma aperta os olhos.');
+    dark = false;
+  }
+  if (/lanterna/.test(said)) {
+    if (!ctx.holdsLantern) tools.push(call('transfer_item', { item_id: 'lanterna', to: { character_id: playerId } }));
+    tools.push(call('update_item', { item_id: 'lanterna', light_on: true }));
+    events.push('Você tateia a gaveta da mesa, acha a lanterna de emergência e acende. Um círculo amarelado corta o escuro.');
+    dark = false;
+  }
+  if (/experiment|quimic|reagente|bequer/.test(said)) {
+    tools.push(call('update_character', { character_id: playerId, conditions_add: [{ id: 'cego', minutes: 15 }], resource_deltas: { vida: -1 } }));
+    events.push('O béquer chia, espirra, e uma névoa ardida sobe direto para o seu rosto. Seus olhos queimam e a sala some num borrão escuro.');
+    blind = true;
+  }
+  const seesRoom = !blind && !dark;
   return [
     { text: '', stop: 'tool_use', toolCalls: tools },
     {
       text: [
+        ...events,
         'O motor rolou os dados e o relógio andou cinco minutos.',
         `@${playerId}: ${quoted ?? 'Muito bem, turma. Vamos começar.'}`,
-        '@aiko: Sim, professor!',
-        'Haruto se levanta, vai até a carteira da Mei e se inclina para ela.',
+        blind ? '@aiko[grito]: Professor! Lava os olhos, rápido!' : '@aiko: Sim, professor!',
+        seesRoom ? 'Haruto se levanta, vai até a carteira da Mei e se inclina para ela.' : 'Uma cadeira arrasta; passos apressados vão até o fundo da sala.',
         '@haruto[cochicho>mei]: Ele tá de bom humor hoje.',
         '',
         '(Modo offline: sem o modelo, o mestre só registra a ação.)',
@@ -143,10 +188,18 @@ class OfflineSession implements ModelSession {
   constructor(opts: SessionOptions) {
     if (opts.userMessage.startsWith('Nova campanha')) this.steps = setupSteps();
     else {
-      const action = /Ação do jogador:\n"""\n([\s\S]*?)\n"""/.exec(opts.userMessage)?.[1] ?? '';
-      const player = /\[([a-z0-9_]+)\] \(VOCÊ, jogador\)/.exec(opts.userMessage)?.[1] ?? 'voce';
-      const board = /Ids de móveis começam com "([^"]+)\/"/.exec(opts.userMessage)?.[1];
-      this.steps = turnSteps(action, player, board && opts.userMessage.includes('quadro-1:') ? `${board}/quadro-1` : null);
+      const brief = opts.userMessage;
+      const action = /Ação do jogador:\n"""\n([\s\S]*?)\n"""/.exec(brief)?.[1] ?? '';
+      const player = /\[([a-z0-9_]+)\] \(VOCÊ, jogador\)/.exec(brief)?.[1] ?? 'voce';
+      const loc = /Ids de móveis começam com "([^"]+)\/"/.exec(brief)?.[1] ?? null;
+      this.steps = turnSteps(action, {
+        playerId: player,
+        boardId: loc && brief.includes('quadro-1:') ? `${loc}/quadro-1` : null,
+        locationId: loc,
+        holdsLantern: /Inventário: [^\n]*\[lanterna\]/.test(brief),
+        blind: brief.includes('Visão: não enxerga nada'),
+        dark: /luz onde está: escuro/.test(brief),
+      });
     }
   }
 

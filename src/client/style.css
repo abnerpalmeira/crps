@@ -63,6 +63,17 @@ button {
 #stage-canvas canvas {
   display: block;
   cursor: grab;
+  transition: filter 0.8s ease;
+}
+
+/* Visão do jogador falhando: as bordas fecham e o centro ainda deixa ver alguma coisa. */
+.vision-veil {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(ellipse at 50% 50%, rgb(0 0 0 / 0.2) 0%, rgb(0 0 0 / 0.7) 55%, rgb(0 0 0 / 0.95) 100%);
+  transition: opacity 0.8s ease;
 }
 
 .labels {
@@ -78,6 +89,11 @@ button {
   color: #e6e2da;
   font-size: 11px;
   white-space: nowrap;
+}
+
+.name.vulto {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .name.player {
@@ -130,6 +146,15 @@ button {
 #hud-clock {
   color: var(--muted);
   font-size: 12px;
+}
+
+#hud-sense {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+#hud-sense:empty {
+  display: none;
 }
 
 #stage-empty {

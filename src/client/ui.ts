@@ -1,4 +1,6 @@
+import { lightAt, lightLabel, lightSources } from '../engine/light';
 import { perceptionOf } from '../engine/perception';
+import { hhmm } from '../engine/text';
 import { formatClock } from '../engine/text';
 import type { Character, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
@@ -315,6 +317,7 @@ export class Ui {
     const loc = player?.locationId ? world.locations[player.locationId] : Object.values(world.locations).at(-1);
     $('#hud-location').textContent = loc?.name ?? 'Montando o mundo…';
     $('#hud-clock').textContent = `${formatClock(world.clock)} · turno ${world.turn}`;
+    $('#hud-sense').textContent = senseText(world);
     $('#stage-empty').hidden = Boolean(loc);
     this.renderSheet(world, player);
     this.renderJournal(world, player);
@@ -325,6 +328,7 @@ export class Ui {
     this.world = null;
     $('#hud-location').textContent = 'CRPS';
     $('#hud-clock').textContent = '';
+    $('#hud-sense').textContent = '';
     $('#stage-empty').hidden = false;
     $('#tab-sheet').replaceChildren(el('p', 'muted', 'Seu personagem aparece aqui assim que o mundo estiver pronto.'));
     $('#tab-journal').replaceChildren();
@@ -339,6 +343,18 @@ export class Ui {
     if (pick.kind === 'character') {
       const c = world.characters[pick.id];
       if (!c) return this.closeInspector();
+      const sight = c.isPlayer ? 'nitido' : perceptionOf(world, world.playerId).sight(c.id);
+      if (sight !== 'nitido') {
+        body.append(
+          el('h3', '', sight === 'vulto' ? 'Um vulto' : 'Alguém?'),
+          el('p', 'muted', sight === 'vulto' ? 'Está escuro demais para ver quem é.' : 'Você não enxerga quem está aí.'),
+        );
+        const box = el('div', 'backstage-only');
+        box.append(el('p', 'hint', `Na verdade (bastidores): ${c.name}, ${c.role}`));
+        body.append(box);
+        actions.push(['Ir até lá', 'Vou, com cuidado, na direção do vulto.']);
+        return this.openInspector(body, actions);
+      }
       body.append(el('h3', '', c.name), el('p', 'muted', c.role), el('p', '', c.appearance));
       if (c.traits.length) body.append(this.traits(c.traits));
       if (c.detail === 'full') {
@@ -383,8 +399,13 @@ export class Ui {
       const item = world.items[pick.id];
       if (!item) return this.closeInspector();
       body.append(el('h3', '', item.name), el('p', '', item.description));
+      if (item.light) body.append(el('p', 'muted', item.light.on ? 'Acesa.' : 'Apagada.'));
       actions.push([`Pegar ${item.name}`, `Pego ${item.name.toLowerCase()}.`]);
     }
+    this.openInspector(body, actions);
+  }
+
+  private openInspector(body: HTMLElement, actions: [string, string][]): void {
     if (actions.length) {
       const row = el('div', 'actions');
       for (const [label, text] of actions) {
@@ -464,6 +485,16 @@ export class Ui {
         parts.push(row);
       }
     }
+    if (player.conditions.length) {
+      parts.push(el('h3', '', 'Condições'));
+      for (const active of player.conditions) {
+        const def = rules.conditions.find((d) => d.id === active.id);
+        const row = el('div', 'item condition');
+        const until = active.until ? ` · até ${active.until.day === world.clock.day ? hhmm(active.until.minutes) : formatClock(active.until)}` : '';
+        row.append(el('strong', '', def?.name ?? active.id), el('span', 'muted', `${def?.description ?? ''}${until}`));
+        parts.push(row);
+      }
+    }
     const skills = Object.entries(player.skills);
     if (skills.length) {
       parts.push(el('h3', '', 'Perícias'));
@@ -488,7 +519,8 @@ export class Ui {
     if (!items.length) parts.push(el('p', 'muted', 'Vazio.'));
     for (const i of items) {
       const row = el('div', 'item');
-      row.append(el('strong', '', `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}`), el('span', 'muted', i.description));
+      const lit = i.light ? (i.light.on ? ' · acesa' : ' · apagada') : '';
+      row.append(el('strong', '', `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}`), el('span', 'muted', `${i.description}${lit}`));
       parts.push(row);
     }
     sheet.replaceChildren(...parts);
@@ -520,4 +552,15 @@ export class Ui {
     }
     journal.replaceChildren(...parts);
   }
+}
+
+/** O que o HUD diz dos sentidos do jogador: condições, a luz onde ele está e se carrega uma luz. */
+function senseText(world: WorldState): string {
+  const p = world.playerId ? world.characters[world.playerId] : null;
+  if (!p?.locationId || !p.pos) return '';
+  const parts = perceptionOf(world, p.id).conditions.map((d) => d.name);
+  const light = lightLabel(lightAt(world, p.locationId, p.pos));
+  if (light !== 'claro') parts.push(light === 'escuro' ? '🌑 escuro' : '🌗 penumbra');
+  if (lightSources(world, p.locationId).some((s) => s.carrierId === p.id)) parts.push('🔦 luz acesa');
+  return parts.join(' · ');
 }

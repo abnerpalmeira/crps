@@ -33,16 +33,26 @@ export interface ResourceDef {
   core?: boolean;
 }
 
+/** Luz emitida por um item aceso ou por um poder: alcance em tiles e força de 0 a 1. */
+export interface LightSpec {
+  radius: number;
+  intensity: number;
+  /** Cor para o 3D, ex. "#ffd9a0" (padrão: amarelada). */
+  color?: string;
+}
+
 /**
- * Efeito mecânico de um perk, aplicado pelo motor. `sense` mexe num canal sensorial qualquer
- * (som, labios, mente ou um canal novo criado pelo mestre): multiplier substitui o multiplicador
- * base do canal, bonus soma tiles de alcance.
+ * Efeito mecânico de um perk ou de uma condição, aplicado pelo motor. `sense` mexe num canal
+ * sensorial qualquer (som, labios, mente, visao ou um canal novo criado pelo mestre): multiplier
+ * substitui o multiplicador base do canal, bonus soma tiles de alcance e factor multiplica o
+ * resultado (0 = perdeu o sentido). `light` faz o dono emitir luz.
  */
 export type PerkGrant =
   | { kind: 'see_stat'; stat: string }
   | { kind: 'see_thoughts' }
   | { kind: 'check_bonus'; bonus: number; attribute?: string; skill?: string }
-  | { kind: 'sense'; channel: string; multiplier?: number; bonus?: number };
+  | { kind: 'sense'; channel: string; multiplier?: number; bonus?: number; factor?: number }
+  | ({ kind: 'light' } & LightSpec);
 
 /** Um jeito de falar: até onde o alvo pode estar e até onde cada canal leva o conteúdo. */
 export interface SpeechMode {
@@ -63,16 +73,33 @@ export interface PerkDef {
 
 export type DifficultyName = 'facil' | 'normal' | 'dificil' | 'muito_dificil';
 
+/** Quanto se enxerga: clareza = luz no alvo × acuidade, caindo com a distância. */
+export interface VisionRules {
+  /** Clareza mínima para ver nítido. */
+  clear: number;
+  /** Clareza mínima para ver um vulto. */
+  dim: number;
+  /** Penalidade em testes com alvo que o personagem só vê como vulto. */
+  dimPenalty: number;
+  /** Penalidade em testes com alvo que o personagem não vê. */
+  blindPenalty: number;
+}
+
 /** Regras da campanha como dados: o modelo define (e estende), o motor valida e aplica. */
 export interface Ruleset {
   name: string;
   attributes: AttributeDef[];
   resources: ResourceDef[];
   perks: PerkDef[];
+  /** Condições (cego, visão turva, ofuscado…): têm os mesmos efeitos de um perk, mas vêm e vão. */
+  conditions: PerkDef[];
   /** Modos de fala (fala, cochicho, grito e os que o mestre criar). */
   speech: Record<string, SpeechMode>;
-  /** Multiplicador base de cada canal sensorial para todo personagem (som 1; mente e labios 0). */
+  /** Multiplicador base de cada canal sensorial para todo personagem (som e visao 1; mente e labios 0). */
   senses: Record<string, number>;
+  /** Canais que só funcionam vendo quem emite (ler lábios, língua de sinais). */
+  sightChannels: string[];
+  vision: VisionRules;
   /** Alcance (tiles) de ações com alvo: toque, corpo_a_corpo, arremesso… */
   reaches: Record<string, number>;
   /** Teste = dados + atributo + perícia + modificador >= dificuldade. */
@@ -96,6 +123,8 @@ export interface Character {
   resources: Record<string, number>;
   /** Ids de perks do ruleset. */
   perks: string[];
+  /** Condições ativas: id em ruleset.conditions e quando acabam (null = até alguém tirar). */
+  conditions: { id: string; until: Clock | null }[];
   /** O que o personagem pensa ou quer agora; só o mestre vê, ou quem tem see_thoughts. */
   thoughts: string | null;
   detail: DetailLevel;
@@ -120,6 +149,8 @@ export interface Item {
   tags: string[];
   quantity: number;
   holder: ItemHolder;
+  /** Itens que iluminam (lanterna, vela, tocha), acesos ou não. */
+  light?: LightSpec & { on: boolean };
 }
 
 export type FixtureKind =
@@ -167,6 +198,8 @@ export interface Location {
   fixtures: Fixture[];
   floor: FloorStyle;
   outdoor: boolean;
+  /** Luz ambiente, de 0 (breu) a 1 (dia claro ou luzes acesas). */
+  light: number;
 }
 
 export interface Fact {
@@ -206,11 +239,20 @@ export interface SceneFrame {
   clock: Clock;
   characters: Record<
     string,
-    { locationId: string | null; pos: Pos | null; seatId: string | null; facing: Dir; resources?: Record<string, number> }
+    {
+      locationId: string | null;
+      pos: Pos | null;
+      seatId: string | null;
+      facing: Dir;
+      resources?: Record<string, number>;
+      conditions?: Character['conditions'];
+    }
   >;
   items: Record<string, ItemHolder>;
   /** Só os móveis com texto ou estado. */
   fixtures: Record<string, { text: string; state: string }>;
+  /** Luz ambiente de cada local e quais itens estavam acesos. */
+  light?: { locations: Record<string, number>; items: Record<string, boolean> };
 }
 
 export interface WorldState {
