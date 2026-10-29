@@ -172,6 +172,24 @@ Princípios que o motor impõe:
 | `share_knowledge` | Quem ficou sabendo de um fato (só quem sabe pode contar) |
 | `advance_time` | Relógio |
 
+### Ação marcada
+
+O jogador pode marcar partes da ação com convenções de livro e de chat, ou com os botões acima
+da caixa de texto (💬 Falar, 🤫 Sussurrar, 💭 Pensar, ✋ Agir). Enquanto digita, uma prévia mostra
+como o mestre vai entender cada parte.
+
+| Escreva | Vira | O que o motor faz |
+|---|---|---|
+| `"Bom dia, turma."` ou `— Bom dia, turma.` | fala | entra na narração como fala dele, com as palavras dele |
+| `@Mei "me encontra no intervalo"` | sussurro | só a Mei ouve (alcance do cochicho; se ela está longe, o mestre leva o personagem até ela) |
+| `(será que ela sabe?)` | pensamento | vira o pensamento atual do personagem; só quem percebe mentes fica sabendo |
+| `*abro a janela*` | ação | o que ele tenta fazer |
+
+Texto sem marca continua valendo como ação ou intenção. O botão de sussurro lista quem está no
+local, do mais perto ao mais longe, e o inspetor de um personagem tem "Sussurrar para…". O mestre
+recebe a ação como o jogador escreveu e, logo abaixo, as partes separadas; o verificador aponta
+NPC que reage a um pensamento que não poderia perceber.
+
 ### Replay com balões de fala
 
 Cada turno é um frame. O mestre escreve cada fala numa linha própria, `@id: fala`

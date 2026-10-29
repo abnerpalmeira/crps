@@ -121,6 +121,8 @@ interface TurnContext {
   playerId: string;
   boardId: string | null;
   locationId: string | null;
+  /** "Como o jogador marcou", do resumo: falas e sussurro viram falas do roteiro. */
+  marked: string;
   /** O que o resumo do motor diz do jogador agora. */
   holdsLantern: boolean;
   blind: boolean;
@@ -168,13 +170,19 @@ function turnSteps(action: string, ctx: TurnContext): StepResult[] {
     blind = true;
   }
   const seesRoom = !blind && !dark;
+  // Sussurro marcado: o professor vai até a pessoa antes, e só ela ouve.
+  const says = [...ctx.marked.matchAll(/^- fala \(em voz alta\): "(.*)"$/gm)].map((m) => m[1]);
+  const whisper = /^- sussurro para (.+?) \[([a-z0-9_]+)\]: "(.*)"$/m.exec(ctx.marked);
+  if (whisper) tools.push(call('move_character', { character_id: playerId, to: { near: whisper[2] } }));
+  const playerLines = says.length ? says.map((s) => `@${playerId}: ${s}`) : whisper ? [] : [`@${playerId}: ${quoted ?? 'Muito bem, turma. Vamos começar.'}`];
+  if (whisper) playerLines.push(`Você vai até ${whisper[1].split(' ')[0]} e se inclina.`, `@${playerId}[cochicho>${whisper[2]}]: ${whisper[3]}`);
   return [
     { text: '', stop: 'tool_use', toolCalls: tools },
     {
       text: [
         ...events,
         'O motor rolou os dados e o relógio andou cinco minutos.',
-        `@${playerId}: ${quoted ?? 'Muito bem, turma. Vamos começar.'}`,
+        ...playerLines,
         blind ? '@aiko[grito]: Professor! Lava os olhos, rápido!' : '@aiko: Sim, professor!',
         seesRoom ? 'Haruto se levanta, vai até a carteira da Mei e se inclina para ela.' : 'Uma cadeira arrasta; passos apressados vão até o fundo da sala.',
         '@haruto[cochicho>mei]: Ele tá de bom humor hoje.',
@@ -201,6 +209,7 @@ class OfflineSession implements ModelSession {
         playerId: player,
         boardId: loc && brief.includes('quadro-1:') ? `${loc}/quadro-1` : null,
         locationId: loc,
+        marked: /Como o jogador marcou:\n([\s\S]*)$/.exec(brief)?.[1] ?? '',
         holdsLantern: /Inventário: [^\n]*\[lanterna\]/.test(brief),
         blind: brief.includes('Visão: não enxerga nada'),
         dark: /luz onde está: escuro/.test(brief),

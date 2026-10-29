@@ -1,5 +1,6 @@
 import { compileBrief } from '../engine/brief';
 import type { GameEngine } from '../engine/engine';
+import { describeInput, hasMarks, parsePlayerInput } from '../engine/input';
 import { analyzeSpeech, playerNarration, type SpeechLine } from '../engine/speech';
 import { runTool, toolSpecs, type ToolResult } from '../engine/tools';
 import type { WorldState } from '../engine/types';
@@ -62,9 +63,18 @@ export class GameMaster {
   async play(engine: GameEngine, input: string, emit: Emit): Promise<void> {
     await this.atomically(engine, emit, async () => {
       engine.beginTurn();
+      // O que o jogador pensa neste turno vira estado: só quem percebe mentes fica sabendo.
+      const segments = parsePlayerInput(input);
+      const player = engine.player;
+      if (player) {
+        const thought = segments.filter((s) => s.kind === 'pensamento').map((s) => s.text).join(' ');
+        engine.updateCharacter({ character_id: player.id, thoughts: thought });
+      }
+      const marked = hasMarks(segments) ? describeInput(engine.state, segments) : [];
       const brief = compileBrief(engine);
       engine.log('player', input);
-      await this.runTurn(engine, turnMessage(brief, input), this.opts.effortTurn ?? 'low', input, emit);
+      const verified = marked.length ? `${input}\n\nComo o jogador marcou:\n${marked.join('\n')}` : input;
+      await this.runTurn(engine, turnMessage(brief, input, marked), this.opts.effortTurn ?? 'low', verified, emit);
     });
   }
 

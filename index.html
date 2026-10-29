@@ -54,7 +54,19 @@
           <section id="tab-journal" class="tab" hidden></section>
         </div>
         <form id="composer">
-          <textarea id="input" rows="2" placeholder="O que você faz? (Enter envia, Shift+Enter quebra a linha)"></textarea>
+          <div class="tag-bar" role="toolbar" aria-label="Marcar a ação">
+            <button type="button" data-tag="fala" title='Falar: texto entre "aspas"'>💬 Falar</button>
+            <button type="button" data-tag="sussurro" title='Sussurrar: @Nome "texto"'>🤫 Sussurrar</button>
+            <button type="button" data-tag="pensamento" title="Pensar: texto entre (parênteses); ninguém ouve">💭 Pensar</button>
+            <button type="button" data-tag="acao" title="Agir: texto entre *asteriscos*">✋ Agir</button>
+          </div>
+          <div id="whisper-menu" class="whisper-menu" role="menu" hidden></div>
+          <textarea
+            id="input"
+            rows="2"
+            placeholder='O que você faz? "Aspas" para falar, *asteriscos* para agir, (parênteses) para pensar, @Nome "…" para sussurrar'
+          ></textarea>
+          <div id="input-preview" class="input-preview" aria-live="polite"></div>
           <div class="composer-row">
             <label class="toggle"><input id="backstage" type="checkbox" /> bastidores</label>
             <span class="typing">o mestre está narrando<span>.</span><span>.</span><span>.</span></span>

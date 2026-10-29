@@ -15,6 +15,14 @@ Você não guarda estado de cabeça. Se algo concreto não está no resumo, cons
 # Autoridade do jogador
 O jogador decide as intenções, falas e atitudes do personagem dele, não os resultados nem o que existe no mundo. O inventário dele é tudo o que ele tem: se ele tirar do bolso algo que não está lá, a coisa não aparece e a ação falha; narre a tentativa. O motor recusa criar itens direto com o jogador no meio do jogo: o que existe no mundo é criado onde está e chega até ele com transfer_item. Só um perk de conjurar (kind "conjure", como o de um mágico ou um bolso sem fundo) tira coisas do nada. Se tentar algo difícil, há teste. Seja justo e deixe as consequências acontecerem, boas ou ruins.
 
+# Ação marcada
+O jogador pode marcar partes da ação, e o motor separa em "Como o jogador marcou":
+- fala: dita em voz alta; entra na narração como fala dele (@id: ...), com as palavras dele;
+- sussurro: só para a pessoa marcada (@id[cochicho>alvo]: ...); se ela estiver longe, aproxime o jogador antes com move_character;
+- pensamento: fica só na cabeça dele; ninguém reage, salvo quem percebe mentes (a ficha do jogador diz quem);
+- ação: o que ele tenta fazer.
+Texto sem marca é ação ou intenção, como sempre.
+
 # Memória
 - NPCs nascem como esboço: nome, papel, aparência e um ou dois traços. Quando um NPC ganhar importância (uma conversa de verdade, um conflito), aprofunde com update_character (personalidade, história, objetivos) antes de revelar esses detalhes. Depois de registrado, mantenha consistente.
 - Registre com add_fact, no momento em que acontece, o que a história vai precisar lembrar: segredos, promessas, relações que mudam, opiniões, quem viu o quê.
@@ -71,14 +79,14 @@ Monte o mundo inicial com as tools, nesta ordem:
 Depois narre a cena de abertura, situando o jogador.`;
 }
 
-export function turnMessage(brief: string, input: string): string {
+export function turnMessage(brief: string, input: string, marked: string[] = []): string {
   return `${brief}
 
 ---
 Ação do jogador:
 """
 ${input}
-"""`;
+"""${marked.length ? `\nComo o jogador marcou:\n${marked.join('\n')}` : ''}`;
 }
 
 export function verifierPrompt(args: { state: string; changes: string[]; input: string; narration: string }): string {
@@ -87,6 +95,7 @@ export function verifierPrompt(args: { state: string; changes: string[]; input: 
 - um personagem se desloca de forma relevante (troca de lugar, vai até alguém ou algo, sai da sala) sem mudança de posição;
 - surge com nome próprio um personagem que não existe no estado;
 - item do nada: a ação do jogador usa um objeto que não está no inventário dele nem ao alcance, e a narração deixa a ação funcionar como se ele tivesse o objeto;
+- pensamento ouvido: um NPC reage a um pensamento do jogador sem perceber mentes (veja na ficha do jogador quem percebe), ou a narração trata um pensamento como algo dito; ou as palavras que ele marcou como fala ou sussurro mudam de sentido na narração;
 - um teste é narrado com resultado oposto ao que o motor decidiu;
 - algo é escrito no quadro, ou o horário muda bastante, sem mudança correspondente;
 - vazamento de conhecimento: um personagem fala ou age com base num fato registrado que ele NÃO sabe (veja a seção Conhecimento do estado), sem ter acabado de descobri-lo nesta cena;

@@ -1,12 +1,13 @@
 import { lightAt, lightLabel, lightSources } from '../engine/light';
 import { perceptionOf } from '../engine/perception';
-import { formatClock, hhmm } from '../engine/text';
+import { findByName, hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
+import { chebyshev, formatClock, hhmm } from '../engine/text';
 import type { Character, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 import type { CostEvent } from '../gm/pricing';
 import type { Usage } from '../gm/provider';
 import type { ModelOption } from './api';
-import { escapeHtml, formatNarration, inline, type Speaker } from './format';
+import { INPUT_ICON, escapeHtml, formatNarration, formatPlayerInput, inline, type Speaker } from './format';
 import type { PlaybackState } from './playback';
 import { hash } from './props';
 import type { Pick } from './scene';
@@ -63,7 +64,11 @@ export class TurnView {
     input: string | null,
     private readonly ctx: TurnContext,
   ) {
-    if (input) this.root.append(el('div', 'player-line', input));
+    if (input) {
+      const line = el('div', 'player-line');
+      line.innerHTML = formatPlayerInput(input);
+      this.root.append(line);
+    }
     this.root.append(this.chips, this.status, this.narration);
     log.append(this.root);
     this.scroll();
@@ -200,11 +205,18 @@ export class Ui {
     });
     $('#cancel').addEventListener('click', () => this.dialog.close());
     $('#model').addEventListener('click', () => this.toggleModelMenu());
+    for (const button of document.querySelectorAll<HTMLButtonElement>('[data-tag]')) {
+      button.addEventListener('click', () => this.tag(button.dataset.tag as InputSegment['kind']));
+    }
+    this.input.addEventListener('input', () => this.renderPreview());
     document.addEventListener('click', (e) => {
       if (!$('.brand').contains(e.target as Node)) this.closeModelMenu();
+      if (!(e.target as Element).closest?.('#whisper-menu, [data-tag="sussurro"]')) $('#whisper-menu').hidden = true;
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') this.closeModelMenu();
+      if (e.key !== 'Escape') return;
+      this.closeModelMenu();
+      $('#whisper-menu').hidden = true;
     });
   }
 
@@ -267,6 +279,82 @@ export class Ui {
     this.input.focus();
     this.input.setSelectionRange(text.length, text.length);
     this.showTab('log');
+    this.renderPreview();
+  }
+
+  /** Botões de marca: envolvem o trecho selecionado (ou o cursor) e deixam o cursor dentro. */
+  private tag(kind: InputSegment['kind']): void {
+    if (kind === 'sussurro') return this.toggleWhisperMenu();
+    const [open, close] = kind === 'fala' ? ['"', '"'] : kind === 'pensamento' ? ['(', ')'] : ['*', '*'];
+    this.wrap(open, close);
+  }
+
+  private wrap(open: string, close: string): void {
+    const input = this.input;
+    const { selectionStart: a, selectionEnd: b, value } = input;
+    const selected = value.slice(a, b);
+    const before = value.slice(0, a);
+    const spacer = before && !/\s$/.test(before) ? ' ' : '';
+    input.value = `${before}${spacer}${open}${selected}${close}${value.slice(b)}`;
+    const caret = a + spacer.length + open.length + selected.length + (selected ? close.length : 0);
+    input.focus();
+    input.setSelectionRange(caret, caret);
+    this.renderPreview();
+  }
+
+  /** Quem está no mesmo local, do mais perto ao mais longe, para escolher a quem sussurrar. */
+  private toggleWhisperMenu(): void {
+    const menu = $('#whisper-menu');
+    if (!menu.hidden) return void (menu.hidden = true);
+    const world = this.world;
+    const player = world?.playerId ? world.characters[world.playerId] : null;
+    if (!world || !player?.pos) return;
+    const reach = world.ruleset.speech.cochicho?.reach ?? 2;
+    const people = Object.values(world.characters)
+      .filter((c) => !c.isPlayer && c.pos && c.locationId === player.locationId)
+      .map((c) => ({ c, d: chebyshev(player.pos!, c.pos!) }))
+      .sort((x, y) => x.d - y.d);
+    const first = (c: Character) => c.name.split(' ')[0];
+    const items = people.map(({ c, d }) => {
+      const b = el('button', 'whisper-option');
+      b.type = 'button';
+      // Primeiro nome, ou o id se outro presente tiver o mesmo primeiro nome.
+      const ref = people.filter((p) => first(p.c) === first(c)).length > 1 ? c.id : first(c);
+      b.append(el('strong', '', c.name), el('span', 'muted', d <= reach ? 'ao seu lado' : `a ${d} passos; o mestre leva você até lá`));
+      b.addEventListener('click', () => {
+        menu.hidden = true;
+        this.wrap(`@${ref} "`, '"');
+      });
+      return b;
+    });
+    menu.replaceChildren(el('p', 'hint', 'Sussurrar para…'), ...(items.length ? items : [el('p', 'muted', 'Não há ninguém aqui.')]));
+    menu.hidden = false;
+  }
+
+  /** Prévia de como o mestre vai entender a ação: uma etiqueta por parte marcada. */
+  private renderPreview(): void {
+    const preview = $('#input-preview');
+    const segments = parsePlayerInput(this.input.value);
+    if (!hasMarks(segments)) return void preview.replaceChildren();
+    const world = this.world;
+    const player = world?.playerId ? world.characters[world.playerId] : null;
+    preview.replaceChildren(
+      ...segments.map((s) => {
+        const chip = el('span', `in-chip ${s.kind}`);
+        let text = s.text;
+        if (s.kind === 'sussurro') {
+          const target = world ? findByName(world, s.target ?? '') : null;
+          const reach = world?.ruleset.speech.cochicho?.reach ?? 2;
+          const d = target?.pos && player?.pos && target.locationId === player.locationId ? chebyshev(target.pos, player.pos) : null;
+          text = `${target ? target.name.split(' ')[0] : `${s.target}?`}: ${s.text}`;
+          if (!target) chip.classList.add('warn');
+          chip.title = !target ? 'Ninguém com esse nome aqui.' : d !== null && d > reach ? `${target.name} está a ${d} passos: o mestre leva você até lá.` : '';
+        }
+        if (s.kind === 'pensamento') chip.title = 'Só você ouve, a não ser quem lê mentes.';
+        chip.textContent = `${INPUT_ICON[s.kind]} ${text.length > 60 ? `${text.slice(0, 59)}…` : text}`;
+        return chip;
+      }),
+    );
   }
 
   beginTurn(input: string | null): TurnView {
@@ -427,7 +515,7 @@ export class Ui {
       }
       if (!c.isPlayer) {
         const first = c.name.split(' ')[0];
-        actions.push([`Falar com ${first}`, `Digo a ${first}: "`], [`Ir até ${first}`, `Vou até ${first}.`]);
+        actions.push([`Falar com ${first}`, `Digo a ${first}: "`], [`Sussurrar para ${first}`, `@${first} "`], [`Ir até ${first}`, `Vou até ${first}.`]);
       }
     } else if (pick.kind === 'fixture') {
       const f = Object.values(world.locations).flatMap((l) => l.fixtures).find((fx) => fx.id === pick.id);
@@ -483,6 +571,7 @@ export class Ui {
     const text = this.input.value.trim();
     if (!text || this.busy) return;
     this.input.value = '';
+    this.renderPreview();
     this.onSend(text);
   }
 

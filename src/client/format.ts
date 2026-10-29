@@ -1,4 +1,5 @@
 import { parseSpeechLine, type ParsedSpeech } from '../engine/frames';
+import { hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
 
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -45,4 +46,21 @@ export function formatNarration(text: string, speaker: (id: string) => Speaker |
   }
   flush();
   return html.join('');
+}
+
+export const INPUT_ICON: Record<InputSegment['kind'], string> = { fala: '💬', sussurro: '🤫', pensamento: '💭', acao: '✋' };
+
+/** A ação do jogador com as marcas destacadas; sem marcas, o texto como ele escreveu. */
+export function formatPlayerInput(text: string): string {
+  const segments = parsePlayerInput(text);
+  if (!hasMarks(segments)) return escapeHtml(text);
+  return segments
+    .map((s) => {
+      const t = escapeHtml(s.text);
+      if (s.kind === 'fala') return `<span class="in-say">“${t}”</span>`;
+      if (s.kind === 'sussurro') return `<span class="in-whisper">🤫 ${escapeHtml(s.target ?? '')}: “${t}”</span>`;
+      if (s.kind === 'pensamento') return `<span class="in-think">💭 ${t}</span>`;
+      return `<span class="in-act">${t}</span>`;
+    })
+    .join(' ');
 }

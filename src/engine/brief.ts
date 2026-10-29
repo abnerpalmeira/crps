@@ -1,7 +1,7 @@
 import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { LEGEND } from './layout';
 import { lightAt, lightLabel, lightSources } from './light';
-import { perceptionOf, visionOf } from './perception';
+import { perceives, perceptionOf, visionOf } from './perception';
 import { formatClock, truncate } from './text';
 import type { Character, DifficultyName, Location, PerkDef, Visibility } from './types';
 
@@ -194,6 +194,13 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       `Perks: ${perks.map((perk) => `${perk.name} (${describePerk(perk)})`).join('; ') || 'nenhum'}. ` +
         'O jogador só percebe os valores ocultos que os perks mostram e os pensamentos marcados com "(o jogador percebe)"; não revele os outros na narração.',
     );
+    if (p.thoughts && p.locationId) {
+      const minds = engine.charactersIn(p.locationId).filter((c) => !c.isPlayer && perceives(s, c.id, p.id, 'mente', 0));
+      out.push(
+        `Pensamento dele agora: "${truncate(p.thoughts, 200)}". ` +
+          (minds.length ? `Percebem: ${minds.map((c) => c.name).join(', ')}.` : 'Ninguém percebe; nenhum NPC reage a isso.'),
+      );
+    }
     const { acuity, darkvision } = visionOf(s, p.id);
     const sees = acuity <= 0 && darkvision <= 0 ? 'não enxerga nada' : acuity < 1 ? `turva (acuidade ${Math.round(acuity * 100) / 100})` : 'normal';
     const here = p.locationId && p.pos ? lightLabel(lightAt(s, p.locationId, p.pos)) : null;
