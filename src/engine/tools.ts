@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { modelCatalog } from './catalog';
 import { EngineError, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { legendSummary } from './layout';
 import { librarySummary } from './objects';
@@ -133,7 +134,9 @@ const holder = z
 
 const figure = z.enum(['adulto', 'adulta', 'menino', 'menina']).describe('Corpo no 3D: adulto, adulta, menino ou menina (crianças e adolescentes).');
 
-const look = z.string().describe('Id do visual no 3D (lista em "Visual dos personagens"); a aparência descreve esse visual.');
+const look = z
+  .string()
+  .describe('Visual no 3D: id da lista em "Visual dos personagens" ou de um personagem do catálogo (search_models); a aparência descreve esse visual.');
 
 const characterInput = z.object({
   id: z.string().optional().describe('Slug curto e estável, ex. "yuki". Se omitido, vem do primeiro nome.'),
@@ -189,7 +192,10 @@ const objectTypeInput = z.object({
   facing: facingRule
     .optional()
     .describe('interior (na parede, de frente para a sala), open_side (de frente para o lado livre), table (para a mesa vizinha), lengthwise (no comprimento: cama, carro).'),
+  model: z.string().optional().describe('Modelo do catálogo 3D para o visual: o id que search_models devolve.'),
 });
+
+const MODEL_CATEGORIES = ['objeto', 'construcao', 'ambiente', 'veiculo', 'arma', 'acessorio', 'efeito', 'personagem', 'animal', 'outro'] as const;
 
 const exitInput = z.object({
   fixture: z.string().describe('Id ou slug da porta, elevador ou escada, ex. "porta-1".'),
@@ -296,6 +302,31 @@ export const TOOLS = [
   }),
 
   tool({
+    name: 'search_models',
+    description:
+      'Busca no catálogo de modelos 3D pela descrição: dezenas de milhares de modelos descritos em português (móveis, construções, ' +
+      'natureza, veículos, armas, personagens, animais). Use para dar a um tipo novo da legenda o visual certo (model) e para escolher o ' +
+      'visual (look) de um personagem que não está na lista de visuais. Escreva primeiro o que procura e depois o detalhe: ' +
+      '"sofá de couro marrom", "policial de quepe".',
+    schema: z.object({
+      query: z.string(),
+      category: z.enum(MODEL_CATEGORIES).optional(),
+      figure: z.enum(['adulto', 'adulta', 'menino', 'menina', 'criatura']).optional().describe('Só personagens deste corpo.'),
+      limit: z.number().int().min(1).max(20).optional().describe('Quantos devolver (padrão 8).'),
+    }),
+    mutates: false,
+    run(_engine, input) {
+      const catalog = modelCatalog();
+      if (!catalog) {
+        return { content: 'Catálogo de modelos indisponível: use os tipos da biblioteca e a lista de visuais.', summary: '🔍 Catálogo 3D indisponível' };
+      }
+      const found = catalog.search(input.query, input);
+      const lines = found.map((i) => `${i.id}: ${i.desc ?? ''}${i.look ? ` · ${i.figure}: ${i.look}` : ''} (${i.category})`);
+      return { content: lines.length ? lines : 'Nada parecido; tente outras palavras.', summary: `🔍 Modelos: ${input.query} (${found.length})` };
+    },
+  }),
+
+  tool({
     name: 'create_location',
     description:
       'Cria um local a partir de um grid ASCII (1 caractere = 1 tile de ~1 m) ou de um layout pronto (template), que é o ' +
@@ -328,7 +359,9 @@ export const TOOLS = [
         .optional()
         .describe(
           'Caracteres extras do layout: {"V": "vitrine", "P": "pedestal", "Q": "painting"} ou um tipo novo, ' +
-            '{"H": {"label": "escotilha", "like": "door"}}. Um caractere por tipo, fora da legenda fixa.',
+            '{"H": {"label": "escotilha", "like": "door"}}, que pode ter o visual de qualquer modelo do catálogo: ' +
+            '{"S": {"label": "mesa de sinuca", "like": "table", "model": "casino:SM_Prop_Pool_Table_01"}} (o id vem de search_models). ' +
+            'Um caractere por tipo, fora da legenda fixa.',
         ),
     }),
     mutates: true,

@@ -1,11 +1,13 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import type { Character, Figure, Fixture } from '../engine/types';
+import type { Character, Figure, Fixture, ObjectType } from '../engine/types';
 
 /**
- * Modelos 3D comprados (Synty), convertidos por `npm run assets` para public/models, fora do git.
- * Sem o catálogo (outra máquina, assets não convertidos), o palco segue com as primitivas.
+ * Modelos 3D comprados (Synty), convertidos por `npm run assets` para public/models, fora do git,
+ * e os do catálogo inteiro, que o servidor converte na primeira vez que o 3D pede
+ * (src/server/models.ts). Sem eles (outra máquina, assets não convertidos), o palco segue com as
+ * primitivas.
  */
 interface Catalog {
   /** Variantes de cor da textura-paleta de cada pacote (móveis usam a primeira). */
@@ -44,13 +46,36 @@ export interface CharacterModel {
   actions: Partial<Record<Clip, THREE.AnimationAction>>;
 }
 
+/** Modelo do catálogo convertido pelo servidor: GLB só com a geometria e a textura de cada material. */
+interface ModelMeta {
+  file: string;
+  kind: 'prop' | 'character';
+  /** Largura, altura e profundidade em metros. */
+  size: [number, number, number];
+  /** Altura da cabeça dos personagens (m). */
+  head?: number;
+  /** Pelo nome do material no GLB (tex_<chave>): a textura, se é recorte e o tom das folhas cinzentas. */
+  materials: Record<string, ModelMaterial>;
+  category: string;
+  figure?: string;
+}
+
+interface ModelMaterial {
+  texture: string | null;
+  cutout?: boolean;
+  tint?: [number, number, number];
+}
+
 const BASE = '/models/';
+const FILES = '/api/models/file/';
 const loader = new GLTFLoader();
 let catalog: Promise<Catalog | null> | null = null;
 let loaded: Catalog | null = null;
 const sources = new Map<string, Promise<THREE.Object3D>>();
 const clipSets = new Map<string, Promise<THREE.AnimationClip[]>>();
 const atlases = new Map<string, THREE.Material>();
+const metas = new Map<string, Promise<ModelMeta | null>>();
+const textured = new Map<string, THREE.Material>();
 
 function loadCatalog(): Promise<Catalog | null> {
   catalog ??= fetch(`${BASE}catalog.json`)
@@ -86,10 +111,50 @@ function atlas(cat: Catalog, pack: string, variant = 0): THREE.Material {
   return material;
 }
 
-function source(file: string): Promise<THREE.Object3D> {
-  let promise = sources.get(file);
+/** A ficha do modelo do catálogo; a primeira vez o servidor converte, o que leva alguns segundos. */
+function modelMeta(id: string): Promise<ModelMeta | null> {
+  let promise = metas.get(id);
   if (!promise) {
-    promise = loader.loadAsync(BASE + file).then((gltf) => {
+    promise = fetch(`/api/models/meta?id=${encodeURIComponent(id)}`)
+      .then((res) => (res.ok ? (res.json() as Promise<ModelMeta>) : null))
+      .catch(() => null);
+    metas.set(id, promise);
+  }
+  return promise;
+}
+
+/** Material de uma textura do catálogo, compartilhado por todos os modelos que a usam. */
+function catalogMaterial(m: ModelMaterial | undefined): THREE.Material {
+  const key = m ? `${m.texture}|${m.cutout ? 1 : 0}|${m.tint?.join(',') ?? ''}` : 'liso';
+  let material = textured.get(key);
+  if (!material) {
+    const map = m?.texture ? new THREE.TextureLoader().load(FILES + m.texture) : null;
+    if (map) {
+      map.colorSpace = THREE.SRGBColorSpace;
+      map.flipY = false;
+    }
+    material = new THREE.MeshStandardMaterial({
+      map,
+      roughness: 0.85,
+      // Sem textura (vidro, cor chapada), um cinza claro, como nas miniaturas do catálogo.
+      color: m?.tint ? new THREE.Color(...m.tint) : map ? 0xffffff : 0x9a9ea8,
+      ...(m?.cutout ? { alphaTest: 0.5, side: THREE.DoubleSide } : {}),
+    });
+    textured.set(key, material);
+  }
+  return material;
+}
+
+function paintCatalog(root: THREE.Object3D, meta: ModelMeta): void {
+  root.traverse((o) => {
+    if (o instanceof THREE.Mesh) o.material = catalogMaterial(meta.materials[(o.material as THREE.Material).name]);
+  });
+}
+
+function source(url: string): Promise<THREE.Object3D> {
+  let promise = sources.get(url);
+  if (!promise) {
+    promise = loader.loadAsync(url).then((gltf) => {
       gltf.scene.traverse((o) => {
         if (!(o instanceof THREE.Mesh)) return;
         o.castShadow = true;
@@ -97,7 +162,7 @@ function source(file: string): Promise<THREE.Object3D> {
       });
       return gltf.scene;
     });
-    sources.set(file, promise);
+    sources.set(url, promise);
   }
   return promise;
 }
@@ -110,11 +175,16 @@ function paint(root: THREE.Object3D, material: THREE.Material): void {
 
 /**
  * O móvel montado com os modelos do catálogo, no espaço local do móvel (o chamador posiciona e
- * gira). `kinds` é o tipo e os parecidos dele: vale o primeiro que tem modelo. Peça maior que o
- * espaço do móvel encolhe por inteiro para caber; com stretch, a peça mais curta estica no
- * comprimento. `span` é o comprimento da peça principal. null = sem modelo.
+ * gira). `chain` é o tipo e os parecidos dele: vale o modelo que o mestre escolheu para algum deles
+ * ou, sem isso, as peças do primeiro que tem. Peça maior que o espaço do móvel encolhe por inteiro
+ * para caber; com stretch, a peça mais curta estica no comprimento. `span` é o comprimento da peça
+ * principal. null = sem modelo.
  */
-export async function fixtureModel(f: Fixture, kinds: string[] = [f.kind]): Promise<{ group: THREE.Group; top: number; span: number } | null> {
+export async function fixtureModel(f: Fixture, chain: ObjectType[]): Promise<{ group: THREE.Group; top: number; span: number } | null> {
+  const chosen = chain.find((t) => t.model)?.model;
+  const picked = chosen ? await catalogFixture(f, chosen) : null;
+  if (picked) return picked;
+  const kinds = chain.length ? chain.map((t) => t.id) : [f.kind];
   const cat = await loadCatalog();
   const entry = cat ? kinds.map((k) => cat.fixtures[k]).find(Boolean) : undefined;
   if (!cat || !entry?.length) return null;
@@ -127,7 +197,7 @@ export async function fixtureModel(f: Fixture, kinds: string[] = [f.kind]): Prom
   let span = room.w;
   for (const part of parts) {
     const entry = cat.props[part.model];
-    const obj = (await source(entry.file)).clone();
+    const obj = (await source(BASE + entry.file)).clone();
     paint(obj, atlas(cat, entry.pack));
     const grow = part.scale ?? 1;
     const [mw, , md] = entry.size.map((v) => v * grow);
@@ -149,6 +219,32 @@ export async function fixtureModel(f: Fixture, kinds: string[] = [f.kind]): Prom
   return { group, top, span };
 }
 
+/**
+ * Móvel com um modelo do catálogo escolhido pelo mestre. Encolhe para caber no espaço do móvel;
+ * natureza e construção podem passar dele (copa de árvore, torre), até uns 12 m de altura. Bicho
+ * bem menor que o espaço cresce até ocupá-lo: os pacotes "simple" vêm em miniatura (o cavalo tem
+ * 43 cm).
+ */
+async function catalogFixture(f: Fixture, id: string): Promise<{ group: THREE.Group; top: number; span: number } | null> {
+  const meta = await modelMeta(id);
+  if (!meta || meta.kind !== 'prop') return null;
+  const obj = (await source(FILES + meta.file)).clone();
+  paintCatalog(obj, meta);
+  const alongX = f.facing === 'N' || f.facing === 'S';
+  const room = { w: alongX ? f.w : f.h, d: alongX ? f.h : f.w };
+  // O lado comprido do modelo vai no lado comprido do espaço (o cavalo deitado num 2×1).
+  const turned = room.w !== room.d && room.w > room.d !== meta.size[0] > meta.size[2];
+  const [w, h, d] = turned ? [meta.size[2], meta.size[1], meta.size[0]] : meta.size;
+  const free = meta.category === 'ambiente' || meta.category === 'construcao';
+  const fill = Math.min((room.w * 0.98) / w, (room.d * 0.98) / d);
+  const scale = free ? Math.min(1, 12 / h) : meta.category === 'animal' && fill > 1.5 ? fill : Math.min(1, fill);
+  obj.scale.setScalar(scale);
+  if (turned) obj.rotation.y = Math.PI / 2;
+  const group = new THREE.Group();
+  group.add(obj);
+  return { group, top: h * scale, span: w * scale };
+}
+
 const FEMN = /\b(aluna|professora|diretora|menina|garota|filha|m[ãa]e|senhora|esposa|enfermeira|m[ée]dica|secret[áa]ria|cozinheira|dona|mulher|moça|moca|jovem mulher|ela)\b/;
 const MASC = /\b(aluno|professor|diretor|menino|garoto|filho|pai|senhor|marido|enfermeiro|m[ée]dico|cozinheiro|dono|homem|rapaz|moço|moco|ele)\b/;
 
@@ -168,6 +264,9 @@ export function figureOf(c: Character): Figure {
 
 /** Personagem com modelo e clipes do catálogo, escolhido de forma estável pelo id; null = sem modelo. */
 export async function characterModel(c: Character): Promise<CharacterModel | null> {
+  // Visual do catálogo inteiro (pacote:Arquivo); se não converter, segue como se não houvesse.
+  const picked = c.look?.includes(':') ? await catalogCharacter(c, c.look) : null;
+  if (picked) return picked;
   const cat = await loadCatalog();
   if (!cat?.characters) return null;
   // O visual escolhido pelo mestre (e descrito na aparência); sem ele, um do mesmo corpo, pelo id.
@@ -177,12 +276,34 @@ export async function characterModel(c: Character): Promise<CharacterModel | nul
   if (!chosen && !options.length) return null;
   const entry = chosen ?? options[hash(c.id) % options.length];
   const sex = figure === 'adulta' || figure === 'menina' ? 'femn' : 'masc';
-  const [model, clips] = await Promise.all([source(entry.file), animations(cat, sex)]);
+  const [model, clips] = await Promise.all([source(BASE + entry.file), animations(cat, sex)]);
   const root = cloneSkinned(model);
   // Sempre a variante de cor principal: é a que as descrições dos visuais retratam.
   paint(root, atlas(cat, entry.pack));
   // Adolescentes usam o mesmo esqueleto dos adultos: encolhem um pouco.
   if (figure === 'menino' || figure === 'menina') root.scale.setScalar(0.92);
+  const mixer = new THREE.AnimationMixer(root);
+  const actions: CharacterModel['actions'] = {};
+  for (const clip of clips) actions[clip.name as Clip] = mixer.clipAction(clip);
+  return { root, mixer, actions };
+}
+
+/**
+ * Personagem do catálogo inteiro, com os clipes do corpo dele. Os ossos já vêm com os nomes do
+ * esqueleto das animações; criatura anima como adulto. Há pacotes em centímetros: pela altura da
+ * cabeça, o modelo volta ao tamanho de gente.
+ */
+async function catalogCharacter(c: Character, id: string): Promise<CharacterModel | null> {
+  const meta = await modelMeta(id);
+  if (!meta || meta.kind !== 'character') return null;
+  const figure = (['adulto', 'adulta', 'menino', 'menina'] as string[]).includes(meta.figure ?? '') ? (meta.figure as Figure) : figureOf(c);
+  const sex = figure === 'adulta' || figure === 'menina' ? 'femn' : 'masc';
+  const cat = await loadCatalog();
+  const [model, clips] = await Promise.all([source(FILES + meta.file), cat ? animations(cat, sex) : Promise.resolve([])]);
+  const root = cloneSkinned(model);
+  paintCatalog(root, meta);
+  const head = meta.head ?? 1.6;
+  if (head < 0.5 || head > 3) root.scale.setScalar(1.6 / head);
   const mixer = new THREE.AnimationMixer(root);
   const actions: CharacterModel['actions'] = {};
   for (const clip of clips) actions[clip.name as Clip] = mixer.clipAction(clip);

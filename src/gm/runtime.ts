@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { WorkloadIdentityError } from '@anthropic-ai/sdk/lib/credentials/types';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ModelCatalog, setModelCatalog, type RepertoireItem } from '../engine/catalog';
 import { GameEngine } from '../engine/engine';
 import { ClaudeProvider, DEFAULT_MODEL } from './claude';
 import { GameMaster } from './gm';
@@ -24,6 +25,20 @@ function effortFromEnv(name: string, fallback: Effort): Effort {
 
 export function isOffline(): boolean {
   return process.env.CRPS_PROVIDER === 'offline';
+}
+
+/**
+ * Catálogo de modelos 3D (o repertório Synty descrito olhando), se ele estiver nesta máquina: o
+ * mestre busca nele com search_models, e o servidor converte o que o 3D pedir.
+ */
+export function loadModelCatalog(path = join('assets', 'synty', 'repertorio.json')): ModelCatalog | null {
+  try {
+    const catalog = new ModelCatalog((JSON.parse(readFileSync(path, 'utf8')) as { items: RepertoireItem[] }).items);
+    setModelCatalog(catalog);
+    return catalog;
+  } catch {
+    return null;
+  }
 }
 
 /** Visuais do catálogo 3D convertido (public/models), se houver, para o mestre escolher. */

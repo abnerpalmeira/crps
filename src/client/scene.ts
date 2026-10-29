@@ -376,7 +376,7 @@ export class WorldView {
   /** Troca as primitivas do móvel pelo modelo do catálogo, quando ele carrega e se houver. */
   private async upgradeFixture(obj: THREE.Group, f: Fixture, chain: ObjectType[]): Promise<void> {
     const room = this.room;
-    const model = await fixtureModel(f, chain.map((t) => t.id));
+    const model = await fixtureModel(f, chain);
     if (!model || this.room !== room) return;
     for (const child of [...obj.children]) {
       child.traverse((o) => {

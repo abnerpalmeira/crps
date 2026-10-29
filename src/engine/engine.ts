@@ -1,3 +1,4 @@
+import { modelCatalog, type CatalogItem } from './catalog';
 import { MAX_FRAMES, snapshotScene } from './frames';
 import { LEGEND, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, tileOf, type LocationSpec } from './layout';
 import { OBJECT_LIBRARY, findObjectType, librarySummary, objectType, resolveType } from './objects';
@@ -99,6 +100,9 @@ export const DEFAULT_RULESET: Ruleset = {
 };
 
 export const VISIBILITY_LABEL: Record<Visibility, string> = { public: 'público', self: 'só o próprio', hidden: 'oculto' };
+
+/** Corpos do 3D; um personagem do catálogo pode ser também criatura, que fica sem corpo informado. */
+const FIGURES = new Set<string>(['adulto', 'adulta', 'menino', 'menina']);
 
 /** Garante os recursos universais; um recurso equivalente definido pelo mestre (ex.: "HP") vira o universal. */
 function ensureCoreResources(rules: Ruleset): void {
@@ -1052,10 +1056,28 @@ export class GameEngine {
   private defineType(input: ObjectTypeInput): ObjectType {
     const existing = findObjectType(this.state, input.label);
     if (existing) return existing;
+    if (input.model) this.catalogModel(input.model, 'type');
     const { like, ...own } = input;
     const t = resolveType(like ? this.findType(like) : null, own);
     this.state.objectTypes[t.id] = t;
     return t;
+  }
+
+  /**
+   * Modelo do catálogo 3D que o mestre escolheu, conferido: um tipo de objeto não usa personagem, e
+   * o visual de um personagem precisa ser um. Sem o catálogo nesta máquina, vale o que veio (o 3D
+   * usa o parecido ou o corpo).
+   */
+  private catalogModel(id: string, use: 'type' | 'look'): CatalogItem | null {
+    const catalog = modelCatalog();
+    if (!catalog) return null;
+    const item = catalog.get(id);
+    if (!item || item.sensivel) throw new EngineError(`"${id}" não é um modelo do catálogo. Busque com search_models e use o id que ela devolve.`);
+    if (use === 'look' && item.category !== 'personagem') {
+      throw new EngineError(`"${id}" é ${item.category}, não personagem: o visual (look) precisa ser um personagem do catálogo.`);
+    }
+    if (use === 'type' && item.category === 'personagem') throw new EngineError(`"${id}" é um personagem: gente entra com create_characters e look.`);
+    return item;
   }
 
   /** Dá destino e nome às saídas (porta, elevador, escada) de um local. */
@@ -1182,6 +1204,9 @@ export class GameEngine {
     if (input.is_player && this.player) {
       throw new EngineError(`Já existe um personagem do jogador: ${this.player.id} (${this.player.name}).`);
     }
+    // Visual do catálogo (pacote:Arquivo): sem corpo informado, vale o do modelo.
+    const model = input.look?.includes(':') ? this.catalogModel(input.look, 'look') : null;
+    const figure = input.figure ?? (FIGURES.has(model?.figure ?? '') ? (model!.figure as Figure) : undefined);
     // Primeiro nome, pulando títulos abreviados ("Prof. Tanaka" → tanaka).
     const firstName = input.name.split(/\s+/).find((w) => w && !w.endsWith('.')) ?? input.name;
     const id = this.claimId(input.id, firstName, input.name);
@@ -1199,7 +1224,7 @@ export class GameEngine {
       isPlayer: Boolean(input.is_player),
       role: input.role,
       appearance: input.appearance,
-      ...(input.figure ? { figure: input.figure } : {}),
+      ...(figure ? { figure } : {}),
       ...(input.look ? { look: input.look } : {}),
       ...(input.seen_as ? { seenAs: input.seen_as } : {}),
       traits: input.traits ?? [],
@@ -1335,6 +1360,7 @@ export class GameEngine {
 
   updateCharacter(input: CharacterUpdate) {
     const c = this.findCharacter(input.character_id);
+    if (input.look?.includes(':')) this.catalogModel(input.look, 'look');
     const changes: string[] = [];
     for (const key of ['name', 'role', 'appearance', 'look', 'personality', 'background', 'goals'] as const) {
       const value = input[key];

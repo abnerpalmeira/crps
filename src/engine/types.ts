@@ -124,7 +124,10 @@ export interface Character {
   appearance: string;
   /** Corpo no 3D; sem ele, a interface deduz pelo papel e pela aparência. */
   figure?: Figure;
-  /** Visual no catálogo 3D, escolhido pelo mestre; a aparência descreve esse modelo. */
+  /**
+   * Visual no 3D, escolhido pelo mestre: um da lista de visuais ou um personagem do catálogo
+   * (`pacote:Arquivo`). A aparência descreve esse modelo.
+   */
   look?: string;
   /** Como quem não o conhece o chama, pelo que vê ("o homem de terno"). */
   seenAs?: string;
@@ -210,6 +213,8 @@ export interface ObjectType {
   article?: 'o' | 'a';
   /** Tipo da biblioteca de onde vieram o resto das propriedades e o visual. */
   like?: string;
+  /** Modelo do catálogo 3D (`pacote:Arquivo`) que o mestre escolheu para o visual. */
+  model?: string;
 }
 
 /** Um caractere da legenda do layout e o que ele é. */

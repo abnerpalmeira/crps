@@ -5,9 +5,10 @@ import { GameEngine } from './engine/engine';
 import { parseSpeechLine } from './engine/frames';
 import type { GmEvent } from './gm/gm';
 import { CostMeter, describeCost, toCredits } from './gm/pricing';
-import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, loadEnv } from './gm/runtime';
+import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, loadEnv, loadModelCatalog } from './gm/runtime';
 
 loadEnv();
+loadModelCatalog();
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const store = new SaveStore();
 const gm = createGameMaster();

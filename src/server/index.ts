@@ -5,7 +5,8 @@ import { GameEngine } from '../engine/engine';
 import type { Emit, GmEvent } from '../gm/gm';
 import { MODEL_CHOICES, modelChoice } from '../gm/models';
 import { CostMeter, costEvent, describeCost, priceOf } from '../gm/pricing';
-import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, isOffline, loadEnv, modeFromEnv } from '../gm/runtime';
+import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, isOffline, loadEnv, loadModelCatalog, modeFromEnv } from '../gm/runtime';
+import { ModelService } from './models';
 
 loadEnv();
 // Variável própria: PORT costuma ser definida para o servidor web (Vite) por quem o inicia.
@@ -25,6 +26,8 @@ const MIME: Record<string, string> = {
 const MODE = modeFromEnv();
 const CREDIT_USD = creditUsdFromEnv();
 const store = new SaveStore();
+const catalog = loadModelCatalog();
+const models = new ModelService(catalog);
 let gm = createGameMaster({ model: store.loadSettings().model });
 let engine: GameEngine | null = store.load();
 let busy = false;
@@ -155,6 +158,18 @@ const server = createServer(async (req, res) => {
       await streamTurn(res, (emit) => gm.play(current, input, emit));
       return;
     }
+    if (pathname === '/api/models/meta' && req.method === 'GET') {
+      const id = new URL(req.url ?? '/', 'http://localhost').searchParams.get('id') ?? '';
+      const meta = await models.meta(id);
+      return meta ? json(res, 200, meta) : json(res, 404, { error: `Modelo ${id} indisponível.` });
+    }
+    if (pathname.startsWith('/api/models/file/') && req.method === 'GET') {
+      const file = models.file(pathname.slice('/api/models/file/'.length));
+      if (!file) return json(res, 404, { error: 'Arquivo de modelo inexistente.' });
+      res.writeHead(200, { 'Content-Type': file.type, 'Cache-Control': 'public, max-age=86400' });
+      res.end(readFileSync(file.path));
+      return;
+    }
     if (pathname.startsWith('/api/')) return json(res, 404, { error: 'Rota desconhecida.' });
     serveStatic(pathname, res);
   } catch (err) {
@@ -166,6 +181,7 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log(
     `[crps] servidor em http://127.0.0.1:${PORT} · modo ${MODE} · mestre: ${gm.label} · 1 crédito = US$ ${CREDIT_USD}` +
-      `${engine ? ` · campanha carregada (turno ${engine.state.turn})` : ''}`,
+      `${engine ? ` · campanha carregada (turno ${engine.state.turn})` : ''}` +
+      `${catalog ? ` · catálogo 3D: ${catalog.size} modelos` : ''}`,
   );
 });

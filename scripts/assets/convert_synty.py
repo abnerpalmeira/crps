@@ -21,26 +21,14 @@ import sys
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from synty_blender import rename_bones  # noqa: E402
+
 catalog_path, src_root, out_root = sys.argv[sys.argv.index('--') + 1 :][:3]
 catalog = json.load(open(catalog_path, encoding='utf-8'))
 for sub in ('props', 'characters', 'anims', 'textures'):
     shutil.rmtree(os.path.join(out_root, sub), ignore_errors=True)
     os.makedirs(os.path.join(out_root, sub), exist_ok=True)
-
-# Esqueleto antigo dos personagens POLYGON (Pelvis, spine_01, UpperArm_L…) → nomes do esqueleto
-# das animações (Hips, Spine_01, Shoulder_L…). Os dedos da mão direita levam o sufixo _1.
-BONES = {'pelvis': 'Hips', 'spine_01': 'Spine_01', 'spine_02': 'Spine_02', 'spine_03': 'Spine_03', 'neck_01': 'Neck', 'head': 'Head', 'eyes': 'Eyes', 'eyebrows': 'Eyebrows'}
-for side, suffix in (('l', ''), ('r', '_1')):
-    S = side.upper()
-    BONES.update({
-        f'clavicle_{side}': f'Clavicle_{S}', f'upperarm_{side}': f'Shoulder_{S}', f'lowerarm_{side}': f'Elbow_{S}', f'hand_{side}': f'Hand_{S}',
-        f'thigh_{side}': f'UpperLeg_{S}', f'calf_{side}': f'LowerLeg_{S}', f'foot_{side}': f'Ankle_{S}', f'ball_{side}': f'Ball_{S}', f'toes_{side}': f'Toes_{S}',
-    })
-    for i in (1, 2, 3):
-        BONES[f'thumb_0{i}_{side}'] = f'Thumb_0{i}{suffix}'
-    for i in (1, 2, 3, 4):
-        BONES[f'indexfinger_0{i}_{side}'] = f'IndexFinger_0{i}{suffix}'
-        BONES[f'finger_0{i}_{side}'] = f'Finger_0{i}{suffix}'
 
 
 def reset():
@@ -123,13 +111,6 @@ def convert_prop(entry):
         print(f"[synty] AVISO: {entry['id']} mede {max(size):.3f} m; falta \"scale\" no catálogo?")
     # Blender é Z para cima; no glTF (Y para cima) a largura é x, a altura z e a profundidade y.
     return {'file': f"props/{entry['id']}.glb", 'pack': entry['pack'], 'size': [round(size.x, 3), round(size.z, 3), round(size.y, 3)], 'bytes': os.path.getsize(out)}
-
-
-def rename_bones(arm):
-    for bone in arm.data.bones:
-        new = BONES.get(bone.name.lower())
-        if new:
-            bone.name = new  # o Blender renomeia junto os grupos de vértices das malhas
 
 
 def convert_character(entry):

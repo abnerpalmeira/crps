@@ -1,8 +1,7 @@
 """
-Miniaturas dos modelos da Synty para catalogar olhando: cada FBX renderizado no Blender, com a
-textura de cada material que o MaterialList do pacote e o próprio FBX dão (synty_textures.py), de
-frente e um pouco de lado e de cima. Só o LOD0 entra; os outros LODs ficam no mesmo lugar e sujam
-a imagem.
+Miniaturas dos modelos da Synty para catalogar olhando: cada FBX renderizado no Blender, de frente
+e um pouco de lado e de cima, com a textura de cada material pelas mesmas regras da conversão para
+o jogo (synty_blender.py).
 
 Uso: blender -b --python scripts/assets/thumbs_synty.py -- LISTA SAIDA
 
@@ -12,7 +11,6 @@ e dividir a lista entre vários processos.
 """
 
 import os
-import re
 import sys
 import time
 
@@ -21,111 +19,10 @@ import numpy as np
 from mathutils import Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from synty_textures import ROOT, cutouts, slot_list, textures_for, tinted, trunks_for  # noqa: E402
+from synty_blender import clean, paint  # noqa: E402
+from synty_textures import ROOT  # noqa: E402
 
 SIZE = 176
-CUTOUTS = cutouts()
-TINTED = tinted()
-# Verde de folhagem para as folhas cinzentas que o Unity tinge.
-LEAF_GREEN = (0.42, 0.58, 0.26, 1)
-
-
-def material(path, made):
-    """Material com a textura, ou cinza liso para material sem textura (vidro, cor chapada); um
-    por textura em cada render. Textura com recorte usa o alfa."""
-    if path not in made:
-        mat = bpy.data.materials.new('atlas')
-        mat.use_nodes = True
-        bsdf = mat.node_tree.nodes['Principled BSDF']
-        bsdf.inputs['Roughness'].default_value = 0.8
-        if path:
-            tex = mat.node_tree.nodes.new('ShaderNodeTexImage')
-            tex.image = bpy.data.images.load(path, check_existing=True)
-            mat.node_tree.links.new(tex.outputs['Color'], bsdf.inputs['Base Color'])
-            if path in TINTED:
-                mix = mat.node_tree.nodes.new('ShaderNodeMix')
-                mix.data_type, mix.blend_type = 'RGBA', 'MULTIPLY'
-                mix.inputs['Factor'].default_value = 1
-                mix.inputs['B'].default_value = LEAF_GREEN
-                mat.node_tree.links.new(tex.outputs['Color'], mix.inputs['A'])
-                mat.node_tree.links.new(mix.outputs['Result'], bsdf.inputs['Base Color'])
-            if path in CUTOUTS:
-                mat.node_tree.links.new(tex.outputs['Alpha'], bsdf.inputs['Alpha'])
-        else:
-            bsdf.inputs['Base Color'].default_value = (0.6, 0.62, 0.66, 1)
-        made[path] = mat
-    return made[path]
-
-
-def lod0(scene):
-    """Tira os LODs maiores que 0 quando o LOD0 está no arquivo, e as malhas de colisão do Unreal
-    (UCX_, UBX_...), que não aparecem no jogo e esticam o enquadramento."""
-    names = {o.name for o in scene.objects}
-    for o in list(scene.objects):
-        m = re.match(r'(.*)_LOD([1-9])$', o.name)
-        if (m and f'{m.group(1)}_LOD0' in names) or re.match(r'U(CX|BX|SP|CP)_|.*collision', o.name, re.I):
-            bpy.data.objects.remove(o)
-
-
-def diffuse(mat):
-    """Arquivo da imagem que o FBX liga à cor base do material, ou None."""
-    if not mat or not mat.node_tree:
-        return None
-    for link in mat.node_tree.links:
-        if link.to_socket.name == 'Base Color' and link.from_node.type == 'TEX_IMAGE' and link.from_node.image:
-            return os.path.basename(link.from_node.image.filepath.replace('\\', '/')) or link.from_node.image.name
-    return None
-
-
-def split_trunk(o, k, leaf, trunk, made):
-    """Material de vegetação com folha e tronco: as faces do material k cujo UV cai todo no
-    transparente da textura de folha (centro e cantos) são do tronco e passam para um material com
-    a textura do tronco. Basta um ponto opaco para a face ser folha: o centro de um cartão de folhas
-    às vezes cai num vão entre elas. Quando mais de 70% das faces iriam para o tronco, são os
-    cartões de folha que caem no vazio (árvore frutífera, arbusto tropical), e nada muda."""
-    img = bpy.data.images.load(leaf, check_existing=True)
-    w, h = img.size
-    uv = o.data.uv_layers.active
-    if not w or not h or not uv:
-        return
-    pixels = np.empty(w * h * 4, dtype=np.float32)
-    img.pixels.foreach_get(pixels)
-    alpha = pixels[3::4].reshape(h, w)
-    faces = [p for p in o.data.polygons if p.material_index == k]
-    bare = []
-    for poly in faces:
-        us = [(u.x, u.y) for u in (uv.data[i].uv for i in poly.loop_indices)]
-        points = us + [(sum(x for x, _ in us) / len(us), sum(y for _, y in us) / len(us))]
-        if all(alpha[int((y % 1) * (h - 1)), int((x % 1) * (w - 1))] < 0.5 for x, y in points):
-            bare.append(poly)
-    if not bare or len(bare) > 0.7 * len(faces):
-        return
-    o.data.materials.append(material(trunk, made))
-    for poly in bare:
-        poly.material_index = len(o.material_slots) - 1
-
-
-def paint(pack, model, meshes):
-    """Cada material de cada objeto com a sua textura (synty_textures.slot_path), juntando o que a
-    lista e o próprio FBX dizem. O nome do objeto no FBX é o da lista, tirando o sufixo .001 do
-    Blender; quando a lista tem um objeto só e o FBX também, valem como o mesmo."""
-    listed = slot_list(pack).get(model, {})
-    names = {}
-    for o in meshes:
-        name = re.sub(r'\.\d+$', '', o.name)
-        names[o.name] = next(iter(listed)) if name not in listed and len(listed) == 1 and len(meshes) == 1 else name
-    slots, main = textures_for(pack, model, {names[o.name]: [diffuse(s.material) for s in o.material_slots] for o in meshes})
-    trunks = trunks_for(pack, model)
-    made = {}
-    for o in meshes:
-        paths, trunk = slots.get(names[o.name], []), trunks.get(names[o.name], [])
-        if not o.material_slots:
-            o.data.materials.append(None)
-        for k, slot in enumerate(list(o.material_slots)):
-            path = paths[k] if k < len(paths) else main
-            slot.material = material(path, made)
-            if path in CUTOUTS and k < len(trunk) and trunk[k] and trunk[k] != path:
-                split_trunk(o, k, path, trunk[k], made)
 
 
 def render(pack, rel, out):
@@ -136,7 +33,7 @@ def render(pack, rel, out):
     scene.render.image_settings.file_format = 'JPEG'
     scene.render.image_settings.quality = 85
     bpy.ops.import_scene.fbx(filepath=os.path.join(ROOT, rel))
-    lod0(scene)
+    clean(scene)
     meshes = [o for o in scene.objects if o.type == 'MESH']
     if not meshes:
         return False

@@ -307,7 +307,8 @@ convertidos. Sem eles, segue com as primitivas, então o projeto roda em qualque
 2. `python3 -I scripts/assets/index_synty.py` monta o repertório: `assets/synty/repertorio.json`,
    com um item por modelo (pacote, categoria e palavras do nome), e `assets/synty/REPERTORIO.md`,
    o resumo. As categorias são personagem, animal, objeto, construção, ambiente, veículo, arma,
-   acessório, animação e efeito. Ele lê só os nomes dos arquivos, e o resultado é só texto.
+   acessório, animação e efeito. Ele lê os nomes dos arquivos e, quando há, as descrições do
+   catálogo visual (abaixo), e o resultado é só texto.
 3. Rode `npm run assets` (precisa do Blender 4.2 ou mais novo no PATH) para converter os modelos
    que o catálogo usa. O resultado vai para `public/models/`, também fora do git.
 
@@ -334,6 +335,36 @@ O que entra está em [scripts/assets/synty.json](scripts/assets/synty.json):
 Cada móvel pesa de 6 a 215 KB, cada personagem cerca de 300 KB, e a cor vem de uma
 textura-paleta por pacote, baixada uma vez só. O mestre só conhece os modelos por texto (o corpo
 dos personagens). Modelos e imagens da cena nunca vão para o modelo de IA.
+
+#### Catálogo visual e modelos sob demanda
+
+Todos os modelos do repertório (fora as animações) foram descritos olhando: o
+`scripts/assets/thumbs_synty.py` renderiza uma miniatura de cada um, o `sheets_synty.py` junta as
+miniaturas em grades, e as descrições ficam em `assets/synty/_catalogo/descricoes/`. Cada uma diz
+o que o modelo é, a categoria e, para personagens e animais, o corpo e o visual. A marca
+`sensivel` (símbolo de ódio ou conteúdo sexual) tira o modelo das buscas. O `index_synty.py` junta
+tudo no repertório.
+
+- **Busca do mestre:** a tool `search_models` procura no catálogo pela descrição ("sofá de couro
+  marrom", "policial de quepe"). Um tipo novo da legenda pode ter o visual de qualquer modelo
+  (`{"label": "mesa de sinuca", "like": "table", "model": "casino:SM_Prop_Pool_Table_01"}`), e o
+  `look` de um personagem pode ser qualquer personagem do catálogo. O motor confere o id e, no
+  personagem, pega o corpo do modelo.
+- **Conversão sob demanda:** quando o 3D pede um modelo do catálogo, o servidor roda o Blender
+  (`scripts/assets/convert_model.py`, ou o executável de `CRPS_BLENDER`) e guarda o GLB, a ficha e
+  as texturas em `public/models/cache/`, fora do git. Leva alguns segundos na primeira vez.
+  - O GLB tem só a geometria. Cada textura vira um PNG de até 2048 px, compartilhado entre os
+    modelos.
+  - Os materiais seguem as mesmas regras das miniaturas (`synty_blender.py`), para o jogo mostrar o
+    que o catálogo descreve: textura por material, recorte nas folhas e grades, tom nas folhas
+    cinzentas e tronco separado da folha.
+  - Sem Blender ou sem o repertório, o 3D usa o parecido do tipo ou o corpo do personagem.
+- **Limites:**
+  - Personagens exportados para o Unreal (pastas `Unreal_Characters`) usam outro esqueleto e ficam
+    fora: a versão padrão do mesmo personagem costuma existir.
+  - Arquivos com várias variantes no mesmo lugar (as pelagens do cavalo) mostram só a primeira.
+  - Os pacotes "simple" vêm em miniatura, então um bicho bem menor que o espaço que o mestre deu
+    cresce até ocupá-lo.
 
 ### Layout ASCII
 
