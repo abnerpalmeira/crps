@@ -10,8 +10,8 @@ describe('parseBeats', () => {
     );
     expect(beats).toEqual([
       { kind: 'narration', text: 'O sinal toca. A turma se ajeita.' },
-      { kind: 'speech', speakerId: 'haruka', text: 'Levantar!', mode: 'fala', targetId: null, hidden: false, via: null },
-      { kind: 'speech', speakerId: 'kenta', text: 'Bom dia! *mastigando*', mode: 'fala', targetId: null, hidden: false, via: null },
+      { kind: 'speech', speakerId: 'haruka', text: 'Levantar!', mode: 'fala', targetId: null, hidden: false, via: null, alias: null, toAlias: null },
+      { kind: 'speech', speakerId: 'kenta', text: 'Bom dia! *mastigando*', mode: 'fala', targetId: null, hidden: false, via: null, alias: null, toAlias: null },
       { kind: 'narration', text: 'Silêncio. E o e-mail @fulano: nada.' },
     ]);
   });

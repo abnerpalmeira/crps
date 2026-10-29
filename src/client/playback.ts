@@ -1,6 +1,6 @@
 import { parseBeats, sceneAt, type Beat } from '../engine/frames';
 import type { Clock, SceneFrame, WorldState } from '../engine/types';
-import { speechHtml } from './format';
+import { capitalize, speechHtml } from './format';
 import type { WorldView } from './scene';
 
 /** Um turno da campanha visto como frame: a ação do jogador e as falas e narrações, em ordem. */
@@ -194,7 +194,8 @@ export class Playback {
     else if (current.kind === 'input') this.ui.caption(current.text, 'Você');
     else if (current.kind === 'narration') this.ui.caption(current.text);
     else if (missing.includes(current.speakerId)) {
-      this.ui.caption(current.hidden ? `🤫 ${current.text}` : current.text, this.nameOf(current.speakerId) ?? current.speakerId);
+      const who = current.alias ? capitalize(current.alias) : (this.nameOf(current.speakerId) ?? current.speakerId);
+      this.ui.caption(current.hidden ? `🤫 ${current.text}` : current.text, who);
     }
     else this.ui.caption(null);
   }

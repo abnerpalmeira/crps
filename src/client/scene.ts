@@ -3,8 +3,9 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { tileDef } from '../engine/layout';
 import { lightSources } from '../engine/light';
-import { lifeStatId, perceptionOf, visionOf } from '../engine/perception';
+import { lifeStatId, perceptionOf, strangerLabel, visionOf } from '../engine/perception';
 import type { Character, Fixture, Location, WorldState } from '../engine/types';
+import { capitalize } from './format';
 import { characterModel, fixtureModel, seatOffset, type CharacterModel, type Clip } from './models';
 import {
   DIR_VEC,
@@ -483,12 +484,17 @@ export class WorldView {
         this.actors.set(c.id, actor);
         void this.upgradeActor(actor, c);
       }
-      // Quem o jogador não enxerga fica sem nome; quem ele vê como vulto vira "?".
+      // Nome só de quem o jogador sabe quem é (pelo rosto ou pela voz); estranho visto vira a
+      // descrição; vulto que ele não reconhece, "?"; quem ele nem vê nem reconhece, nada.
       const sight = c.isPlayer ? 'nitido' : view.sight(c.id);
+      const known = c.isPlayer || Boolean(view.recognize(c.id));
       const label = actor.label.element;
-      label.replaceChildren(c.isPlayer ? `${c.name} (você)` : sight === 'nitido' ? c.name.split(' ')[0] : '?');
-      label.classList.toggle('vulto', sight === 'vulto');
-      actor.label.visible = sight !== 'nada';
+      label.replaceChildren(
+        c.isPlayer ? `${c.name} (você)` : known ? c.name.split(' ')[0] : sight === 'nitido' ? capitalize(strangerLabel(c)) : '?',
+      );
+      label.classList.toggle('vulto', sight !== 'nitido');
+      label.classList.toggle('stranger', !known && sight === 'nitido');
+      actor.label.visible = sight !== 'nada' || known;
       // Barra de vida só quando o jogador vê a pessoa e pode ver a vida dela (pública ou por perk).
       if (life && sight === 'nitido' && view.canSeeStat(life, c.id)) {
         const value = c.resources[life] ?? lifeMax;

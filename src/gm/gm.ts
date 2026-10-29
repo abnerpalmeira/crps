@@ -116,6 +116,7 @@ export class GameMaster {
     const speech = analyzeSpeech(engine.state, text);
     if (speech.issues.length) emit({ type: 'status', text: `Falas ainda fora das regras: ${speech.issues.join(' ')}` });
     this.recordSpeech(engine, speech.lines);
+    engine.hearVoices(speech.lines);
     const shown = playerNarration(engine.state, text);
     engine.log('narration', text, shown !== text ? shown : undefined);
     engine.recordFrame();
@@ -219,7 +220,9 @@ export class SpeechFilter {
       if (this.atLineStart && ch === '@') this.holding = true;
       if (this.holding) {
         if (ch === '\n') {
-          passthrough += `${this.transform(this.line)}\n`;
+          // Fala que o jogador nem vê nem ouve some inteira, sem deixar linha em branco.
+          const shown = this.transform(this.line);
+          if (shown) passthrough += `${shown}\n`;
           this.line = '';
           this.holding = false;
           this.atLineStart = true;

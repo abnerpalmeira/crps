@@ -1,5 +1,5 @@
 import { lightAt, lightLabel, lightSources } from '../engine/light';
-import { perceptionOf } from '../engine/perception';
+import { perceptionOf, strangerLabel } from '../engine/perception';
 import { findByName, hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
 import { chebyshev, formatClock, hhmm } from '../engine/text';
 import type { Character, Fixture, LogEntry, WorldState } from '../engine/types';
@@ -7,7 +7,7 @@ import type { GmEvent } from '../gm/gm';
 import type { CostEvent } from '../gm/pricing';
 import type { Usage } from '../gm/provider';
 import type { ModelOption } from './api';
-import { INPUT_ICON, escapeHtml, formatNarration, formatPlayerInput, inline, type Speaker } from './format';
+import { INPUT_ICON, capitalize, escapeHtml, formatNarration, formatPlayerInput, inline, type Speaker } from './format';
 import { randomPremise } from './premises';
 import type { PlaybackState } from './playback';
 import { hash } from './props';
@@ -319,17 +319,23 @@ export class Ui {
     const player = world?.playerId ? world.characters[world.playerId] : null;
     if (!world || !player?.pos) return;
     const reach = world.ruleset.speech.cochicho?.reach ?? 2;
+    const view = perceptionOf(world, world.playerId);
+    // Quem ele sabe quem é, pelo nome; estranhos que ele vê, pela descrição; vultos que não reconhece ficam de fora.
     const people = Object.values(world.characters)
-      .filter((c) => !c.isPlayer && c.pos && c.locationId === player.locationId)
+      .filter((c) => !c.isPlayer && c.pos && c.locationId === player.locationId && (view.recognize(c.id) || view.sight(c.id) === 'nitido'))
       .map((c) => ({ c, d: chebyshev(player.pos!, c.pos!) }))
       .sort((x, y) => x.d - y.d);
     const first = (c: Character) => c.name.split(' ')[0];
     const items = people.map(({ c, d }) => {
       const b = el('button', 'whisper-option');
       b.type = 'button';
-      // Primeiro nome, ou o id se outro presente tiver o mesmo primeiro nome.
-      const ref = people.filter((p) => first(p.c) === first(c)).length > 1 ? c.id : first(c);
-      b.append(el('strong', '', c.name), el('span', 'muted', d <= reach ? 'ao seu lado' : `a ${d} passos; o mestre leva você até lá`));
+      const known = view.recognize(c.id);
+      // Primeiro nome, ou o id se outro presente tiver o mesmo primeiro nome; estranho, @[descrição].
+      const ref = !known ? `[${strangerLabel(c)}]` : people.filter((p) => first(p.c) === first(c)).length > 1 ? c.id : first(c);
+      b.append(
+        el('strong', '', known ? c.name : capitalize(strangerLabel(c))),
+        el('span', 'muted', d <= reach ? 'ao seu lado' : `a ${d} passos; o mestre leva você até lá`),
+      );
       b.addEventListener('click', () => {
         menu.hidden = true;
         this.wrap(`@${ref} "`, '"');
@@ -355,9 +361,12 @@ export class Ui {
           const target = world ? findByName(world, s.target ?? '') : null;
           const reach = world?.ruleset.speech.cochicho?.reach ?? 2;
           const d = target?.pos && player?.pos && target.locationId === player.locationId ? chebyshev(target.pos, player.pos) : null;
-          text = `${target ? target.name.split(' ')[0] : `${s.target}?`}: ${s.text}`;
+          // Primeiro nome de quem ele sabe quem é; de um estranho, a descrição inteira.
+          const known = target && world ? perceptionOf(world, world.playerId).recognize(target.id) : null;
+          const who = target && world ? (known ? target.name.split(' ')[0] : shownAs(world, target)) : null;
+          text = `${who ?? `${s.target}?`}: ${s.text}`;
           if (!target) chip.classList.add('warn');
-          chip.title = !target ? 'Ninguém com esse nome aqui.' : d !== null && d > reach ? `${target.name} está a ${d} passos: o mestre leva você até lá.` : '';
+          chip.title = !target ? 'Ninguém com esse nome aqui.' : d !== null && d > reach ? `${capitalize(who!)} está a ${d} passos: o mestre leva você até lá.` : '';
         }
         if (s.kind === 'pensamento') chip.title = 'Só você ouve, a não ser quem lê mentes.';
         chip.textContent = `${INPUT_ICON[s.kind]} ${text.length > 60 ? `${text.slice(0, 59)}…` : text}`;
@@ -486,31 +495,41 @@ export class Ui {
     if (pick.kind === 'character') {
       const c = world.characters[pick.id];
       if (!c) return this.closeInspector();
-      const sight = c.isPlayer ? 'nitido' : perceptionOf(world, world.playerId).sight(c.id);
-      if (sight !== 'nitido') {
+      const view = perceptionOf(world, world.playerId);
+      const sight = c.isPlayer ? 'nitido' : view.sight(c.id);
+      // Sabe quem é pelo rosto ou pela voz; sem isso, é um estranho (se o vê) ou um vulto.
+      const known = c.isPlayer ? 'rosto' : view.recognize(c.id);
+      const truth = () => {
+        const box = el('div', 'backstage-only');
+        box.append(el('p', 'hint', `Na verdade (bastidores): ${c.name}, ${c.role}`));
+        return box;
+      };
+      if (!known && sight !== 'nitido') {
         body.append(
           el('h3', '', sight === 'vulto' ? 'Um vulto' : 'Alguém?'),
           el('p', 'muted', sight === 'vulto' ? 'Está escuro demais para ver quem é.' : 'Você não enxerga quem está aí.'),
+          truth(),
         );
-        const box = el('div', 'backstage-only');
-        box.append(el('p', 'hint', `Na verdade (bastidores): ${c.name}, ${c.role}`));
-        body.append(box);
         actions.push(['Ir até lá', 'Vou, com cuidado, na direção do vulto.']);
         return this.openInspector(body, actions);
       }
-      body.append(el('h3', '', c.name), el('p', 'muted', c.role), el('p', '', c.appearance));
-      if (c.traits.length) body.append(this.traits(c.traits));
-      if (c.detail === 'full') {
-        if (c.personality) body.append(el('p', '', c.personality));
-        if (c.background) body.append(el('p', 'muted', c.background));
-      } else body.append(el('p', 'hint', 'Ainda um esboço: o mestre aprofunda quando a pessoa ficar importante.'));
+      const stranger = strangerLabel(c);
+      if (known) body.append(el('h3', '', c.name), el('p', 'muted', c.role));
+      else body.append(el('h3', '', capitalize(stranger)), el('p', 'muted', 'Você não sabe quem é.'), truth());
+      body.append(sight === 'nitido' ? el('p', '', c.appearance) : el('p', 'muted', 'Está escuro demais para ver, mas você reconhece a voz.'));
+      if (known) {
+        if (c.traits.length) body.append(this.traits(c.traits));
+        if (c.detail === 'full') {
+          if (c.personality) body.append(el('p', '', c.personality));
+          if (c.background) body.append(el('p', 'muted', c.background));
+        } else body.append(el('p', 'hint', 'Ainda um esboço: o mestre aprofunda quando a pessoa ficar importante.'));
+      }
       const held = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === c.id);
-      if (held.length) body.append(el('p', 'muted', `Com: ${held.map((i) => i.name).join(', ')}`));
+      if (held.length && sight === 'nitido') body.append(el('p', 'muted', `Com: ${held.map((i) => i.name).join(', ')}`));
       if (!c.isPlayer) {
-        const view = perceptionOf(world, world.playerId);
         const stats = statTexts(world, c);
         const visible = stats.filter((s) => view.canSeeStat(s.id, c.id)).map((s) => s.text);
-        if (visible.length) body.append(el('p', 'muted', visible.join(' · ')));
+        if (visible.length && sight === 'nitido') body.append(el('p', 'muted', visible.join(' · ')));
         if (c.thoughts && view.canSeeThoughts(c.id)) body.append(el('p', 'thought', `💭 ${c.thoughts}`));
         // Bastidores: tudo o que o mestre sabe sobre o NPC.
         const box = el('div', 'backstage-only');
@@ -522,9 +541,16 @@ export class Ui {
         if (secrets.length) box.append(el('p', 'hint', `Sabe (bastidores): ${secrets.map((f) => f.text).join(' · ')}`));
         body.append(box);
       }
-      if (!c.isPlayer) {
+      if (!c.isPlayer && known) {
         const first = c.name.split(' ')[0];
         actions.push([`Falar com ${first}`, `Digo a ${first}: "`], [`Sussurrar para ${first}`, `@${first} "`], [`Ir até ${first}`, `Vou até ${first}.`]);
+      } else if (!c.isPlayer) {
+        actions.push(
+          ['Falar', `Digo para ${stranger}: "`],
+          ['Perguntar o nome', `Pergunto para ${stranger}: "Desculpe, qual é o seu nome?"`],
+          ['Sussurrar', `@[${stranger}] "`],
+          ['Ir até lá', `Vou até ${stranger}.`],
+        );
       }
     } else if (pick.kind === 'fixture') {
       const loc = Object.values(world.locations).find((l) => l.fixtures.some((fx) => fx.id === pick.id));
@@ -543,7 +569,7 @@ export class Ui {
       const on = Object.values(world.items).filter((i) => i.holder.kind === 'fixture' && i.holder.id === f.id);
       if (on.length) body.append(el('p', 'muted', `Aqui: ${on.map((i) => i.name).join(', ')}`));
       const sitter = Object.values(world.characters).find((c) => c.seatId === f.id);
-      if (sitter) body.append(el('p', 'muted', `Ocupado por ${sitter.name}`));
+      if (sitter) body.append(el('p', 'muted', `Ocupado por ${shownAs(world, sitter)}`));
       const noun = `${MASCULINE.has(f.kind) ? 'o' : 'a'} ${f.kind === 'board' ? 'quadro' : f.label}`;
       actions.push([`Ir até ${noun}`, `Vou até ${noun}.`]);
       if (f.kind === 'board') actions.push(['Escrever no quadro', 'Escrevo no quadro: "']);
@@ -710,6 +736,13 @@ export class Ui {
     }
     journal.replaceChildren(...parts);
   }
+}
+
+/** Como o jogador chama alguém agora: o nome, se sabe quem é; senão, o que vê dele. */
+function shownAs(world: WorldState, c: Character): string {
+  const view = perceptionOf(world, world.playerId);
+  if (c.isPlayer || view.recognize(c.id)) return c.name;
+  return view.sight(c.id) === 'nitido' ? strangerLabel(c) : 'alguém';
 }
 
 /** Móveis de nome masculino, para o artigo do texto pronto ("vou até o sofá"). */

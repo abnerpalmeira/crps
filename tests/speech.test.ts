@@ -17,6 +17,7 @@ function room(): GameEngine {
   e.createCharacter({ name: 'Haruto Mori', role: 'aluno', appearance: '', position: { seat: 'sala/carteira-1' } });
   e.createCharacter({ name: 'Yuki Sato', role: 'aluna', appearance: '', position: { seat: 'sala/carteira-2' } });
   e.createCharacter({ name: 'Mei Kato', role: 'aluna', appearance: '', position: { seat: 'sala/carteira-15' } });
+  e.introduce({ group: ['kenji', 'haruto', 'yuki', 'mei'] });
   return e;
 }
 

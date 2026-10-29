@@ -126,6 +126,8 @@ export interface Character {
   figure?: Figure;
   /** Visual no catálogo 3D, escolhido pelo mestre; a aparência descreve esse modelo. */
   look?: string;
+  /** Como quem não o conhece o chama, pelo que vê ("o homem de terno"). */
+  seenAs?: string;
   traits: string[];
   attributes: Record<string, number>;
   skills: Record<string, number>;
@@ -144,6 +146,10 @@ export interface Character {
   pos: Pos | null;
   facing: Dir;
   seatId: string | null;
+  /** Quem ele conhece (sabe o nome, reconhece o rosto e a voz): as arestas do grafo de conhecidos. */
+  knows: string[];
+  /** Conhecidos que ele ouviu falar onde está (id de quem falou → local): sabe quem é mesmo sem ver. */
+  voices: Record<string, string>;
 }
 
 export type ItemHolder =

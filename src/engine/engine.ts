@@ -2,6 +2,7 @@ import { MAX_FRAMES, snapshotScene } from './frames';
 import { EXIT_KINDS, FLOOR_EXITS, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, type LocationSpec } from './layout';
 import { DEFAULT_VISION, sightOf, type Sight } from './perception';
 import { parseDice, pickMany, randInt, rollDice } from './rng';
+import { analyzeSpeech } from './speech';
 import { buildTemplate, type TemplateName, type TemplateOptions } from './templates';
 import { addMinutes, chebyshev, clockMinutes, dirTowards, fold, formatClock, hhmm, parseHHMM, slugify } from './text';
 import type {
@@ -132,13 +133,36 @@ function migrate(state: WorldState): WorldState {
   }
   for (const r of rules.resources) r.visibility ??= 'self';
   ensureCoreResources(rules);
+  // Grafo de conhecidos: antes dele todos apareciam pelo nome, então nos saves antigos todos se conhecem.
+  const ids = Object.keys(state.characters);
+  let voicesMissing = false;
   for (const c of Object.values(state.characters)) {
     c.perks ??= [];
     c.conditions ??= [];
     c.thoughts ??= null;
     for (const r of rules.resources) c.resources[r.id] ??= r.max;
+    c.knows ??= ids.filter((id) => id !== c.id);
+    if (!c.voices) {
+      c.voices = {};
+      voicesMissing = true;
+    }
   }
+  // E as vozes da última narração: quem ouviu um conhecido falar continua sabendo quem é.
+  const last = voicesMissing ? state.log.findLast((e) => e.kind === 'narration') : undefined;
+  if (last) hearVoices(state, analyzeSpeech(state, last.text).lines);
   return state;
+}
+
+/** Quem ouve um conhecido falar sabe quem é, mesmo sem ver, enquanto os dois seguirem ali. */
+function hearVoices(state: WorldState, lines: { speakerId: string; hearers: string[] }[]): void {
+  for (const line of lines) {
+    const at = state.characters[line.speakerId]?.locationId;
+    if (!at) continue;
+    for (const id of line.hearers) {
+      const c = state.characters[id];
+      if (c && id !== line.speakerId && c.knows.includes(line.speakerId)) c.voices[line.speakerId] = at;
+    }
+  }
 }
 
 export interface AttributeInput {
@@ -231,6 +255,7 @@ export interface CharacterInput {
   appearance: string;
   figure?: Figure;
   look?: string;
+  seen_as?: string;
   traits?: string[];
   is_player?: boolean;
   attributes?: Record<string, number>;
@@ -254,6 +279,7 @@ export interface CharacterUpdate {
   appearance?: string;
   figure?: Figure;
   look?: string;
+  seen_as?: string;
   traits_add?: string[];
   traits_remove?: string[];
   personality?: string;
@@ -1119,6 +1145,7 @@ export class GameEngine {
       appearance: input.appearance,
       ...(input.figure ? { figure: input.figure } : {}),
       ...(input.look ? { look: input.look } : {}),
+      ...(input.seen_as ? { seenAs: input.seen_as } : {}),
       traits: input.traits ?? [],
       attributes,
       skills: this.statBlock('perícia', input.skills, null),
@@ -1134,6 +1161,8 @@ export class GameEngine {
       pos: null,
       facing: 'S',
       seatId: null,
+      knows: [],
+      voices: {},
     };
     if (!input.offscreen) {
       const locId = input.location_id ?? this.player?.locationId ?? this.lastLocationId();
@@ -1197,6 +1226,11 @@ export class GameEngine {
         if (!path) throw new EngineError(`${c.name} não tem caminho de (${c.pos.x},${c.pos.y}) até (${spot.pos.x},${spot.pos.y}).`);
       }
     }
+    // Quem muda de local deixa para trás as vozes que ouviu, e os outros perdem a dele.
+    if (changing) {
+      c.voices = {};
+      for (const o of Object.values(this.state.characters)) delete o.voices[c.id];
+    }
     c.locationId = targetLoc.id;
     c.pos = spot.pos;
     c.seatId = spot.seatId;
@@ -1215,6 +1249,34 @@ export class GameEngine {
     };
   }
 
+  /**
+   * Grafo de conhecidos: todos do group passam a se conhecer; com who e knows, cada um de who
+   * passa a conhecer cada um de knows (e o contrário, salvo mutual false). Conhecer é saber o nome
+   * e reconhecer o rosto e a voz.
+   */
+  introduce(input: { group?: string[]; who?: string[]; knows?: string[]; mutual?: boolean }) {
+    const group = (input.group ?? []).map((ref) => this.findCharacter(ref));
+    const who = (input.who ?? []).map((ref) => this.findCharacter(ref));
+    const known = (input.knows ?? []).map((ref) => this.findCharacter(ref));
+    if (group.length < 2 && !(who.length && known.length)) throw new EngineError('Informe group (duas pessoas ou mais) ou who e knows.');
+    const pairs: [Character, Character][] = group.flatMap((a) => group.map((b): [Character, Character] => [a, b]));
+    for (const a of who) {
+      for (const b of known) pairs.push([a, b], ...(input.mutual === false ? [] : [[b, a] as [Character, Character]]));
+    }
+    const added: { who: string; knows: string }[] = [];
+    for (const [a, b] of pairs) {
+      if (a.id === b.id || a.knows.includes(b.id)) continue;
+      a.knows.push(b.id);
+      added.push({ who: a.id, knows: b.id });
+    }
+    return { added };
+  }
+
+  /** Depois da narração: quem ouviu um conhecido falar passa a saber quem é, mesmo no escuro. */
+  hearVoices(lines: { speakerId: string; hearers: string[] }[]): void {
+    hearVoices(this.state, lines);
+  }
+
   updateCharacter(input: CharacterUpdate) {
     const c = this.findCharacter(input.character_id);
     const changes: string[] = [];
@@ -1228,6 +1290,10 @@ export class GameEngine {
     if (input.figure !== undefined && input.figure !== c.figure) {
       c.figure = input.figure;
       changes.push('figure');
+    }
+    if (input.seen_as !== undefined && input.seen_as !== c.seenAs) {
+      c.seenAs = input.seen_as;
+      changes.push('seen_as');
     }
     if (input.traits_add?.length) {
       c.traits.push(...input.traits_add.filter((t) => !c.traits.includes(t)));

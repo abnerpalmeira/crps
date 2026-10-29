@@ -22,6 +22,7 @@ function school(): GameEngine {
   for (const name of ['Yuki Sato', 'Haruto Mori', 'Ren Ito']) {
     e.createCharacter({ name, role: 'aluno', appearance: '', position: { seat: 'random' } });
   }
+  e.introduce({ group: Object.keys(e.state.characters) });
   return e;
 }
 
@@ -96,7 +97,7 @@ describe('regras que evoluem', () => {
       /"mana" não é atributo nem recurso/,
     );
     expect(runTool(e, 'extend_ruleset', { reason: 'x', attributes: [{ name: 'Carisma', description: '' }] }).content).toMatch(/Já existe/);
-    expect(toolSpecs()).toHaveLength(19);
+    expect(toolSpecs()).toHaveLength(20);
   });
 });
 

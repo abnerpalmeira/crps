@@ -1,10 +1,13 @@
 import { conditionDefsOf, grantsOf, perkDefsOf } from './effects';
 import { lightAt, type LightSource } from './light';
 import { chebyshev } from './text';
-import type { PerkDef, PerkGrant, Pos, SpeechMode, VisionRules, WorldState } from './types';
+import type { Character, Figure, PerkDef, PerkGrant, Pos, SpeechMode, VisionRules, WorldState } from './types';
 
 /** Quanto alguém enxerga de algo: nítido, só um vulto, ou nada. */
 export type Sight = 'nitido' | 'vulto' | 'nada';
+
+/** Como alguém sabe quem é outro agora: pelo rosto (vê nítido), pela voz (ouviu falar ali) ou não sabe. */
+export type Recognition = 'rosto' | 'voz' | null;
 
 export const DEFAULT_VISION: VisionRules = { clear: 0.35, dim: 0.12, dimPenalty: 1, blindPenalty: 3 };
 
@@ -15,6 +18,38 @@ export interface Perception {
   canSeeStat(statId: string, targetId: string): boolean;
   canSeeThoughts(targetId: string): boolean;
   sight(targetId: string): Sight;
+  /** Sabe o nome: está no grafo de conhecidos dele. */
+  knows(targetId: string): boolean;
+  /** Sabe quem é agora: conhece e vê o rosto, ou conhece e ouviu a voz ali. */
+  recognize(targetId: string): Recognition;
+}
+
+const STRANGER: Record<Figure, string> = { adulto: 'o homem', adulta: 'a mulher', menino: 'o garoto', menina: 'a garota' };
+const VOICE: Record<Figure, string> = { adulto: 'uma voz de homem', adulta: 'uma voz de mulher', menino: 'uma voz de garoto', menina: 'uma voz de garota' };
+
+/** Sabe o nome de alguém: é ele mesmo, não há observador, ou está no grafo de conhecidos. */
+export function knowsName(world: WorldState, viewerId: string | null, targetId: string): boolean {
+  return !viewerId || viewerId === targetId || Boolean(world.characters[viewerId]?.knows?.includes(targetId));
+}
+
+/** Como quem não conhece alguém o chama, pelo que vê: o seen_as do mestre, ou o corpo. */
+export function strangerLabel(c: Character): string {
+  return c.seenAs?.trim() || (c.figure ? STRANGER[c.figure] : 'alguém');
+}
+
+/** Uma voz que o ouvinte não sabe de quem é. */
+export function voiceLabel(c: Character): string {
+  return c.figure ? VOICE[c.figure] : 'uma voz';
+}
+
+/** Sabe quem é agora: pelo rosto, se conhece e vê nítido; pela voz, se conhece e o ouviu falar ali. */
+export function recognitionOf(world: WorldState, viewerId: string, targetId: string): Recognition {
+  if (viewerId === targetId) return 'rosto';
+  if (!knowsName(world, viewerId, targetId)) return null;
+  if (sightOf(world, viewerId, targetId) === 'nitido') return 'rosto';
+  const viewer = world.characters[viewerId];
+  const at = viewer?.voices?.[targetId];
+  return at && at === viewer.locationId && at === world.characters[targetId]?.locationId ? 'voz' : null;
 }
 
 /** Id do recurso universal de vida (o mestre pode tê-lo chamado de "hp", por exemplo). */
@@ -148,5 +183,7 @@ export function perceptionOf(world: WorldState, viewerId: string | null): Percep
     },
     canSeeThoughts: (targetId) => Boolean(viewerId) && targetId !== viewerId && perceives(world, viewerId!, targetId, 'mente', 0),
     sight: (targetId) => (viewerId ? sightOf(world, viewerId, targetId) : 'nitido'),
+    knows: (targetId) => knowsName(world, viewerId, targetId),
+    recognize: (targetId) => (viewerId ? recognitionOf(world, viewerId, targetId) : 'rosto'),
   };
 }

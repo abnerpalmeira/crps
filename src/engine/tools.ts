@@ -3,9 +3,9 @@ import { EngineError, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { legendSummary } from './layout';
 import { TEMPLATES } from './templates';
 import { lightLabel } from './light';
-import { perceptionOf } from './perception';
+import { knowsName, perceptionOf, strangerLabel } from './perception';
 import { truncate } from './text';
-import type { Fact } from './types';
+import type { Fact, ItemHolder } from './types';
 
 /**
  * A API que o modelo enxerga. Cada tool valida a entrada com zod, chama o
@@ -26,6 +26,19 @@ function tool<S extends z.ZodType>(def: ToolDef<S>): ToolDef<S> {
 /** Fatos que o personagem do jogador não conhece aparecem só nos bastidores (🤫). */
 function playerKnows(engine: GameEngine, fact: Fact): boolean {
   return engine.player ? engine.knows(engine.player.id, fact) : fact.knownBy === 'all';
+}
+
+/** Como o jogador chama alguém nos chips: pelo nome, se o conhece; senão, pelo que vê ("o homem de terno"). */
+function shownName(engine: GameEngine, id: string, first = false): string {
+  const c = engine.state.characters[id];
+  if (!c) return id;
+  if (!knowsName(engine.state, engine.state.playerId, id)) return strangerLabel(c);
+  return first ? c.name.split(' ')[0] : c.name;
+}
+
+/** Onde está um item, como o jogador diria: com quem, em que móvel ou no chão. */
+function shownHolder(engine: GameEngine, h: ItemHolder): string {
+  return h.kind === 'character' ? `com ${shownName(engine, h.id)}` : engine.describeHolder(h);
 }
 
 const statMap = z.record(z.string(), z.number());
@@ -96,7 +109,7 @@ const resourceInput = z.object({
 });
 
 /** Campos de personagem que qualquer um percebe; o resto de um NPC só aparece nos bastidores. */
-const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'figure', 'look', 'traits']);
+const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'figure', 'look', 'seen_as', 'traits']);
 
 const placement = z
   .object({
@@ -128,6 +141,10 @@ const characterInput = z.object({
   appearance: z.string().describe('Uma ou duas frases.'),
   figure: figure.optional(),
   look: look.optional(),
+  seen_as: z
+    .string()
+    .optional()
+    .describe('Como quem não conhece a pessoa a chama, pelo que vê, com artigo e em poucas palavras: "o homem de terno", "a moça de casaco vermelho".'),
   traits: z.array(z.string()).max(6).optional().describe('1 a 3 traços marcantes.'),
   is_player: z.boolean().optional(),
   attributes: statMap.optional().describe('Atributos do ruleset (0 a 5). Não informados ficam em 1.'),
@@ -308,7 +325,7 @@ export const TOOLS = [
     schema: z.object({ characters: z.array(characterInput).min(1).max(30) }),
     mutates: true,
     run(engine, input) {
-      const created: unknown[] = [];
+      const created: { id: string; name: string; location: string | null; position: unknown; seat: string | null }[] = [];
       const errors: unknown[] = [];
       input.characters.forEach((spec, index) => {
         try {
@@ -322,11 +339,40 @@ export const TOOLS = [
       if (!created.length) throw new EngineError(`Nenhum personagem criado: ${JSON.stringify(errors)}`);
       return {
         content: { created, errors },
-        summary: `🧑 ${created.length} personagem(ns)${errors.length ? `, ${errors.length} com erro` : ''}: ${input.characters
-          .map((c) => c.name)
+        summary: `🧑 ${created.length} personagem(ns)${errors.length ? `, ${errors.length} com erro` : ''}: ${created
+          .map((c) => shownName(engine, c.id))
           .slice(0, 6)
-          .join(', ')}${input.characters.length > 6 ? '…' : ''}`,
+          .join(', ')}${created.length > 6 ? '…' : ''}`,
       };
+    },
+  }),
+
+  tool({
+    name: 'introduce',
+    description:
+      'Registra quem conhece quem: conhecer é saber o nome e reconhecer o rosto e a voz. group: todos passam a se conhecer ' +
+      '(família, colegas de trabalho, a turma). who + knows: cada um de who passa a conhecer cada um de knows, e o contrário ' +
+      'também, salvo mutual false (alguém famoso, um espião que estudou o alvo). Na criação do mundo, registre quem já se ' +
+      'conhecia; no jogo, chame quando alguém se apresenta, é apresentado ou tem o nome revelado.',
+    schema: z.object({
+      group: z.array(z.string()).optional().describe('Ids ou nomes de quem se conhece, todos com todos.'),
+      who: z.array(z.string()).optional(),
+      knows: z.array(z.string()).optional(),
+      mutual: z.boolean().optional().describe('Com who + knows: false = só who passa a conhecer.'),
+    }),
+    mutates: true,
+    run(engine, input) {
+      const r = engine.introduce(input);
+      const player = engine.state.playerId;
+      const learned = r.added.filter((x) => x.who === player).map((x) => engine.state.characters[x.knows].name);
+      if (learned.length) return { content: r, summary: `🤝 Você conhece: ${learned.join(', ')}` };
+      const name = (id: string) => engine.state.characters[id].name.split(' ')[0];
+      const pairs = new Map<string, string>();
+      for (const x of r.added) {
+        const key = [x.who, x.knows].sort().join('|');
+        pairs.set(key, pairs.has(key) ? `${name(x.who)} ↔ ${name(x.knows)}` : `${name(x.who)} → ${name(x.knows)}`);
+      }
+      return { content: r, summary: `🤫 Conhecidos: ${[...pairs.values()].join(', ') || 'nada novo'}` };
     },
   }),
 
@@ -352,7 +398,7 @@ export const TOOLS = [
           })),
         },
         summary: `${conjured.some(Boolean) ? '✨' : '📦'} ${created
-          .map((i, k) => `${i.name} (${engine.describeHolder(i.holder)})${conjured[k] ? ` · ${conjured[k]!.name}` : ''}`)
+          .map((i, k) => `${i.name} (${shownHolder(engine, i.holder)})${conjured[k] ? ` · ${conjured[k]!.name}` : ''}`)
           .join('; ')}`,
       };
     },
@@ -403,7 +449,7 @@ export const TOOLS = [
     mutates: true,
     run(engine, input) {
       const r = engine.skillCheck(input);
-      const label = `🎲 ${r.character} · ${r.attribute.name}${r.skill ? ` + ${r.skill.id}` : ''} (${r.reason})`;
+      const label = `🎲 ${shownName(engine, r.character_id)} · ${r.attribute.name}${r.skill ? ` + ${r.skill.id}` : ''} (${r.reason})`;
       // Atributo que o jogador não vê (de um NPC, ou oculto): só os dados e o resultado.
       if (!perceptionOf(engine.state, engine.state.playerId).canSeeStat(r.attribute.id, r.character_id)) {
         return { content: r, summary: `${label}: ${r.rolls.join('+')} → ${r.degree}` };
@@ -441,6 +487,7 @@ export const TOOLS = [
       appearance: z.string().optional(),
       figure: figure.optional(),
       look: look.optional(),
+      seen_as: z.string().optional().describe('Como quem não conhece a pessoa a chama (mudou de roupa, tirou a máscara).'),
       traits_add: z.array(z.string()).optional(),
       traits_remove: z.array(z.string()).optional(),
       personality: z.string().optional(),
@@ -478,7 +525,7 @@ export const TOOLS = [
       }
       for (const id of r.attributes) (view.canSeeStat(id, c.id) ? shown : hidden).push(id);
       for (const x of r.resources) (view.canSeeStat(x.id, c.id) ? shown : hidden).push(`${x.id} ${x.before}→${x.after}/${x.max}`);
-      const summary = shown.length ? `✏️ ${c.name}: ${shown.join(', ')}` : `🤫 ${c.name}: ${hidden.join(', ') || 'sem mudanças'}`;
+      const summary = shown.length ? `✏️ ${shownName(engine, c.id)}: ${shown.join(', ')}` : `🤫 ${c.name}: ${hidden.join(', ') || 'sem mudanças'}`;
       return { content: r, summary };
     },
   }),
@@ -500,7 +547,7 @@ export const TOOLS = [
     mutates: true,
     run(engine, input) {
       const r = engine.moveCharacter(input);
-      const name = engine.findCharacter(r.character_id).name;
+      const name = shownName(engine, r.character_id);
       const where = r.to.seat ? r.to.seat.split('/').pop() : `(${r.to.x},${r.to.y})`;
       const { path: _path, ...content } = r;
       return { content, summary: `🚶 ${name} → ${where}${r.from?.location !== r.to.location ? ` em ${r.to.location}` : ''}` };
@@ -520,8 +567,10 @@ export const TOOLS = [
     }),
     mutates: true,
     run(engine, input) {
+      const before = { ...engine.findItem(input.item_id).holder };
       const r = engine.transferItem(input);
-      return { content: r, summary: `📦 ${r.name}${r.quantity > 1 ? ` ×${r.quantity}` : ''}: ${r.from} → ${r.to}` };
+      const after = engine.findItem(r.item_id).holder;
+      return { content: r, summary: `📦 ${r.name}${r.quantity > 1 ? ` ×${r.quantity}` : ''}: ${shownHolder(engine, before)} → ${shownHolder(engine, after)}` };
     },
   }),
 
@@ -626,7 +675,7 @@ export const TOOLS = [
       const r = engine.shareKnowledge(input);
       const fact = engine.findFact(r.fact_id);
       if (!r.learned.length) return { content: r, summary: `🤫 ninguém novo ficou sabendo de ${fact.id}` };
-      const names = r.learned.map((id) => engine.state.characters[id]?.name.split(' ')[0] ?? id);
+      const names = r.learned.map((id) => shownName(engine, id, true));
       return {
         content: r,
         summary: `${playerKnows(engine, fact) ? '👂' : '🤫'} ${names.join(', ')} agora sabe${names.length > 1 ? 'm' : ''}: ${truncate(fact.text, 60)}`,

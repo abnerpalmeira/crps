@@ -81,6 +81,7 @@ function setupSteps(): StepResult[] {
             ...STUDENTS.map(({ vida, ...s }) => ({ ...s, role: 'aluno(a) do 2º ano', position: { seat: 'random' }, ...(vida ? { resources: { vida } } : {}) })),
           ],
         }),
+        call('introduce', { group: ['voce', ...STUDENTS.map((s) => s.name)] }),
         call('create_items', {
           items: [
             { id: 'giz', name: 'Giz', description: 'um toco de giz branco, já gasto', holder: { character_id: 'voce' } },

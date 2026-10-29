@@ -17,6 +17,10 @@ export function speechHtml(speech: Pick<ParsedSpeech, 'text' | 'hidden'>): strin
   return speech.hidden ? `<em class="hidden-speech">🤫 ${escapeHtml(speech.text)}</em>` : inline(speech.text);
 }
 
+export function capitalize(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
 export interface Speaker {
   name: string;
   color: string;
@@ -34,13 +38,15 @@ export function formatNarration(text: string, speaker: (id: string) => Speaker |
     const speech = parseSpeechLine(line);
     if (speech) {
       flush();
-      const who = speaker(speech.speakerId);
-      const style = who ? ` style="color:${who.color}"` : '';
-      const to = speech.targetId ? (speaker(speech.targetId)?.name.split(' ')[0] ?? speech.targetId) : null;
+      // Quem o jogador não sabe quem é vem sem nome e sem a cor do personagem, que o entregaria.
+      const who = speech.alias ? null : speaker(speech.speakerId);
+      const name = speech.alias ? capitalize(speech.alias) : (who?.name ?? speech.speakerId);
+      const style = who ? ` style="color:${who.color}"` : speech.alias ? ' class="unknown"' : '';
+      const to = speech.targetId ? (speech.toAlias ?? speaker(speech.targetId)?.name.split(' ')[0] ?? speech.targetId) : null;
       const how = [speech.mode !== 'fala' ? speech.mode : '', to ? `→ ${to}` : ''].filter(Boolean).join(' ');
       const tag = how && !speech.hidden ? ` <span class="speech-mode">${escapeHtml(how)}</span>` : '';
       const via = speech.via ? ` <span class="speech-via" title="você percebeu graças a este perk">✦ ${escapeHtml(speech.via)}</span>` : '';
-      html.push(`<p class="speech"><b${style}>${escapeHtml(who?.name ?? speech.speakerId)}</b>${tag}${via} ${speechHtml(speech)}</p>`);
+      html.push(`<p class="speech"><b${style}>${escapeHtml(name)}</b>${tag}${via} ${speechHtml(speech)}</p>`);
     } else if (line.trim()) paragraph.push(line);
     else flush();
   }

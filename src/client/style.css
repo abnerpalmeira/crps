@@ -96,6 +96,10 @@ button {
   font-style: italic;
 }
 
+.name.stranger {
+  font-style: italic;
+}
+
 .name.player {
   background: var(--accent);
   color: var(--accent-ink);
@@ -683,6 +687,11 @@ body.backstage .chip.backstage {
 .narration p.speech b {
   margin-right: 6px;
   font-weight: 600;
+}
+
+.narration p.speech b.unknown {
+  color: var(--muted);
+  font-style: italic;
 }
 
 .turn-meta {

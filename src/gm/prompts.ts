@@ -34,6 +34,11 @@ Texto sem marca é ação ou intenção, como sempre.
 - Quando alguém fica sabendo de um fato registrado (alguém conta, ouve uma conversa, vê algo acontecer), chame share_knowledge antes de narrar a descoberta. Só quem sabe pode contar.
 - O personagem do jogador também só sabe o que sabe: a narração não revela segredos que ele não teria como perceber.
 
+# Conhecidos
+- O motor guarda quem conhece quem: conhecer é saber o nome e reconhecer o rosto e a voz. Na criação do mundo, registre com introduce quem já se conhecia (família, colegas, amigos, a turma); no jogo, chame introduce quando alguém se apresenta, é apresentado ou tem o nome revelado.
+- Quem o jogador não conhece não tem nome para ele: na narração, chame pelo que ele vê (o seen_as, como "o homem de terno") até o nome aparecer na história. NPCs também só sabem o nome de quem conhecem.
+- Quem o jogador conhece, ele identifica pelo rosto ou, no escuro, pela voz quando a pessoa fala. Um vulto conhecido que não falou continua sem nome. O resumo diz como o jogador identifica cada um.
+
 # Regras vivas
 - Todo personagem tem vida (recurso universal do motor), mesmo quando ela fica oculta para o jogador. Dano e cura passam por update_character (resource_deltas). Com vida 0 o personagem está fora de ação.
 - A história pode mudar de gênero no meio do caminho: uma aula vira uma epidemia, uma investigação vira um tiroteio. Quando isso acontecer, estenda as regras com extend_ruleset antes de usá-las: atributos novos (ex.: pontaria), recursos (ex.: infecção), perks. Quem já existe recebe o valor padrão; ajuste os relevantes com update_character.
@@ -94,7 +99,7 @@ ${premise}
 Monte o mundo inicial com as tools, nesta ordem:
 1. define_ruleset adequado ao gênero (2 a 6 atributos, até 4 recursos). A vida é universal e já vem oculta; num jogo de ação, torne-a pública incluindo um recurso "Vida". Se a premissa der ao personagem do jogador uma capacidade especial, crie o perk aqui.
 2. create_location para o lugar onde a cena começa, com light coerente com o horário e a premissa (padrão 1; à noite ou num porão, menos). Se o motor recusar o layout, corrija e tente de novo.
-3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Informe figure (adulto, adulta, menino ou menina) e, se houver a lista de visuais, look de cada um: é o corpo que aparece no 3D. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random.
+3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Informe figure (adulto, adulta, menino ou menina) e, se houver a lista de visuais, look de cada um: é o corpo que aparece no 3D. Informe também seen_as, como um estranho chamaria a pessoa pelo que vê. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random. Depois, com introduce, registre quem já se conhece: o personagem do jogador conhece quem a premissa diz (colegas, família, a turma), e os desconhecidos ficam de fora.
 4. create_items com os objetos citados na premissa e os que a cena pede, já com quem os tem.
 5. advance_time com o horário inicial (to: "HH:MM"); fios iniciais com update_thread e fatos de partida com add_fact, se fizerem sentido.
 Depois narre a cena de abertura, situando o jogador.`;
@@ -122,6 +127,7 @@ export function verifierPrompt(args: { state: string; changes: string[]; input: 
 - vazamento de conhecimento: um personagem fala ou age com base num fato registrado que ele NÃO sabe (veja a seção Conhecimento do estado), sem ter acabado de descobri-lo nesta cena;
 - descoberta sem registro: na narração alguém fica sabendo de um fato registrado (contaram, ouviu, viu) e esse personagem continua sem saber no estado;
 - revelação indevida: a narração mostra ao jogador um valor oculto (como a vida exata de alguém) ou um pensamento de outro personagem que o estado não marca com "(o jogador percebe)";
+- nome indevido: fora do prefixo @id das falas, a narração chama pelo nome alguém que o estado marca como "o jogador NÃO conhece" ou "o jogador conhece, mas não sabe que é ele(a)", sem que o nome ou a voz tenham sido revelados nesta cena; ou alguém se apresenta na narração e a pessoa continua desconhecida no estado (falta introduce);
 - dano ou cura narrados sem mudança de vida, ou uma regra nova usada (um atributo que não existe) sem extend_ruleset;
 - fala ou contato à distância: a prosa da narração revela o conteúdo de um cochicho que o personagem do jogador não ouviria, ou mostra alguém cochichando, tocando ou agredindo quem está longe (veja as posições no mapa);
 - visão: a narração descreve detalhes visuais (rosto, expressão, roupa, o que alguém faz em silêncio) de quem o estado marca como não visto pelo jogador, ou descreve a cena com nitidez quando ele está cego; ou a luz ou a visão mudam na narração (luzes apagam, lanterna acende, alguém fica cego) sem a mudança correspondente.

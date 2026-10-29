@@ -1,3 +1,4 @@
+import { strangerLabel } from './perception';
 import { fold } from './text';
 import type { Character, WorldState } from './types';
 
@@ -27,7 +28,8 @@ const PAIRS: Record<string, [close: string, kind: InputKind]> = {
 /** Palavras que só ligam as partes ("digo", "e então") e não são uma ação. */
 const GLUE = new Set(['e', 'entao', 'ai', 'depois', 'mas', 'enquanto', 'logo', 'eu', 'digo', 'falo', 'pergunto', 'respondo', 'penso', 'sussurro', 'cochicho']);
 
-const WHISPER = /^@([\p{L}\p{N}_-]+)\s*[:,]?\s*(["“])/u;
+/** @Nome "…", ou @[o homem de terno] "…" para quem o jogador não sabe o nome. */
+const WHISPER = /^@(?:\[([^\]]+)\]|([\p{L}\p{N}_-]+))\s*[:,]?\s*(["“])/u;
 
 export function parsePlayerInput(input: string): InputSegment[] {
   const out: InputSegment[] = [];
@@ -59,10 +61,10 @@ export function parsePlayerInput(input: string): InputSegment[] {
       pending = '';
       // Marca sem fechamento vai até o fim da linha.
       const start = whisper ? i + whisper[0].length : i + 1;
-      const close = whisper ? (whisper[2] === '“' ? '”' : '"') : pair![0];
+      const close = whisper ? (whisper[3] === '“' ? '”' : '"') : pair![0];
       const end = line.indexOf(close, start);
       const text = line.slice(start, end < 0 ? undefined : end).trim();
-      push(whisper ? { kind: 'sussurro', target: whisper[1], text } : { kind: pair![1], text });
+      push(whisper ? { kind: 'sussurro', target: (whisper[1] ?? whisper[2]).trim(), text } : { kind: pair![1], text });
       i = end < 0 ? line.length : end + 1;
     }
     free(pending);
@@ -75,12 +77,12 @@ export function hasMarks(segments: InputSegment[]): boolean {
   return segments.some((s) => !s.free);
 }
 
-/** Personagem pelo id, nome completo ou primeiro nome, de preferência no mesmo local do jogador. */
+/** Personagem pelo id, nome completo, primeiro nome ou descrição de estranho, de preferência no mesmo local do jogador. */
 export function findByName(world: WorldState, ref: string): Character | null {
   const f = fold(ref);
   const here = world.playerId ? world.characters[world.playerId]?.locationId : null;
   const matches = Object.values(world.characters).filter(
-    (c) => !c.isPlayer && (c.id === f || fold(c.name) === f || fold(c.name.split(' ')[0]) === f),
+    (c) => !c.isPlayer && (c.id === f || fold(c.name) === f || fold(c.name.split(' ')[0]) === f || fold(strangerLabel(c)) === f),
   );
   return matches.find((c) => c.locationId === here) ?? matches[0] ?? null;
 }

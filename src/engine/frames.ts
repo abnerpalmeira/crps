@@ -3,13 +3,14 @@ import type { SceneFrame, WorldState } from './types';
 /** Um passo do replay de um turno: a ação do jogador, uma fala ou um trecho de narração. */
 export type Beat =
   | { kind: 'input'; text: string }
-  | { kind: 'speech'; speakerId: string; text: string; mode: string; targetId: string | null; hidden: boolean; via: string | null }
+  | { kind: 'speech'; speakerId: string; text: string; mode: string; targetId: string | null; hidden: boolean; via: string | null; alias: string | null; toAlias: string | null }
   | { kind: 'narration'; text: string };
 
 /**
  * Fala na narração do mestre: `@id: texto`, `@id[>alvo]: texto`, `@id[cochicho>alvo]: texto`.
- * Na versão do jogador, `|oculto` marca a fala que ele não ouviu (o texto vira só o gesto) e
- * `|via Perk` a que ele só percebeu graças a um perk.
+ * Na versão do jogador, notas depois de `|`: `oculto` marca a fala que ele não ouviu (o texto
+ * vira só o gesto), `via Perk` a que ele só percebeu graças a um perk, e `como …` e `para …` como
+ * ele chama quem fala e o alvo quando não sabe quem são.
  */
 export const SPEECH_LINE = /^\s*@([a-z0-9_]+)(?:\[([a-z0-9_]*)(?:>([a-z0-9_]+))?(?:\|([^\]]+))?\])?\s*:\s*(.+)$/i;
 
@@ -19,19 +20,26 @@ export interface ParsedSpeech {
   targetId: string | null;
   hidden: boolean;
   via: string | null;
+  /** Como o jogador chama quem fala, quando não sabe quem é ("uma voz de homem"). */
+  alias: string | null;
+  /** Como o jogador chama o alvo, quando não sabe quem é. */
+  toAlias: string | null;
   text: string;
 }
 
 export function parseSpeechLine(line: string): ParsedSpeech | null {
   const m = SPEECH_LINE.exec(line);
   if (!m) return null;
-  const note = m[4]?.trim() ?? '';
+  const notes = (m[4] ?? '').split('|').map((n) => n.trim());
+  const note = (prefix: string) => notes.find((n) => n.startsWith(prefix))?.slice(prefix.length).trim() || null;
   return {
     speakerId: m[1].toLowerCase(),
     mode: (m[2] || 'fala').toLowerCase(),
     targetId: m[3]?.toLowerCase() ?? null,
-    hidden: note === 'oculto',
-    via: note.startsWith('via ') ? note.slice(4).trim() : null,
+    hidden: notes.includes('oculto'),
+    via: note('via '),
+    alias: note('como '),
+    toAlias: note('para '),
     text: m[5].trim(),
   };
 }

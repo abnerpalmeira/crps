@@ -21,7 +21,10 @@ describe('corpo do personagem no 3D', () => {
     });
     expect(r.ok).toBe(true);
     expect(e.state.characters.yuki.figure).toBe('menina');
-    expect(runTool(e, 'update_character', { character_id: 'yuki', figure: 'adulta' }).summary).toBe('✏️ Yuki Sato: figure');
+    // Antes de se conhecerem, o professor só sabe o que vê.
+    expect(runTool(e, 'update_character', { character_id: 'yuki', figure: 'adulta' }).summary).toBe('✏️ a mulher: figure');
+    runTool(e, 'introduce', { group: ['kenji', 'yuki'] });
+    expect(runTool(e, 'update_character', { character_id: 'yuki', figure: 'menina' }).summary).toBe('✏️ Yuki Sato: figure');
     expect(runTool(e, 'update_character', { character_id: 'yuki', figure: 'robô' }).ok).toBe(false);
   });
 

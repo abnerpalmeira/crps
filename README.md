@@ -98,7 +98,7 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   layout.ts     layout ASCII → local validado (paredes, conectividade, acesso, orientação)
   templates.ts  layouts prontos: saguão de prédio e corredor de andar
   engine.ts     regras: posicionamento, caminhos, alcance, testes, fatos, tempo
-  tools.ts      as 19 tools (schemas zod → JSON Schema) e a execução atômica
+  tools.ts      as 20 tools (schemas zod → JSON Schema) e a execução atômica
   effects.ts    efeitos de perks e condições de cada personagem
   light.ts      luz por tile: ambiente do local, itens acesos e poderes de luz
   perception.ts o que cada um percebe (visibilidade, sentidos, visão e perks)
@@ -160,6 +160,7 @@ Princípios que o motor impõe:
 | `extend_ruleset` | Regras novas no meio da campanha e mudanças de visibilidade |
 | `create_location` | Local a partir de layout ASCII |
 | `create_characters` | Personagens em lote (`seat: "random"` senta em assento livre) |
+| `introduce` | Quem conhece quem: sabe o nome e reconhece o rosto e a voz |
 | `create_items` | Itens no inventário, sobre um móvel ou no chão |
 | `random` | Sorteios (intervalo, lista ou dados) |
 | `skill_check` | Teste resolvido pelo motor |
@@ -267,6 +268,31 @@ aponta narração que descreve o que ele não poderia enxergar.
 Na demo offline dá para testar sem gastar tokens: "Apago a luz e pego a lanterna", "Faço o
 experimento de química" e "Acendo a luz". "Tiro uma bomba de fedor do bolso" mostra o motor
 barrando um item que o jogador não tem.
+
+### Conhecidos
+
+O motor guarda um grafo de quem conhece quem (`Character.knows`). Conhecer é saber o nome e
+reconhecer o rosto e a voz. Na criação, o mestre registra com `introduce` quem já se conhecia
+(`group` para todos com todos; `who` + `knows` para pares, com `mutual: false` quando só um lado
+conhece). No jogo, ele chama `introduce` quando alguém se apresenta ou é apresentado.
+
+O jogador sabe quem é alguém quando o conhece e o vê com nitidez, ou quando o conhece e o ouviu
+falar ali (`Character.voices`, que se apaga quando um dos dois muda de local). Fora disso:
+
+| Situação | No chat, nos chips e no 3D |
+|---|---|
+| Estranho visto com clareza | a descrição que o mestre deu (`seen_as`): "o homem de terno" |
+| Estranho no escuro que fala | "uma voz de homem" (ou de mulher, pelo corpo) |
+| Conhecido no escuro que fala | o nome: ele reconhece a voz, e o clique diz isso |
+| Conhecido no escuro que não falou | "?", e "Um vulto" no clique |
+| Quem o jogador nem vê nem ouve | nada; até o gesto de um cochicho some |
+
+A troca acontece no servidor, em notas da linha de fala (`@otavio[fala|como uma voz de
+homem]: …`), então o chat também não pinta a fala com a cor do personagem. Para sussurrar a um
+estranho, o jogador usa a descrição: `@[o homem de terno] "…"`. O resumo do turno diz ao mestre
+quem o jogador conhece e como o identifica agora, e o verificador aponta narração que chama pelo
+nome quem ele não conhece ou não identifica. Saves de antes do grafo carregam com todos se
+conhecendo, como era, e com as vozes da última narração.
 
 ### Modelos 3D (Synty)
 

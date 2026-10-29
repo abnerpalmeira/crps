@@ -1,7 +1,7 @@
 import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { LEGEND } from './layout';
 import { lightAt, lightLabel, lightSources } from './light';
-import { perceives, perceptionOf, visionOf } from './perception';
+import { perceives, perceptionOf, strangerLabel, visionOf, type Perception } from './perception';
 import { formatClock, truncate } from './text';
 import type { Character, DifficultyName, Location, PerkDef, Visibility } from './types';
 
@@ -24,6 +24,23 @@ export function renderMap(engine: GameEngine, loc: Location): { map: string; mar
   const units = ' '.repeat(pad) + cols.map((x) => String(x % 10)).join('');
   const rows = grid.map((row, y) => `${String(y).padStart(pad - 1)} ${row.join('')}`);
   return { map: [tens, units, ...rows].filter((l) => l !== null).join('\n'), markers };
+}
+
+/** Se o jogador sabe quem é: estranho para ele, conhecido que ele só reconhece pela voz, ou que ele não identifica agora. */
+function identity(view: Perception, c: Character, hasPlayer: boolean): string {
+  if (!hasPlayer || c.isPlayer) return '';
+  if (!view.knows(c.id)) return `; o jogador NÃO conhece: para ele é "${strangerLabel(c)}"`;
+  const how = view.recognize(c.id);
+  return how === 'voz' ? '; o jogador reconhece pela voz' : how ? '' : '; o jogador conhece, mas não sabe que é ele(a)';
+}
+
+/** Quem, dos presentes, o personagem conhece. */
+function acquaintances(c: Character, present: Character[]): string {
+  const others = present.filter((o) => o.id !== c.id);
+  if (!others.length) return '';
+  const known = others.filter((o) => c.knows.includes(o.id));
+  if (known.length === others.length) return '; conhece todos aqui';
+  return known.length ? `; conhece aqui: ${known.map((o) => o.name.split(' ')[0]).join(', ')}` : '; não conhece ninguém aqui';
 }
 
 function shortId(loc: Location, id: string): string {
@@ -153,7 +170,8 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     out.push(`\nMóveis:\n${lines.join('\n') || '(nenhum)'}`);
 
     const view = perceptionOf(s, s.playerId);
-    const people = engine.charactersIn(loc.id).map((c) => {
+    const present = engine.charactersIn(loc.id);
+    const people = present.map((c) => {
       sceneIds.add(c.id);
       const mind = c.thoughts ? `; pensa${view.canSeeThoughts(c.id) ? ' (o jogador percebe)' : ''}: "${truncate(c.thoughts, 160)}"` : '';
       const conditions = engine.conditionLabels(c);
@@ -162,7 +180,9 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       const senses =
         (conditions.length ? `; condições: ${conditions.join(', ')}` : '') +
         (light !== 'claro' ? `; luz: ${light}` : '') +
-        (sight === 'vulto' ? '; o jogador vê só um vulto' : sight === 'nada' ? '; o jogador NÃO vê' : '');
+        (sight === 'vulto' ? '; o jogador vê só um vulto' : sight === 'nada' ? '; o jogador NÃO vê' : '') +
+        identity(view, c, Boolean(s.playerId)) +
+        acquaintances(c, present);
       const where = c.seatId ? `sentado(a) em ${shortId(loc, c.seatId)}` : 'em pé';
       const res = resourceLine(engine, c, !c.isPlayer);
       const perks = engine.perksOf(c).map((perk) => perk.name);
@@ -212,7 +232,8 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     out.push(
       `Visão: ${sees}${darkvision ? `, enxerga no escuro até ${darkvision} tiles` : ''}${here ? `; luz onde está: ${here}` : ''}. ` +
         `Condições: ${engine.conditionLabels(p).join(', ') || 'nenhuma'}. ` +
-        'Narre só o que ele percebe: de quem ele vê como vulto, só a silhueta; de quem ele NÃO vê, nada visual (som, cheiro e toque valem).',
+        'Narre só o que ele percebe: de quem ele vê como vulto, só a silhueta; de quem ele NÃO vê, nada visual (som, cheiro e toque valem). ' +
+        'Chame pelo nome só quem ele conhece e identifica agora, pelo rosto ou pela voz; os outros, pelo que ele percebe.',
     );
   } else {
     out.push('\n(Ainda não há personagem do jogador.)');
