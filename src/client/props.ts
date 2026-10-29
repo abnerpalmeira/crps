@@ -196,7 +196,7 @@ function windowPiece(g: THREE.Group, length: number): void {
   }
 }
 
-function door(g: THREE.Group, length: number): void {
+function door(g: THREE.Group, length: number, color = '#9b6b43'): void {
   g.add(box(length, WALL_H - 2.1, 1, WALL_COLOR, 0, (2.1 + WALL_H) / 2, 0));
   for (const side of [-1, 1]) g.add(box(0.08, 2.1, 1, '#8e7356', side * (length / 2 - 0.04), 1.05, 0));
   // Porta larga é dupla: uma folha presa em cada batente, as duas abertas para dentro.
@@ -205,7 +205,7 @@ function door(g: THREE.Group, length: number): void {
   for (const side of leaves) {
     const hinge = new THREE.Group();
     hinge.position.set(side * (length / 2 - 0.08), 0, 0.45);
-    hinge.add(box(span, 2.0, 0.05, '#9b6b43', (-side * span) / 2, 1.0, 0), box(0.04, 0.04, 0.12, '#d9c27a', -side * (span - 0.12), 1.0, 0.04));
+    hinge.add(box(span, 2.0, 0.05, color, (-side * span) / 2, 1.0, 0), box(0.04, 0.04, 0.12, '#d9c27a', -side * (span - 0.12), 1.0, 0.04));
     hinge.rotation.y = side * 1.15;
     g.add(hinge);
   }
@@ -262,7 +262,7 @@ function generic(g: THREE.Group, t: ObjectType, w: number, d: number, onWall: bo
   g.add(box(w * 0.88, 0.04, d * 0.88, new THREE.Color(color).offsetHSL(0, 0, 0.12), 0, h + 0.02, 0));
 }
 
-const PRIMITIVES: Record<string, (g: THREE.Group, w: number, d: number, seed: number) => void> = {
+const PRIMITIVES: Record<string, (g: THREE.Group, w: number, d: number, seed: number, t: ObjectType) => void> = {
   desk: (g) => desk(g),
   teacher_desk: (g, w, d) => teacherDesk(g, w, d),
   chair: (g) => chairAt(g, 0, 0),
@@ -276,7 +276,7 @@ const PRIMITIVES: Record<string, (g: THREE.Group, w: number, d: number, seed: nu
   crate: (g) => crate(g),
   board: (g, w) => board(g, w),
   window: (g, w) => windowPiece(g, w),
-  door: (g, w) => door(g, w),
+  door: (g, w, _d, _seed, t) => door(g, w, t.color),
   elevator: (g, w) => elevator(g, w),
   stairs: (g, w) => stairs(g, w),
 };
@@ -291,7 +291,7 @@ export function buildFixture(f: Fixture, chain: ObjectType[]): THREE.Group {
   const d = alongX ? f.h : f.w;
   const g = new THREE.Group();
   const draw = chain.map((t) => PRIMITIVES[t.id]).find(Boolean);
-  if (draw) draw(g, w, d, hash(f.id));
+  if (draw) draw(g, w, d, hash(f.id), chain[0]);
   else generic(g, chain[0], w, d, f.wall);
   g.position.set(f.x + (f.w - 1) / 2, 0, f.y + (f.h - 1) / 2);
   g.rotation.y = YAW[f.facing];

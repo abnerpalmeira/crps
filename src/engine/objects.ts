@@ -30,7 +30,7 @@ const LIBRARY: ObjectType[] = [
   { id: 'floor_lamp', label: 'abajur de chão', height: 1.6, color: '#e8d9b0', article: 'o' },
   { id: 'rug', size: '2×3', label: 'tapete', passable: true, merge: true, height: 0.02, color: '#7b5a6b', article: 'o' },
   { id: 'fireplace', size: '2×1', label: 'lareira', merge: true, facing: 'open_side', surface: 1.1, height: 1.3, color: '#8d8a84', article: 'a' },
-  { id: 'piano', size: '2×1', label: 'piano', merge: true, facing: 'lengthwise', surface: 1, height: 1.2, color: '#1e1c1c', article: 'o' },
+  { id: 'piano', size: '2×1', label: 'piano', merge: true, facing: 'open_side', surface: 1, height: 1.2, color: '#1e1c1c', article: 'o' },
   { id: 'stove', label: 'fogão', facing: 'open_side', surface: 0.9, height: 0.9, color: '#d8d8d8', article: 'o' },
   { id: 'fridge', label: 'geladeira', facing: 'open_side', height: 1.9, color: '#e6e6e6', article: 'a' },
   { id: 'kitchen_counter', size: '3×1', label: 'bancada de cozinha', merge: true, facing: 'open_side', table: true, surface: 0.92, height: 0.92, color: '#c9c3b6', article: 'a' },
@@ -61,7 +61,7 @@ const LIBRARY: ObjectType[] = [
   // Ficção científica.
   { id: 'control_panel', size: '2×1', label: 'painel de controle', merge: true, facing: 'open_side', table: true, surface: 1, height: 1.1, color: '#3b4148', article: 'o' },
   { id: 'workbench', size: '2×1', label: 'bancada de trabalho', merge: true, facing: 'open_side', table: true, surface: 0.95, height: 0.95, color: '#6b6f75', article: 'a' },
-  { id: 'hatch', label: 'escotilha', passable: true, wall: true, facing: 'interior', exit: 'door', color: '#8b939c', article: 'a' },
+  { id: 'hatch', label: 'escotilha', like: 'door', passable: true, wall: true, facing: 'interior', exit: 'door', color: '#8b939c', article: 'a' },
   { id: 'server_rack', size: '1×1', label: 'rack de servidores', merge: true, facing: 'open_side', height: 2, color: '#1f2329', article: 'o' },
   { id: 'cryo_pod', size: '2×3', label: 'cápsula', merge: true, facing: 'lengthwise', height: 2, color: '#cfe3f0', article: 'a' },
 
@@ -74,7 +74,7 @@ const LIBRARY: ObjectType[] = [
   { id: 'cauldron', label: 'caldeirão', height: 0.8, color: '#2a2a2a', article: 'o' },
   { id: 'hay_bale', label: 'fardo de feno', seat: true, surface: 0.8, height: 0.8, color: '#d8b35a', article: 'o' },
   { id: 'well', size: '2×2', label: 'poço', merge: true, height: 1, color: '#8d8a84', article: 'o' },
-  { id: 'gate', label: 'portão', passable: true, wall: true, merge: true, facing: 'interior', exit: 'door', color: '#5a4030', article: 'o' },
+  { id: 'gate', label: 'portão', like: 'door', passable: true, wall: true, merge: true, facing: 'interior', exit: 'door', color: '#5a4030', article: 'o' },
 
   // Ao ar livre.
   { id: 'tree', label: 'árvore', height: 4, color: '#4f7a3a', article: 'a' },
