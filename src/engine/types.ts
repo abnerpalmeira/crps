@@ -168,27 +168,75 @@ export interface Item {
   light?: LightSpec & { on: boolean };
 }
 
-export type FixtureKind =
-  | 'door'
-  | 'window'
-  | 'board'
-  | 'teacher_desk'
-  | 'desk'
-  | 'chair'
-  | 'table'
-  | 'shelf'
-  | 'locker'
-  | 'plant'
-  | 'bed'
-  | 'sofa'
-  | 'counter'
-  | 'crate'
-  | 'elevator'
-  | 'stairs';
+/** Id de um tipo de objeto: da biblioteca (door, desk, vitrine…) ou criado pelo mestre. */
+export type FixtureKind = string;
+
+/** Como um objeto se orienta ao ser posto no layout. */
+export type FacingRule = 'interior' | 'board' | 'away_board' | 'table' | 'open_side' | 'lengthwise' | 'none';
+
+/**
+ * Tipo de objeto do mundo, como dado: o que ele é fisicamente e como aparece quando não há
+ * modelo. Os de sempre têm um caractere fixo na legenda; os outros entram num local pela
+ * legenda dele (`"V": "vitrine"`), e o mestre cria tipos novos a partir de um parecido (like).
+ */
+export interface ObjectType {
+  id: string;
+  /** Nome em português, como aparece no resumo e na interface. */
+  label: string;
+  /** Prefixo dos ids no local (`sala/carteira-3`); sem ele, vem do nome. */
+  slug?: string;
+  /** Caractere fixo na legenda (só os de sempre). */
+  char?: string;
+  passable?: boolean;
+  /** Fica na linha da parede (porta, janela, quadro). */
+  wall?: boolean;
+  seat?: boolean;
+  /** Cama: dá para deitar, e ninguém é sentado nela ao acaso. */
+  bed?: boolean;
+  /** Caracteres iguais vizinhos viram um só objeto de vários tiles. */
+  merge?: boolean;
+  facing?: FacingRule;
+  /** Mesa: as cadeiras em volta se viram para ela. */
+  table?: boolean;
+  /** Leva a outro local: a um só (porta) ou a qualquer andar (elevador, escada). */
+  exit?: 'door' | 'floors';
+  /** Altura em que itens ficam apoiados (m). */
+  surface?: number;
+  /** Altura da primitiva (m), quando não há modelo. */
+  height?: number;
+  /** Tamanho típico em tiles (largura×profundidade), em que o modelo do 3D cabe sem encolher. */
+  size?: string;
+  color?: string;
+  article?: 'o' | 'a';
+  /** Tipo da biblioteca de onde vieram o resto das propriedades e o visual. */
+  like?: string;
+}
+
+/** Um caractere da legenda do layout e o que ele é. */
+export interface TileDef {
+  char: string;
+  /** 'wall', 'floor', 'void' ou o id do tipo de objeto. */
+  kind: string;
+  label: string;
+  /** Prefixo dos ids de móveis (`sala/carteira-3`). */
+  slug: string;
+  passable: boolean;
+  /** Faz parte da linha da parede (porta, janela, quadro). */
+  wall: boolean;
+  seat: boolean;
+  /** Caracteres iguais vizinhos viram um único móvel de vários tiles. */
+  merge: boolean;
+  facing: FacingRule;
+  /** Mesa: as cadeiras em volta se viram para ela. */
+  table?: boolean;
+  /** Leva a outro local: a um só (porta) ou a qualquer andar (elevador, escada). */
+  exit?: 'door' | 'floors';
+}
 
 /** Móvel ou elemento fixo gerado a partir do layout ASCII. */
 export interface Fixture {
   id: string;
+  /** Id do tipo de objeto (biblioteca ou criado pelo mestre). */
   kind: FixtureKind;
   label: string;
   locationId: string;
@@ -199,6 +247,8 @@ export interface Fixture {
   facing: Dir;
   seat: boolean;
   wall: boolean;
+  /** Saída do local: a um lugar só (porta) ou a qualquer andar (elevador, escada). */
+  exit?: 'door' | 'floors';
   text: string;
   state: string;
 }
@@ -219,6 +269,8 @@ export interface Location {
   light: number;
   /** Portas, elevadores e escadas, pelo id do móvel: para onde levam. */
   exits: Record<string, Exit>;
+  /** Caracteres extras do layout deste local (além da legenda fixa), cada um com seu tipo. */
+  legend?: Record<string, TileDef>;
 }
 
 /**
@@ -302,4 +354,6 @@ export interface WorldState {
   log: LogEntry[];
   frames: SceneFrame[];
   counters: Record<string, number>;
+  /** Tipos de objeto criados pelo mestre nesta campanha (os da biblioteca ficam no código). */
+  objectTypes: Record<string, ObjectType>;
 }

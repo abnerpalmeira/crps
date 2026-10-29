@@ -3,13 +3,13 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { tileDef } from '../engine/layout';
 import { lightSources } from '../engine/light';
+import { typeChain } from '../engine/objects';
 import { lifeStatId, perceptionOf, strangerLabel, visionOf } from '../engine/perception';
-import type { Character, Fixture, Location, WorldState } from '../engine/types';
+import type { Character, Fixture, Location, ObjectType, WorldState } from '../engine/types';
 import { capitalize } from './format';
 import { characterModel, fixtureModel, seatOffset, type CharacterModel, type Clip } from './models';
 import {
   DIR_VEC,
-  SURFACE_Y,
   YAW,
   buildCharacter,
   buildFixture,
@@ -154,7 +154,7 @@ export class WorldView {
     const loc = locId ? world.locations[locId] : null;
     const key = loc ? `${world.id}:${loc.id}:${loc.tiles.join('|')}` : '';
     if (key !== this.roomKey) {
-      this.buildRoom(loc);
+      this.buildRoom(world, loc);
       this.roomKey = key;
     }
     if (!loc) return;
@@ -169,7 +169,7 @@ export class WorldView {
 
   clear(): void {
     this.select(null);
-    this.buildRoom(null);
+    this.buildRoom(null, null);
     this.roomKey = '';
   }
 
@@ -283,7 +283,7 @@ export class WorldView {
     this.scene.add(this.room);
   }
 
-  private buildRoom(loc: Location | null): void {
+  private buildRoom(world: WorldState | null, loc: Location | null): void {
     this.clearRoom();
     if (!loc) return;
     const interior = (x: number, y: number) => {
@@ -318,11 +318,12 @@ export class WorldView {
     this.room.add(floor);
 
     for (const f of loc.fixtures) {
-      const obj = buildFixture(f);
+      const chain = typeChain(world, f.kind);
+      const obj = buildFixture(f, chain);
       obj.name = `fixture:${f.id}`;
       tagPick(obj, { kind: 'fixture', id: f.id });
       this.room.add(obj);
-      void this.upgradeFixture(obj, f);
+      void this.upgradeFixture(obj, f, chain);
       if (f.wall) {
         const [dx, dy] = DIR_VEC[f.facing];
         this.walls.push({ obj, normal: new THREE.Vector2(-dx, -dy) });
@@ -373,15 +374,21 @@ export class WorldView {
   }
 
   /** Troca as primitivas do móvel pelo modelo do catálogo, quando ele carrega e se houver. */
-  private async upgradeFixture(obj: THREE.Group, f: Fixture): Promise<void> {
+  private async upgradeFixture(obj: THREE.Group, f: Fixture, chain: ObjectType[]): Promise<void> {
     const room = this.room;
-    const model = await fixtureModel(f);
+    const model = await fixtureModel(f, chain.map((t) => t.id));
     if (!model || this.room !== room) return;
     for (const child of [...obj.children]) {
       child.traverse((o) => {
         if (o instanceof THREE.Mesh) o.geometry.dispose();
       });
       obj.remove(child);
+    }
+    // Objeto de parede com modelo (quadro, telão): a parede continua atrás dele.
+    if (f.wall) {
+      const wall = wallPiece();
+      wall.scale.x = f.facing === 'N' || f.facing === 'S' ? f.w : f.h;
+      obj.add(wall);
     }
     obj.add(model.group);
     tagPick(obj, { kind: 'fixture', id: f.id });
@@ -439,11 +446,12 @@ export class WorldView {
     }
   }
 
-  private placement(c: Character, loc: Location): { pos: THREE.Vector3; yaw: number; seated: boolean } {
+  private placement(world: WorldState, c: Character, loc: Location): { pos: THREE.Vector3; yaw: number; seated: boolean } {
     const pos = new THREE.Vector3(c.pos!.x, 0, c.pos!.y);
     const seat = c.seatId ? loc.fixtures.find((f) => f.id === c.seatId) : undefined;
     if (!seat) return { pos, yaw: YAW[c.facing], seated: false };
     const yaw = YAW[seat.facing];
+    const kinds = typeChain(world, seat.kind).map((t) => t.id);
     // Assento comprido com modelo mais curto que os tiles: quem senta fica dentro do modelo.
     const alongX = seat.facing === 'N' || seat.facing === 'S';
     const length = alongX ? seat.w : seat.h;
@@ -453,9 +461,9 @@ export class WorldView {
       if (alongX) pos.x = seat.x + (seat.w - 1) / 2 + (pos.x - seat.x - (seat.w - 1) / 2) * k;
       else pos.z = seat.y + (seat.h - 1) / 2 + (pos.z - seat.y - (seat.h - 1) / 2) * k;
     }
-    const back = seatOffset(seat.kind) ?? (seat.kind === 'desk' ? -0.3 : seat.kind === 'sofa' ? -0.1 : 0);
+    const back = kinds.map(seatOffset).find((v) => v !== null) ?? (kinds.includes('desk') ? -0.3 : kinds.includes('sofa') ? -0.1 : 0);
     pos.add(new THREE.Vector3(back * Math.sin(yaw), 0, back * Math.cos(yaw)));
-    return { pos, yaw, seated: seat.kind !== 'bed' };
+    return { pos, yaw, seated: !typeChain(world, seat.kind).some((t) => t.bed) };
   }
 
   private syncActors(world: WorldState, loc: Location): void {
@@ -466,7 +474,7 @@ export class WorldView {
     for (const c of Object.values(world.characters)) {
       if (c.locationId !== loc.id || !c.pos) continue;
       present.add(c.id);
-      const { pos, yaw, seated } = this.placement(c, loc);
+      const { pos, yaw, seated } = this.placement(world, c, loc);
       let actor = this.actors.get(c.id);
       if (!actor) {
         const obj = buildCharacter(c);
@@ -531,14 +539,15 @@ export class WorldView {
         const f = loc.fixtures.find((fx) => fx.id === h.id);
         if (f) {
           const s = hash(item.id);
-          pos = new THREE.Vector3(f.x + (f.w - 1) / 2 + ((s % 40) - 20) / 100, this.surfaces.get(f.id) ?? SURFACE_Y[f.kind] ?? 0.8, f.y + (f.h - 1) / 2 + (((s >>> 8) % 30) - 15) / 100);
+          const surface = typeChain(world, f.kind).map((t) => t.surface).find((v) => v !== undefined);
+          pos = new THREE.Vector3(f.x + (f.w - 1) / 2 + ((s % 40) - 20) / 100, this.surfaces.get(f.id) ?? surface ?? 0.8, f.y + (f.h - 1) / 2 + (((s >>> 8) % 30) - 15) / 100);
           if (f.kind === 'desk') {
             const yaw = YAW[f.facing];
             pos.add(new THREE.Vector3(0.16 * Math.sin(yaw), 0, 0.16 * Math.cos(yaw)));
           }
           if (f.kind === 'board') {
             const [dx, dz] = DIR_VEC[f.facing];
-            pos.set(f.x + (f.w - 1) / 2 + ((s % 60) - 30) / 100, SURFACE_Y.board!, f.y + (f.h - 1) / 2).add(new THREE.Vector3(dx * 0.58, 0, dz * 0.58));
+            pos.set(f.x + (f.w - 1) / 2 + ((s % 60) - 30) / 100, surface ?? 0.97, f.y + (f.h - 1) / 2).add(new THREE.Vector3(dx * 0.58, 0, dz * 0.58));
           }
         }
       }

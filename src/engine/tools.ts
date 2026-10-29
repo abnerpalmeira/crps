@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { EngineError, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { legendSummary } from './layout';
+import { librarySummary } from './objects';
 import { TEMPLATES } from './templates';
 import { lightLabel } from './light';
 import { knowsName, perceptionOf, strangerLabel } from './perception';
@@ -171,6 +172,25 @@ const itemInput = z.object({
   light: lightInput.optional().describe('Para itens que iluminam (lanterna, vela, tocha).'),
 });
 
+const facingRule = z.enum(['interior', 'board', 'away_board', 'table', 'open_side', 'lengthwise', 'none']);
+
+const objectTypeInput = z.object({
+  label: z.string().describe('Nome em português, ex. "escotilha", "mesa de sinuca".'),
+  like: z.string().optional().describe('Tipo parecido da biblioteca: o que você não informar vem dele, inclusive o visual no 3D.'),
+  seat: z.boolean().optional(),
+  bed: z.boolean().optional(),
+  passable: z.boolean().optional().describe('Dá para andar por cima ou através (tapete, porta).'),
+  wall: z.boolean().optional().describe('Fica NA linha da parede (quadro, janela, porta).'),
+  merge: z.boolean().optional().describe('Caracteres iguais vizinhos viram um só objeto (mesa comprida).'),
+  table: z.boolean().optional().describe('É uma mesa: cadeiras vizinhas se viram para ela.'),
+  exit: z.enum(['door', 'floors']).optional().describe('Leva a outro local: door (a um só) ou floors (a qualquer andar).'),
+  surface: z.number().optional().describe('Altura (m) em que itens ficam apoiados.'),
+  height: z.number().optional().describe('Altura (m) do objeto.'),
+  facing: facingRule
+    .optional()
+    .describe('interior (na parede, de frente para a sala), open_side (de frente para o lado livre), table (para a mesa vizinha), lengthwise (no comprimento: cama, carro).'),
+});
+
 const exitInput = z.object({
   fixture: z.string().describe('Id ou slug da porta, elevador ou escada, ex. "porta-1".'),
   to: z.string().optional().describe('Id do local para onde leva (pode ainda não existir). Em elevador e escada, acrescenta um andar; "" limpa.'),
@@ -283,7 +303,9 @@ export const TOOLS = [
       'se houver erro, corrija o layout e chame de novo. Regras: paredes "#" fecham o perímetro; porta "D", elevador "E", ' +
       'escada "Z", janela "W" e quadro "B" ficam NA linha da parede; todo local fechado precisa de ao menos uma saída (D, E ou Z); ' +
       'deixe corredores "." para tudo ser alcançável; todas as linhas com a mesma largura. ' +
-      `Legenda: ${legendSummary()}. Sala de aula típica: 12 a 16 colunas × 9 a 12 linhas. Exemplo:\n${EXAMPLE_CLASSROOM}`,
+      `Legenda fixa: ${legendSummary()}. Outros objetos entram pela legenda do local (legend): escolha um caractere livre ` +
+      `para cada tipo da biblioteca, pelo id ou pelo nome, ou defina um tipo novo a partir de um parecido. Biblioteca: ${librarySummary()}. ` +
+      `Sala de aula típica: 12 a 16 colunas × 9 a 12 linhas. Exemplo:\n${EXAMPLE_CLASSROOM}`,
     schema: z.object({
       id: z.string().optional().describe('Slug curto, ex. "sala_1a". Se omitido, vem do nome.'),
       name: z.string(),
@@ -301,6 +323,13 @@ export const TOOLS = [
       outdoor: z.boolean().optional().describe('true para áreas abertas (pátio, rua, floresta): dispensa paredes no perímetro.'),
       light: z.number().optional().describe('Luz ambiente de 0 a 1: 1 dia claro ou luzes acesas (padrão), 0.5 penumbra, 0.1 noite, 0 breu.'),
       exits: z.array(exitInput).optional().describe('Nome e destino das saídas (porta, elevador, escada); sem destino, ele é ligado na primeira passagem.'),
+      legend: z
+        .record(z.string(), z.union([z.string(), objectTypeInput]))
+        .optional()
+        .describe(
+          'Caracteres extras do layout: {"V": "vitrine", "P": "pedestal", "Q": "painting"} ou um tipo novo, ' +
+            '{"H": {"label": "escotilha", "like": "door"}}. Um caractere por tipo, fora da legenda fixa.',
+        ),
     }),
     mutates: true,
     run(engine, input) {

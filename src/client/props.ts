@@ -1,25 +1,10 @@
 import * as THREE from 'three';
-import type { Character, Dir, Fixture, FloorStyle, Item } from '../engine/types';
+import type { Character, Dir, Fixture, FloorStyle, Item, ObjectType } from '../engine/types';
 
 /** Modelos low-poly feitos de primitivas. Espaço do modelo: centro no chão, frente para +Z. */
 export const WALL_H = 2.4;
 export const YAW: Record<Dir, number> = { S: 0, E: Math.PI / 2, N: Math.PI, W: -Math.PI / 2 };
 export const DIR_VEC: Record<Dir, [number, number]> = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0] };
-
-/** Altura da superfície onde itens ficam apoiados, por tipo de móvel. */
-export const SURFACE_Y: Partial<Record<Fixture['kind'], number>> = {
-  desk: 0.76,
-  teacher_desk: 0.81,
-  table: 0.79,
-  counter: 1.05,
-  shelf: 1.02,
-  crate: 0.62,
-  bed: 0.52,
-  sofa: 0.44,
-  chair: 0.48,
-  locker: 1.92,
-  board: 0.97,
-};
 
 const materials = new Map<string, THREE.MeshStandardMaterial>();
 
@@ -259,62 +244,55 @@ function stairs(g: THREE.Group, length: number): void {
   g.add(mesh(new THREE.BoxGeometry(0.3, 0.12, 0.03), '#2f9e5b', 0, 2.26, 0.515, { emissive: '#1f8a4c', emissiveIntensity: 0.6 }));
 }
 
-export function buildFixture(f: Fixture): THREE.Group {
+/** Objeto sem desenho próprio: o volume do tipo, na cor dele; na parede, um painel; pisável, um tapete. */
+function generic(g: THREE.Group, t: ObjectType, w: number, d: number, onWall: boolean): void {
+  const color = t.color ?? '#9aa0a8';
+  if (onWall) {
+    g.add(...wallPiece().children.map((c) => c.clone()));
+    if (w > 1) g.children.forEach((c) => (c.scale.x = w));
+    g.add(box(w * 0.8, 0.9, 0.05, color, 0, 1.45, 0.53));
+    return;
+  }
+  if (t.passable) {
+    g.add(box(w * 0.92, 0.02, d * 0.92, color, 0, 0.011, 0));
+    return;
+  }
+  const h = t.height ?? 0.9;
+  g.add(box(w * 0.86, h, d * 0.86, color, 0, h / 2, 0));
+  g.add(box(w * 0.88, 0.04, d * 0.88, new THREE.Color(color).offsetHSL(0, 0, 0.12), 0, h + 0.02, 0));
+}
+
+const PRIMITIVES: Record<string, (g: THREE.Group, w: number, d: number, seed: number) => void> = {
+  desk: (g) => desk(g),
+  teacher_desk: (g, w, d) => teacherDesk(g, w, d),
+  chair: (g) => chairAt(g, 0, 0),
+  table: (g, w, d) => table(g, w, d),
+  shelf: (g, w, _d, seed) => shelf(g, w, seed),
+  locker: (g) => locker(g),
+  plant: (g, _w, _d, seed) => plant(g, seed),
+  bed: (g, w, d, seed) => bed(g, w, d, seed),
+  sofa: (g, w, _d, seed) => sofa(g, w, seed),
+  counter: (g, w, d) => counter(g, w, d),
+  crate: (g) => crate(g),
+  board: (g, w) => board(g, w),
+  window: (g, w) => windowPiece(g, w),
+  door: (g, w) => door(g, w),
+  elevator: (g, w) => elevator(g, w),
+  stairs: (g, w) => stairs(g, w),
+};
+
+/**
+ * O objeto em primitivas, no lugar e na direção dele. `chain` é o tipo e os parecidos (like): o
+ * primeiro que tem desenho próprio decide; sem nenhum, o volume genérico do tipo.
+ */
+export function buildFixture(f: Fixture, chain: ObjectType[]): THREE.Group {
   const alongX = f.facing === 'N' || f.facing === 'S';
   const w = alongX ? f.w : f.h;
   const d = alongX ? f.h : f.w;
-  const seed = hash(f.id);
   const g = new THREE.Group();
-  switch (f.kind) {
-    case 'desk':
-      desk(g);
-      break;
-    case 'teacher_desk':
-      teacherDesk(g, w, d);
-      break;
-    case 'chair':
-      chairAt(g, 0, 0);
-      break;
-    case 'table':
-      table(g, w, d);
-      break;
-    case 'shelf':
-      shelf(g, w, seed);
-      break;
-    case 'locker':
-      locker(g);
-      break;
-    case 'plant':
-      plant(g, seed);
-      break;
-    case 'bed':
-      bed(g, w, d, seed);
-      break;
-    case 'sofa':
-      sofa(g, w, seed);
-      break;
-    case 'counter':
-      counter(g, w, d);
-      break;
-    case 'crate':
-      crate(g);
-      break;
-    case 'board':
-      board(g, w);
-      break;
-    case 'window':
-      windowPiece(g, w);
-      break;
-    case 'door':
-      door(g, w);
-      break;
-    case 'elevator':
-      elevator(g, w);
-      break;
-    case 'stairs':
-      stairs(g, w);
-      break;
-  }
+  const draw = chain.map((t) => PRIMITIVES[t.id]).find(Boolean);
+  if (draw) draw(g, w, d, hash(f.id));
+  else generic(g, chain[0], w, d, f.wall);
   g.position.set(f.x + (f.w - 1) / 2, 0, f.y + (f.h - 1) / 2);
   g.rotation.y = YAW[f.facing];
   return g;

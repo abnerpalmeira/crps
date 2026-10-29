@@ -1,64 +1,44 @@
-import { OPPOSITE, dirTowards } from './text';
-import type { Dir, Exit, Fixture, FixtureKind, FloorStyle, Location, Pos } from './types';
+import { OBJECT_LIBRARY } from './objects';
+import { OPPOSITE, dirTowards, slugify } from './text';
+import type { Dir, Exit, Fixture, FloorStyle, Location, ObjectType, Pos, TileDef } from './types';
 
-type FacingRule = 'interior' | 'board' | 'away_board' | 'table' | 'open_side' | 'none';
+export type { TileDef };
 
-export interface TileDef {
-  char: string;
-  kind: 'wall' | 'floor' | 'void' | FixtureKind;
-  label: string;
-  /** Prefixo dos ids de móveis (`sala/carteira-3`). */
-  slug: string;
-  passable: boolean;
-  /** Faz parte da linha da parede (porta, janela, quadro). */
-  wall: boolean;
-  seat: boolean;
-  /** Caracteres iguais vizinhos viram um único móvel de vários tiles. */
-  merge: boolean;
-  facing: FacingRule;
+/** O tile de um tipo de objeto sob um caractere da legenda. */
+export function tileOf(t: ObjectType, char: string): TileDef {
+  return {
+    char,
+    kind: t.id,
+    label: t.label,
+    slug: t.slug ?? slugify(t.label).replace(/_/g, '-'),
+    passable: t.passable ?? false,
+    wall: t.wall ?? false,
+    seat: t.seat ?? false,
+    merge: t.merge ?? false,
+    facing: t.facing ?? 'none',
+    ...(t.table ? { table: true } : {}),
+    ...(t.exit ? { exit: t.exit } : {}),
+  };
 }
 
-function tile(char: string, kind: TileDef['kind'], label: string, slug: string, opts: Partial<TileDef> = {}): TileDef {
-  return { char, kind, label, slug, passable: false, wall: false, seat: false, merge: false, facing: 'none', ...opts };
-}
+const BASE: TileDef[] = [
+  { char: '#', kind: 'wall', label: 'parede', slug: 'parede', passable: false, wall: true, seat: false, merge: false, facing: 'none' },
+  { char: '.', kind: 'floor', label: 'chão', slug: 'chao', passable: true, wall: false, seat: false, merge: false, facing: 'none' },
+  { char: ' ', kind: 'void', label: 'vazio/exterior', slug: 'vazio', passable: false, wall: false, seat: false, merge: false, facing: 'none' },
+];
 
+/** A legenda fixa: parede, chão, vazio e os objetos de sempre, cada um com seu caractere. */
 export const LEGEND: Record<string, TileDef> = Object.fromEntries(
-  [
-    tile('#', 'wall', 'parede', 'parede', { wall: true }),
-    tile('.', 'floor', 'chão', 'chao', { passable: true }),
-    tile(' ', 'void', 'vazio/exterior', 'vazio'),
-    tile('D', 'door', 'porta', 'porta', { passable: true, wall: true, merge: true, facing: 'interior' }),
-    tile('W', 'window', 'janela', 'janela', { wall: true, merge: true, facing: 'interior' }),
-    tile('B', 'board', 'quadro-negro', 'quadro', { wall: true, merge: true, facing: 'interior' }),
-    tile('T', 'teacher_desk', 'mesa do professor', 'mesa-prof', { merge: true, facing: 'away_board' }),
-    tile('d', 'desk', 'carteira (mesa + cadeira)', 'carteira', { seat: true, facing: 'board' }),
-    tile('c', 'chair', 'cadeira', 'cadeira', { seat: true, facing: 'table' }),
-    tile('t', 'table', 'mesa', 'mesa', { merge: true }),
-    tile('s', 'shelf', 'estante', 'estante', { merge: true, facing: 'open_side' }),
-    tile('k', 'locker', 'armário', 'armario', { facing: 'open_side' }),
-    tile('p', 'plant', 'vaso de planta', 'planta'),
-    tile('b', 'bed', 'cama', 'cama', { seat: true, merge: true, facing: 'open_side' }),
-    tile('S', 'sofa', 'sofá', 'sofa', { seat: true, merge: true, facing: 'open_side' }),
-    tile('C', 'counter', 'balcão', 'balcao', { merge: true, facing: 'open_side' }),
-    tile('x', 'crate', 'caixa', 'caixa'),
-    tile('E', 'elevator', 'elevador', 'elevador', { passable: true, wall: true, merge: true, facing: 'interior' }),
-    tile('Z', 'stairs', 'escada', 'escada', { passable: true, wall: true, facing: 'interior' }),
-  ].map((d) => [d.char, d]),
+  [...BASE, ...Object.values(OBJECT_LIBRARY).flatMap((t) => (t.char ? [tileOf(t, t.char)] : []))].map((d) => [d.char, d]),
 );
 
 export const MAX_SIZE = 40;
 
-/** Móveis por onde se sai do local: levam a outro local. */
-export const EXIT_KINDS = new Set<FixtureKind>(['door', 'elevator', 'stairs']);
+const EXIT_LABEL: Record<string, string> = { door: 'saída', elevator: 'elevador', stairs: 'escada' };
 
-/** Saídas que levam a qualquer andar do prédio, e não a um lugar só como a porta. */
-export const FLOOR_EXITS = new Set<FixtureKind>(['elevator', 'stairs']);
-
-export const EXIT_LABEL: Partial<Record<FixtureKind, string>> = { door: 'saída', elevator: 'elevador', stairs: 'escada' };
-
-/** Toda porta, elevador e escada começa como saída sem destino. */
+/** Toda porta, elevador e escada (ou outra saída, como uma escotilha) começa sem destino. */
 export function defaultExits(fixtures: Fixture[]): Record<string, Exit> {
-  return Object.fromEntries(fixtures.filter((f) => EXIT_KINDS.has(f.kind)).map((f) => [f.id, { to: [], label: EXIT_LABEL[f.kind]! }]));
+  return Object.fromEntries(fixtures.filter((f) => f.exit).map((f) => [f.id, { to: [], label: EXIT_LABEL[f.kind] ?? f.label }]));
 }
 
 export function legendSummary(): string {
@@ -71,9 +51,10 @@ export function isFixtureDef(d: TileDef): boolean {
   return d.kind !== 'wall' && d.kind !== 'floor' && d.kind !== 'void';
 }
 
-export function tileDef(loc: Pick<Location, 'tiles' | 'width' | 'height'>, x: number, y: number): TileDef {
+export function tileDef(loc: Pick<Location, 'tiles' | 'width' | 'height' | 'legend'>, x: number, y: number): TileDef {
   if (x < 0 || y < 0 || x >= loc.width || y >= loc.height) return LEGEND[' '];
-  return LEGEND[loc.tiles[y][x]] ?? LEGEND[' '];
+  const ch = loc.tiles[y][x];
+  return LEGEND[ch] ?? loc.legend?.[ch] ?? LEGEND[' '];
 }
 
 export function isPassable(loc: Location, x: number, y: number): boolean {
@@ -97,6 +78,8 @@ export interface LocationSpec {
   outdoor?: boolean;
   /** Luz ambiente de 0 (breu) a 1 (padrão). */
   light?: number;
+  /** Caracteres extras deste local, cada um com o tile de um tipo de objeto. */
+  legend?: Record<string, TileDef>;
 }
 
 export type LayoutResult =
@@ -167,18 +150,23 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
   if (w < 3 || h < 3) return fail(`O layout precisa de pelo menos 3×3 tiles (recebido ${w}×${h}).`);
   if (w > MAX_SIZE || h > MAX_SIZE) return fail(`O layout pode ter no máximo ${MAX_SIZE}×${MAX_SIZE} tiles (recebido ${w}×${h}).`);
 
+  const legend = spec.legend ?? {};
   const unknown = new Map<string, Pos>();
   rows.forEach((row, y) => {
     for (let x = 0; x < row.length; x++) {
-      if (!LEGEND[row[x]] && !unknown.has(row[x])) unknown.set(row[x], { x, y });
+      if (!LEGEND[row[x]] && !legend[row[x]] && !unknown.has(row[x])) unknown.set(row[x], { x, y });
     }
   });
   if (unknown.size) {
     const list = [...unknown].map(([ch, p]) => `'${ch}' em (${p.x},${p.y})`).join(', ');
-    return fail(`Caracteres fora da legenda: ${list}. Use apenas: ${legendSummary()}.`);
+    const extra = Object.values(legend).map((d) => `'${d.char}' ${d.label}`);
+    return fail(
+      `Caracteres fora da legenda: ${list}. Use apenas: ${legendSummary()}${extra.length ? `, ${extra.join(', ')}` : ''}; ` +
+        'outros objetos entram pela legenda do local (legend).',
+    );
   }
 
-  const grid = { tiles: rows, width: w, height: h };
+  const grid = { tiles: rows, width: w, height: h, legend };
   const def = (x: number, y: number) => tileDef(grid, x, y);
   const errors: string[] = [];
 
@@ -293,7 +281,7 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
     }
     return best;
   };
-  const tableLike = new Set<TileDef['kind']>(['table', 'teacher_desk', 'desk', 'counter']);
+
   for (const r of rects) {
     if (facingOf.has(r)) continue;
     const center = rectCenter(r);
@@ -308,11 +296,18 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
         facing = board ? facingOf.get(board)! : dirTowards(center, roomCenter);
         break;
       case 'table':
-        facing = bestSide(r, (p) => tableLike.has(def(p.x, p.y).kind)) ?? towardBoard;
+        facing = bestSide(r, (p) => Boolean(def(p.x, p.y).table)) ?? towardBoard;
         break;
       case 'open_side':
         facing = bestSide(r, (p) => def(p.x, p.y).passable) ?? 'S';
         break;
+      case 'lengthwise': {
+        // Ao longo do lado maior (cama, carro), com a frente para a ponta mais livre.
+        const ends: Dir[] = r.h > r.w ? ['S', 'N'] : r.w > r.h ? ['E', 'W'] : SIDES;
+        const open = (s: Dir) => sideTiles(r, s).filter((p) => def(p.x, p.y).passable).length;
+        facing = ends.reduce((best, s) => (open(s) > open(best) ? s : best));
+        break;
+      }
       default:
         break;
     }
@@ -327,13 +322,13 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
     if (!r.def.wall && !ringTiles(r).some((p) => def(p.x, p.y).passable)) {
       errors.push(`${at} está cercado(a) — deixe um corredor de chão ('.') encostado nele(a).`);
     }
-    if (EXIT_KINDS.has(r.def.kind as FixtureKind) && !SIDES.some((s) => sideTiles(r, s).some((p) => def(p.x, p.y).passable))) {
+    if (r.def.exit && !SIDES.some((s) => sideTiles(r, s).some((p) => def(p.x, p.y).passable))) {
       errors.push(`${at} não dá para nenhum chão.`);
     }
     counters[r.def.slug] = (counters[r.def.slug] ?? 0) + 1;
     fixtures.push({
       id: `${spec.id}/${r.def.slug}-${counters[r.def.slug]}`,
-      kind: r.def.kind as FixtureKind,
+      kind: r.def.kind,
       label: r.def.label.replace(/ \(.*\)$/, ''),
       locationId: spec.id,
       x: r.x,
@@ -343,12 +338,13 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
       facing,
       seat: r.def.seat,
       wall: r.def.wall,
+      ...(r.def.exit ? { exit: r.def.exit } : {}),
       text: '',
       state: '',
     });
   }
 
-  if (!spec.outdoor && !fixtures.some((f) => EXIT_KINDS.has(f.kind))) {
+  if (!spec.outdoor && !fixtures.some((f) => f.exit)) {
     warnings.push(`Nenhuma porta ('D'), elevador ('E') ou escada ('Z'): personagens não terão por onde entrar ou sair.`);
   }
   if (errors.length) return { ok: false, errors, warnings };
@@ -368,6 +364,7 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
       outdoor: spec.outdoor ?? false,
       light: Math.round(Math.min(1, Math.max(0, spec.light ?? 1)) * 100) / 100,
       exits: defaultExits(fixtures),
+      ...(Object.keys(legend).length ? { legend } : {}),
     },
   };
 }

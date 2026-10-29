@@ -120,7 +120,7 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     out.push(`\n## Local atual: ${loc.name} [${loc.id}], ${loc.width}×${loc.height}, ${loc.outdoor ? 'área aberta' : 'interior'}`);
     if (loc.description) out.push(loc.description);
     out.push('```', map, '```');
-    const used = [...new Set(loc.tiles.join(''))].map((ch) => LEGEND[ch]).filter((d) => d && d.char !== ' ');
+    const used = [...new Set(loc.tiles.join(''))].map((ch) => LEGEND[ch] ?? loc.legend?.[ch]).filter((d) => d && d.char !== ' ');
     out.push(
       `Legenda: ${used.map((d) => `'${d.char}' ${d.label}`).join(', ')}; '@' você; outros marcadores = personagens listados abaixo. ` +
         `x = coluna, y = linha. Ids de móveis começam com "${loc.id}/".`,

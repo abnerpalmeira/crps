@@ -100,7 +100,9 @@ def convert_prop(entry):
         raise RuntimeError(f"{entry['src']}: nenhuma malha")
     set_material(meshes, entry['pack'])
     for o in meshes:
-        o.scale *= entry.get('scale', 1)
+        # Só nas peças-raiz: as filhas (rodas da carroceria) já herdam a escala do pai.
+        if o.parent is None:
+            o.scale *= entry.get('scale', 1)
         o.select_set(True)
     bpy.context.view_layer.objects.active = meshes[0]
     bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
@@ -274,7 +276,9 @@ for section, convert in (('props', convert_prop), ('characters', convert_charact
 
 result['seats'] = catalog.get('seats', {})
 for kind, parts in catalog.get('fixtures', {}).items():
-    missing = [p['model'] for p in parts if p['model'] not in result['props']]
+    # Uma lista de listas são variantes do mesmo tipo de objeto.
+    flat = [p for v in parts for p in v] if parts and isinstance(parts[0], list) else parts
+    missing = [p['model'] for p in flat if p['model'] not in result['props']]
     if missing:
         print(f"[synty] ERRO: {kind} usa modelos que não converteram: {', '.join(missing)}")
         continue

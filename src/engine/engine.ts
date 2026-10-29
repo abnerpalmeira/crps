@@ -1,5 +1,6 @@
 import { MAX_FRAMES, snapshotScene } from './frames';
-import { EXIT_KINDS, FLOOR_EXITS, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, type LocationSpec } from './layout';
+import { LEGEND, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, tileOf, type LocationSpec } from './layout';
+import { OBJECT_LIBRARY, findObjectType, librarySummary, objectType, resolveType } from './objects';
 import { DEFAULT_VISION, sightOf, type Sight } from './perception';
 import { parseDice, pickMany, randInt, rollDice } from './rng';
 import { analyzeSpeech } from './speech';
@@ -18,6 +19,7 @@ import type {
   Location,
   LightSpec,
   LogKind,
+  ObjectType,
   PerkDef,
   PerkGrant,
   Pos,
@@ -26,6 +28,7 @@ import type {
   SpeechMode,
   Thread,
   ThreadStatus,
+  TileDef,
   Visibility,
   WorldState,
 } from './types';
@@ -118,8 +121,14 @@ function migrate(state: WorldState): WorldState {
   rules.vision ??= { ...DEFAULT_VISION };
   rules.conditions ??= structuredClone(DEFAULT_CONDITIONS);
   rules.reaches ??= { ...DEFAULT_REACHES };
+  state.objectTypes ??= {};
   for (const l of Object.values(state.locations)) {
     l.light ??= 1;
+    // Saves de antes dos tipos como dado: a saída vem do tipo (porta, elevador, escada).
+    for (const f of l.fixtures) {
+      const exit = OBJECT_LIBRARY[f.kind]?.exit;
+      if (exit && !f.exit) f.exit = exit;
+    }
     l.exits ??= defaultExits(l.fixtures);
     // Saves de antes dos andares: um destino só, ou null.
     for (const e of Object.values(l.exits)) {
@@ -225,6 +234,9 @@ const DIR_ALIASES: Record<string, Dir> = {
 };
 
 /** Para onde leva uma saída do local: destino (id de local, pode ainda não existir) e nome. */
+/** Tipo de objeto novo, na legenda de um local: o que não for informado vem do parecido (like). */
+export type ObjectTypeInput = Omit<ObjectType, 'id' | 'char' | 'slug'>;
+
 export interface ExitInput {
   fixture: string;
   to?: string;
@@ -341,6 +353,7 @@ export class GameEngine {
       log: [],
       frames: [],
       counters: {},
+      objectTypes: {},
     });
   }
 
@@ -590,7 +603,7 @@ export class GameEngine {
     if (dest.seat) {
       if (['random', 'aleatorio', 'qualquer'].includes(fold(dest.seat))) {
         const free = loc.fixtures
-          .filter((f) => f.seat && f.kind !== 'bed')
+          .filter((f) => f.seat && !this.typeOf(f.kind).bed)
           .flatMap((f) => {
             const p = this.freeSeatTile(f, moverId);
             return p ? [{ f, p }] : [];
@@ -646,7 +659,7 @@ export class GameEngine {
   }
 
   private entrance(loc: Location): Pos | null {
-    for (const door of loc.fixtures.filter((f) => f.kind === 'door')) {
+    for (const door of loc.fixtures.filter((f) => f.exit)) {
       const p = this.nearestFreeAround(loc, door, null, null);
       if (p) return p;
     }
@@ -977,18 +990,20 @@ export class GameEngine {
   }
 
   createLocation(
-    spec: Omit<LocationSpec, 'id' | 'layout'> & {
+    spec: Omit<LocationSpec, 'id' | 'layout' | 'legend'> & {
       id?: string;
       layout?: string | string[];
       template?: TemplateOptions & { name: TemplateName };
       exits?: ExitInput[];
+      legend?: Record<string, string | ObjectTypeInput>;
     },
   ): { location: Location; warnings: string[] } {
     if (!spec.layout && !spec.template) throw new EngineError('Informe layout (ASCII) ou template (saguao, corredor).');
     // Layout pronto: o motor desenha; as saídas já saem com nome (rua, elevador, apartamentos).
     const template = spec.template ? buildTemplate(spec.template.name, spec.template, () => randInt(this.state, 0, 999_999) / 1_000_000) : null;
+    const legend = this.resolveLegend(spec.legend);
     const id = this.claimId(spec.id, spec.name, 'o local');
-    const result = buildLocation({ ...spec, id, layout: template?.rows ?? spec.layout!, floor: spec.floor ?? template?.floor });
+    const result = buildLocation({ ...spec, id, layout: template?.rows ?? spec.layout!, floor: spec.floor ?? template?.floor, legend });
     if (!result.ok) {
       throw new EngineError(
         `Layout inválido:\n- ${result.errors.join('\n- ')}${result.warnings.length ? `\nAvisos:\n- ${result.warnings.join('\n- ')}` : ''}`,
@@ -1001,6 +1016,46 @@ export class GameEngine {
     }
     this.setExits(result.location, spec.exits ?? []);
     return { location: result.location, warnings: result.warnings };
+  }
+
+  /** O tipo de um objeto: da biblioteca ou criado nesta campanha. */
+  typeOf(kind: string): ObjectType {
+    return objectType(this.state, kind);
+  }
+
+  /**
+   * Legenda extra de um local: cada caractere aponta para um tipo da biblioteca (pelo id ou pelo
+   * nome) ou define um tipo novo, que herda do parecido (like) o que não for informado.
+   */
+  private resolveLegend(input: Record<string, string | ObjectTypeInput> | undefined): Record<string, TileDef> {
+    const legend: Record<string, TileDef> = {};
+    for (const [char, ref] of Object.entries(input ?? {})) {
+      if ([...char].length !== 1) throw new EngineError(`"${char}" na legenda: use um caractere por tipo de objeto.`);
+      if (LEGEND[char]) throw new EngineError(`'${char}' já é ${LEGEND[char].label} na legenda fixa; escolha outro caractere para ${typeof ref === 'string' ? ref : ref.label}.`);
+      legend[char] = tileOf(typeof ref === 'string' ? this.findType(ref) : this.defineType(ref), char);
+    }
+    return legend;
+  }
+
+  private findType(ref: string): ObjectType {
+    const t = findObjectType(this.state, ref);
+    if (!t) {
+      throw new EngineError(
+        `"${ref}" não é um tipo de objeto conhecido. Use um da biblioteca (${librarySummary()}) ou defina um novo na legenda: ` +
+          `{"label": "${ref}", "like": "<tipo parecido>"}.`,
+      );
+    }
+    return t;
+  }
+
+  /** Tipo novo do mestre; um que já existe com o mesmo nome é reaproveitado, para o mundo ficar coerente. */
+  private defineType(input: ObjectTypeInput): ObjectType {
+    const existing = findObjectType(this.state, input.label);
+    if (existing) return existing;
+    const { like, ...own } = input;
+    const t = resolveType(like ? this.findType(like) : null, own);
+    this.state.objectTypes[t.id] = t;
+    return t;
   }
 
   /** Dá destino e nome às saídas (porta, elevador, escada) de um local. */
@@ -1018,7 +1073,7 @@ export class GameEngine {
   /** A porta passa a levar só a `to`; elevador e escada ganham mais um andar. */
   private link(loc: Location, f: Fixture, to: string): void {
     const exit = loc.exits[f.id];
-    if (!FLOOR_EXITS.has(f.kind)) exit.to = [to];
+    if (f.exit !== 'floors') exit.to = [to];
     else if (!exit.to.includes(to)) exit.to.push(to);
   }
 
@@ -1042,7 +1097,7 @@ export class GameEngine {
     if (via) {
       const f = this.exitFixture(loc, via);
       const [to] = loc.exits[f.id].to;
-      if (!FLOOR_EXITS.has(f.kind) && to && to !== targetId) {
+      if (f.exit !== 'floors' && to && to !== targetId) {
         throw new EngineError(`${f.id.slice(loc.id.length + 1)} leva a ${this.state.locations[to]?.name ?? to}, não a ${this.findLocation(targetId).name}.`);
       }
       return f;
@@ -1059,18 +1114,19 @@ export class GameEngine {
    * Onde o personagem chega: quem pega o elevador sai de um elevador (a escada, de uma escada); quem
    * passa por uma porta chega pela que leva de volta ou por uma ainda livre.
    */
-  private arrivalExit(loc: Location, fromId: string, kind: Fixture['kind'] | null): Fixture | null {
+  private arrivalExit(loc: Location, fromId: string, used: Fixture | null): Fixture | null {
+    const kind = used?.kind ?? null;
     const exits = Object.entries(loc.exits).map(([id, e]) => ({ f: this.findFixture(id), to: e.to }));
     const back = exits.filter((x) => x.to.includes(fromId));
     const free = exits.filter((x) => !x.to.length);
-    const same = kind && FLOOR_EXITS.has(kind) ? exits.filter((x) => x.f.kind === kind) : [];
+    const same = used?.exit === 'floors' ? exits.filter((x) => x.f.kind === kind) : [];
     const pick =
       back.find((x) => x.f.kind === kind) ??
       same.find((x) => !x.to.length) ??
       same[0] ??
       back[0] ??
       free.find((x) => x.f.kind === kind) ??
-      free.find((x) => x.f.kind === 'door') ??
+      free.find((x) => x.f.exit === 'door') ??
       free[0];
     return pick?.f ?? null;
   }
@@ -1210,7 +1266,7 @@ export class GameEngine {
           this.link(fromLoc, exitUsed, targetLoc.id);
         }
       }
-      if (fromLoc) arrival = this.arrivalExit(targetLoc, fromLoc.id, exitUsed?.kind ?? null);
+      if (fromLoc) arrival = this.arrivalExit(targetLoc, fromLoc.id, exitUsed);
       if (arrival && fromLoc) this.link(targetLoc, arrival, fromLoc.id);
       if (hasSpot) spot = this.resolvePlacement(targetLoc, input.to, c.id, null);
       else {

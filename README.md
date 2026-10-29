@@ -355,6 +355,28 @@ Se o layout tiver erro (caractere desconhecido, chão encostando no exterior, re
 desconectadas, móvel sem corredor), a tool devolve os erros com coordenadas e o modelo
 corrige.
 
+### Objetos como dado
+
+Os tipos de objeto são dados (`src/engine/objects.ts`), como as regras. Cada tipo diz:
+- se é assento, cama, mesa ou superfície (e a altura em que os itens ficam apoiados);
+- se fica na parede, se dá para andar por cima e se é saída (para um lugar só ou para qualquer andar);
+- como se orienta no layout (para dentro da sala, para o lado livre, no comprimento…);
+- o tamanho típico em tiles, a altura, a cor e o artigo.
+
+Os 16 tipos de sempre têm caractere fixo na legenda. A biblioteca traz mais de 60, de casa, escritório, loja, museu, hospital,
+ficção científica, fantasia e ao ar livre. Eles entram num local pela legenda dele:
+
+```json
+{ "layout": ["####QQ####", "#.VVV....D", "#........#", "##########"],
+  "legend": { "Q": "painting", "V": "vitrine", "H": { "label": "escotilha de serviço", "like": "hatch" } } }
+```
+
+Cada caractere aponta para um tipo da biblioteca, pelo id ou pelo nome, ou define um tipo novo. O
+tipo novo herda do parecido (`like`) o que não for informado, inclusive o visual, e fica salvo na
+campanha (`WorldState.objectTypes`) para os outros locais. No 3D, o tipo usa os modelos do
+catálogo (`fixtures` em `synty.json`, com variantes escolhidas pelo id do objeto). Sem modelo, ele
+usa os do tipo parecido e, por fim, uma primitiva com a cor e a altura do tipo.
+
 ### Saídas e andares
 
 Porta `D`, elevador `E` e escada `Z` ficam na parede e são as saídas do local. Cada uma tem

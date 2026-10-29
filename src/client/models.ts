@@ -11,13 +11,28 @@ interface Catalog {
   /** Variantes de cor da textura-paleta de cada pacote (móveis usam a primeira). */
   textures: Record<string, string[]>;
   props: Record<string, { file: string; pack: string; size: [width: number, height: number, depth: number] }>;
-  /** Peças de cada tipo de móvel do motor: posição em metros no espaço do móvel (frente = +z), yaw em graus. */
-  fixtures: Record<string, { model: string; x?: number; y?: number; z?: number; yaw?: number; scale?: number; stretch?: boolean }[]>;
+  /**
+   * Peças de cada tipo de objeto do motor: posição em metros no espaço do objeto (frente = +z),
+   * yaw em graus. Uma lista de listas são variantes: cada objeto usa uma, escolhida pelo id.
+   */
+  fixtures: Record<string, Part[] | Part[][]>;
   characters: Record<string, { file: string; pack: string; figure: Figure; look: string }>;
   /** Onde fica o quadril de quem senta em cada tipo de assento, para a frente do centro (metros). */
   seats?: Record<string, number>;
   /** Clipes por sexo, já no esqueleto dos personagens: idle, walk, talk, nod, sit. */
   anims: Record<'masc' | 'femn', { file: string; clips: string[] }>;
+}
+
+interface Part {
+  model: string;
+  x?: number;
+  y?: number;
+  z?: number;
+  yaw?: number;
+  scale?: number;
+  stretch?: boolean;
+  /** false: a peça pode passar do tile (copa de árvore, poste); sem isso, encolhe para caber. */
+  fit?: boolean;
 }
 
 export type Clip = 'idle' | 'walk' | 'talk' | 'nod' | 'sit';
@@ -95,13 +110,16 @@ function paint(root: THREE.Object3D, material: THREE.Material): void {
 
 /**
  * O móvel montado com os modelos do catálogo, no espaço local do móvel (o chamador posiciona e
- * gira). Peça maior que o espaço do móvel encolhe por inteiro para caber; com stretch, a peça
- * mais curta estica no comprimento. `span` é o comprimento da peça principal. null = sem modelo.
+ * gira). `kinds` é o tipo e os parecidos dele: vale o primeiro que tem modelo. Peça maior que o
+ * espaço do móvel encolhe por inteiro para caber; com stretch, a peça mais curta estica no
+ * comprimento. `span` é o comprimento da peça principal. null = sem modelo.
  */
-export async function fixtureModel(f: Fixture): Promise<{ group: THREE.Group; top: number; span: number } | null> {
+export async function fixtureModel(f: Fixture, kinds: string[] = [f.kind]): Promise<{ group: THREE.Group; top: number; span: number } | null> {
   const cat = await loadCatalog();
-  const parts = cat?.fixtures[f.kind];
-  if (!cat || !parts) return null;
+  const entry = cat ? kinds.map((k) => cat.fixtures[k]).find(Boolean) : undefined;
+  if (!cat || !entry?.length) return null;
+  const variants = (Array.isArray(entry[0]) ? entry : [entry]) as Part[][];
+  const parts = variants[hash(f.id) % variants.length];
   const alongX = f.facing === 'N' || f.facing === 'S';
   const room = { w: alongX ? f.w : f.h, d: alongX ? f.h : f.w };
   const group = new THREE.Group();
@@ -114,7 +132,7 @@ export async function fixtureModel(f: Fixture): Promise<{ group: THREE.Group; to
     const grow = part.scale ?? 1;
     const [mw, , md] = entry.size.map((v) => v * grow);
     const turned = Math.round((part.yaw ?? 0) / 90) % 2 !== 0;
-    const scale = grow * Math.min(1, (room.w * 0.98) / (turned ? md : mw), (room.d * 0.98) / (turned ? mw : md));
+    const scale = part.fit === false ? grow : grow * Math.min(1, (room.w * 0.98) / (turned ? md : mw), (room.d * 0.98) / (turned ? mw : md));
     obj.scale.setScalar(scale);
     const length = (turned ? entry.size[2] : entry.size[0]) * scale;
     const stretch = part.stretch && !turned ? Math.max(1, (room.w * 0.95) / length) : 1;

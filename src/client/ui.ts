@@ -1,8 +1,9 @@
 import { lightAt, lightLabel, lightSources } from '../engine/light';
+import { objectType } from '../engine/objects';
 import { perceptionOf, strangerLabel } from '../engine/perception';
 import { findByName, hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
 import { chebyshev, formatClock, hhmm } from '../engine/text';
-import type { Character, Fixture, LogEntry, WorldState } from '../engine/types';
+import type { Character, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 import type { CostEvent } from '../gm/pricing';
 import type { Usage } from '../gm/provider';
@@ -570,14 +571,17 @@ export class Ui {
       if (on.length) body.append(el('p', 'muted', `Aqui: ${on.map((i) => i.name).join(', ')}`));
       const sitter = Object.values(world.characters).find((c) => c.seatId === f.id);
       if (sitter) body.append(el('p', 'muted', `Ocupado por ${shownAs(world, sitter)}`));
-      const noun = `${MASCULINE.has(f.kind) ? 'o' : 'a'} ${f.kind === 'board' ? 'quadro' : f.label}`;
+      const article = objectType(world, f.kind).article ?? 'a';
+      const noun = `${article} ${f.kind === 'board' ? 'quadro' : f.label}`;
       actions.push([`Ir até ${noun}`, `Vou até ${noun}.`]);
       if (f.kind === 'board') actions.push(['Escrever no quadro', 'Escrevo no quadro: "']);
       // Sem aspas, asteriscos nem parênteses: no texto do jogador, eles viram fala, ação ou pensamento.
       const name = exit?.label.replace(/["“”*()]/g, '').trim();
-      if (exit && f.kind === 'door') actions.push(['Passar por esta porta', `Passo pela porta: ${name}.`]);
+      const by = `${article === 'o' ? 'pelo' : 'pela'} ${f.label}`;
       if (exit && f.kind === 'elevator') actions.push(['Pegar o elevador', `Pego o ${name} para o andar `]);
-      if (exit && f.kind === 'stairs') actions.push(['Usar a escada', 'Vou pela escada até o andar ']);
+      else if (exit && f.kind === 'stairs') actions.push(['Usar a escada', 'Vou pela escada até o andar ']);
+      else if (exit && f.exit === 'floors') actions.push([`Usar ${noun}`, `Vou ${by} até o andar `]);
+      else if (exit) actions.push([`Passar ${by}`, `Passo ${by}: ${name}.`]);
     } else {
       const item = world.items[pick.id];
       if (!item) return this.closeInspector();
@@ -744,9 +748,6 @@ function shownAs(world: WorldState, c: Character): string {
   if (c.isPlayer || view.recognize(c.id)) return c.name;
   return view.sight(c.id) === 'nitido' ? strangerLabel(c) : 'alguém';
 }
-
-/** Móveis de nome masculino, para o artigo do texto pronto ("vou até o sofá"). */
-const MASCULINE = new Set<Fixture['kind']>(['board', 'locker', 'plant', 'sofa', 'counter', 'elevator']);
 
 /** O que o HUD diz dos sentidos do jogador: condições, a luz onde ele está e se carrega uma luz. */
 function senseText(world: WorldState): string {
