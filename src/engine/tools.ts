@@ -48,6 +48,14 @@ const perkGrant = z.discriminatedUnion('kind', [
     factor: z.number().optional().describe('Multiplica o alcance final: 0 = perdeu o sentido (cego = visao 0), 0.5 = turvo.'),
   }),
   z.object({
+    kind: z.literal('conjure'),
+    note: z.string().optional().describe('O que dá para tirar do nada, ex. "objetos pequenos de mágico".'),
+    cost: z
+      .object({ resource: z.string(), amount: z.number().int() })
+      .optional()
+      .describe('Recurso gasto a cada item, ex. {"resource": "energia", "amount": 2}.'),
+  }),
+  z.object({
     kind: z.literal('light'),
     radius: z.number().describe('Alcance da luz em tiles.'),
     intensity: z.number().optional().describe('Força de 0 a 1 (padrão 0.9).'),
@@ -301,14 +309,26 @@ export const TOOLS = [
     name: 'create_items',
     description:
       'Cria itens em lote: no inventário de alguém, sobre um móvel ou no chão. Todo objeto que importe para a história e possa ' +
-      'mudar de mãos precisa existir aqui antes de ser usado ou narrado.',
+      'mudar de mãos precisa existir aqui antes de ser usado ou narrado. No meio do jogo, nada é criado direto com o personagem ' +
+      'do jogador (salvo perk de conjurar): crie onde o objeto está e entregue com transfer_item.',
     schema: z.object({ items: z.array(itemInput).min(1).max(30) }),
     mutates: true,
     run(engine, input) {
       const created = input.items.map((spec) => engine.createItem(spec));
+      const conjured = created.map((i) => engine.conjuredBy(i));
       return {
-        content: { created: created.map((i) => ({ id: i.id, name: i.name, quantity: i.quantity, where: engine.describeHolder(i.holder) })) },
-        summary: `📦 ${created.map((i) => `${i.name} (${engine.describeHolder(i.holder)})`).join('; ')}`,
+        content: {
+          created: created.map((i, k) => ({
+            id: i.id,
+            name: i.name,
+            quantity: i.quantity,
+            where: engine.describeHolder(i.holder),
+            ...(conjured[k] ? { conjured_by: conjured[k]!.name } : {}),
+          })),
+        },
+        summary: `${conjured.some(Boolean) ? '✨' : '📦'} ${created
+          .map((i, k) => `${i.name} (${engine.describeHolder(i.holder)})${conjured[k] ? ` · ${conjured[k]!.name}` : ''}`)
+          .join('; ')}`,
       };
     },
   }),

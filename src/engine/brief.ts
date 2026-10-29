@@ -35,6 +35,9 @@ export function describePerk(perk: PerkDef): string {
     if (g.kind === 'see_stat') return `vê ${g.stat} de todos`;
     if (g.kind === 'see_thoughts') return 'percebe o que os outros pensam';
     if (g.kind === 'light') return `emite luz (raio ${g.radius})`;
+    if (g.kind === 'conjure') {
+      return `tira itens do nada${g.note ? `: ${g.note}` : ''}${g.cost ? `, custa ${g.cost.amount} de ${g.cost.resource}` : ''}`;
+    }
     if (g.kind === 'sense') {
       const mult = g.multiplier !== undefined ? ` ×${g.multiplier}` : '';
       const bonus = g.bonus ? ` ${g.bonus > 0 ? '+' : ''}${g.bonus} tiles` : '';
@@ -181,7 +184,11 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     out.push(`\n## Ficha do jogador: ${p.name} [${p.id}]`);
     out.push(`${p.role}. ${p.appearance}`);
     out.push(`Atributos: ${statLine(p.attributes)}. Perícias: ${statLine(p.skills)}. Recursos: ${resourceLine(engine, p, false) || '—'}.`);
-    out.push(`Inventário: ${inv.map((i) => `${i.name} [${i.id}]${i.quantity > 1 ? ` ×${i.quantity}` : ''}`).join(', ') || 'vazio'}`);
+    const conjure = engine.conjurePerkOf(p);
+    out.push(
+      `Inventário: ${inv.map((i) => `${i.name} [${i.id}]${i.quantity > 1 ? ` ×${i.quantity}` : ''}`).join(', ') || 'vazio'}. ` +
+        `É tudo o que ele tem: nada surge com ele${conjure ? `, salvo pelo perk ${conjure.name} (${describePerk(conjure)})` : ''}.`,
+    );
     const perks = engine.perksOf(p);
     out.push(
       `Perks: ${perks.map((perk) => `${perk.name} (${describePerk(perk)})`).join('; ') || 'nenhum'}. ` +

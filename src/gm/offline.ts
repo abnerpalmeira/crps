@@ -157,6 +157,11 @@ function turnSteps(action: string, ctx: TurnContext): StepResult[] {
     events.push('Você tateia a gaveta da mesa, acha a lanterna de emergência e acende. Um círculo amarelado corta o escuro.');
     dark = false;
   }
+  if (/bomba|do bolso/.test(said)) {
+    // Um mestre ingênuo tenta dar ao jogador o que ele pediu; o motor recusa (o jogador não tem perk de conjurar).
+    tools.push(call('create_items', { items: [{ name: 'Bomba de fedor', description: 'ampola de vidro fedorenta', holder: { character_id: playerId } }] }));
+    events.push('Você enfia a mão no bolso, mas os dedos só acham giz e papel: não tem bomba nenhuma ali.');
+  }
   if (/experiment|quimic|reagente|bequer/.test(said)) {
     tools.push(call('update_character', { character_id: playerId, conditions_add: [{ id: 'cego', minutes: 15 }], resource_deltas: { vida: -1 } }));
     events.push('O béquer chia, espirra, e uma névoa ardida sobe direto para o seu rosto. Seus olhos queimam e a sala some num borrão escuro.');

@@ -112,6 +112,10 @@ Princípios que o motor impõe:
 
 - **A IA propõe, o motor decide.** Mudanças concretas só via tools; uma tool que
   falha no meio desfaz tudo o que fez.
+- **O inventário do jogador é a verdade.** No meio do jogo, nenhum item é criado direto com
+  ele, nem a pilha dele cresce sozinha: o que existe no mundo é criado onde está e chega até
+  ele com `transfer_item`. Tirar coisas do nada só com um perk de conjurar
+  (`{ "kind": "conjure", "note": "objetos pequenos", "cost": { "resource": "energia", "amount": 2 } }`).
 - **Gerar só o necessário, salvar tudo.** NPCs nascem como esboço e são aprofundados
   (`update_character`) quando ficam importantes; o que foi registrado não muda sozinho.
 - **Estado subjetivo é dado.** Segredos, promessas e relações são fatos com `known_by`;
@@ -235,7 +239,8 @@ resumo do turno diz ao mestre a luz, as condições e quem o jogador não vê, e
 aponta narração que descreve o que ele não poderia enxergar.
 
 Na demo offline dá para testar sem gastar tokens: "Apago a luz e pego a lanterna", "Faço o
-experimento de química" e "Acendo a luz".
+experimento de química" e "Acendo a luz". "Tiro uma bomba de fedor do bolso" mostra o motor
+barrando um item que o jogador não tem.
 
 ### Layout ASCII
 

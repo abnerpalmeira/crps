@@ -847,6 +847,13 @@ export class GameEngine {
       };
     }
     if (g.kind === 'light') return { kind: 'light', ...lightSpec(g) };
+    if (g.kind === 'conjure') {
+      return {
+        kind: 'conjure',
+        ...(g.note ? { note: g.note } : {}),
+        ...(g.cost ? { cost: { resource: this.resolveResourceId(g.cost.resource), amount: clamp(Math.round(g.cost.amount), 1, 100) } } : {}),
+      };
+    }
     return { kind: 'see_thoughts' };
   }
 
@@ -874,6 +881,43 @@ export class GameEngine {
 
   conditionsOf(c: Character): PerkDef[] {
     return c.conditions.flatMap((a) => this.state.ruleset.conditions.filter((d) => d.id === a.id));
+  }
+
+  /** Perk (ou condição) com que o personagem tira itens do nada, se tiver. */
+  conjurePerkOf(c: Character): PerkDef | null {
+    return [...this.perksOf(c), ...this.conditionsOf(c)].find((p) => p.grants.some((g) => g.kind === 'conjure')) ?? null;
+  }
+
+  /**
+   * O inventário do jogador é tudo o que ele tem: no meio do jogo, nada surge com ele, salvo por
+   * um perk de conjurar, que pode cobrar um recurso a cada item.
+   */
+  private conjureFor(c: Character, what: string): PerkDef {
+    const perk = this.conjurePerkOf(c);
+    if (!perk) {
+      throw new EngineError(
+        `${what} não pode surgir com ${c.name}: o jogador só tem o que está no inventário dele. Se a ação dependia disso, ` +
+          'ela falha; narre a tentativa frustrada. Se o objeto existe no mundo, crie onde ele está (com alguém, num móvel, ' +
+          'no chão) e faça chegar até ele com transfer_item. Tirar coisas do nada só com um perk de conjurar (kind "conjure").',
+      );
+    }
+    for (const g of perk.grants) {
+      if (g.kind !== 'conjure' || !g.cost) continue;
+      const max = this.state.ruleset.resources.find((r) => r.id === g.cost!.resource)?.max ?? 0;
+      const have = c.resources[g.cost.resource] ?? max;
+      if (have < g.cost.amount) {
+        throw new EngineError(`${c.name} não tem ${g.cost.resource} para ${perk.name}: precisa de ${g.cost.amount} e tem ${have}.`);
+      }
+      c.resources[g.cost.resource] = have - g.cost.amount;
+    }
+    return perk;
+  }
+
+  /** Item criado agora com o jogador, no meio do jogo: só por perk de conjurar. */
+  conjuredBy(item: Item): PerkDef | null {
+    const { holder } = item;
+    if (holder.kind !== 'character' || holder.id !== this.state.playerId || this.state.turn === 0) return null;
+    return this.conjurePerkOf(this.state.characters[holder.id]);
   }
 
   /** "Cego (até 08:20)", para o mestre e a interface. */
@@ -1148,6 +1192,9 @@ export class GameEngine {
 
   createItem(input: { id?: string; name: string; description: string; tags?: string[]; quantity?: number; holder: HolderRef; light?: LightInput }): Item {
     const holder = this.resolveHolder(input.holder, this.currentLocation?.id ?? null);
+    if (holder.kind === 'character' && holder.id === this.state.playerId && this.state.turn > 0) {
+      this.conjureFor(this.state.characters[holder.id], `"${input.name}"`);
+    }
     const quantity = Math.max(1, Math.round(input.quantity ?? 1));
     const item: Item = {
       id: this.claimId(input.id, input.name, input.name),
@@ -1212,6 +1259,10 @@ export class GameEngine {
     if (input.name) item.name = input.name;
     if (input.description) item.description = input.description;
     if (input.tags) item.tags = input.tags;
+    const holder = item.holder;
+    if ((input.quantity_delta ?? 0) > 0 && holder.kind === 'character' && holder.id === this.state.playerId && this.state.turn > 0) {
+      this.conjureFor(this.state.characters[holder.id], `Mais ${item.name}`);
+    }
     if (input.light === null) delete item.light;
     else if (input.light) item.light = { ...lightSpec(input.light), on: input.light.on ?? item.light?.on ?? false };
     if (input.light_on !== undefined) {

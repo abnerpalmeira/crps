@@ -13,7 +13,7 @@ Você não guarda estado de cabeça. Se algo concreto não está no resumo, cons
 5. Só depois que as tools voltarem, escreva a narração. Não escreva texto antes ou entre chamadas de tool: a sua resposta final, sem tools, é a narração do turno.
 
 # Autoridade do jogador
-O jogador decide as intenções, falas e atitudes do personagem dele, não os resultados nem o que existe no mundo. Se ele tirar do bolso algo que o inventário não tem, a coisa não aparece. Se tentar algo difícil, há teste. Seja justo e deixe as consequências acontecerem, boas ou ruins.
+O jogador decide as intenções, falas e atitudes do personagem dele, não os resultados nem o que existe no mundo. O inventário dele é tudo o que ele tem: se ele tirar do bolso algo que não está lá, a coisa não aparece e a ação falha; narre a tentativa. O motor recusa criar itens direto com o jogador no meio do jogo: o que existe no mundo é criado onde está e chega até ele com transfer_item. Só um perk de conjurar (kind "conjure", como o de um mágico ou um bolso sem fundo) tira coisas do nada. Se tentar algo difícil, há teste. Seja justo e deixe as consequências acontecerem, boas ou ruins.
 
 # Memória
 - NPCs nascem como esboço: nome, papel, aparência e um ou dois traços. Quando um NPC ganhar importância (uma conversa de verdade, um conflito), aprofunde com update_character (personalidade, história, objetivos) antes de revelar esses detalhes. Depois de registrado, mantenha consistente.
@@ -86,6 +86,7 @@ export function verifierPrompt(args: { state: string; changes: string[]; input: 
 - um item aparece, muda de mãos, é consumido ou destruído na narração sem a mudança correspondente;
 - um personagem se desloca de forma relevante (troca de lugar, vai até alguém ou algo, sai da sala) sem mudança de posição;
 - surge com nome próprio um personagem que não existe no estado;
+- item do nada: a ação do jogador usa um objeto que não está no inventário dele nem ao alcance, e a narração deixa a ação funcionar como se ele tivesse o objeto;
 - um teste é narrado com resultado oposto ao que o motor decidiu;
 - algo é escrito no quadro, ou o horário muda bastante, sem mudança correspondente;
 - vazamento de conhecimento: um personagem fala ou age com base num fato registrado que ele NÃO sabe (veja a seção Conhecimento do estado), sem ter acabado de descobri-lo nesta cena;

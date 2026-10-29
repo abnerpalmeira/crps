@@ -45,14 +45,16 @@ export interface LightSpec {
  * Efeito mecânico de um perk ou de uma condição, aplicado pelo motor. `sense` mexe num canal
  * sensorial qualquer (som, labios, mente, visao ou um canal novo criado pelo mestre): multiplier
  * substitui o multiplicador base do canal, bonus soma tiles de alcance e factor multiplica o
- * resultado (0 = perdeu o sentido). `light` faz o dono emitir luz.
+ * resultado (0 = perdeu o sentido). `light` faz o dono emitir luz. `conjure` deixa o dono tirar
+ * itens do nada (um mágico, um bolso sem fundo), com custo opcional num recurso.
  */
 export type PerkGrant =
   | { kind: 'see_stat'; stat: string }
   | { kind: 'see_thoughts' }
   | { kind: 'check_bonus'; bonus: number; attribute?: string; skill?: string }
   | { kind: 'sense'; channel: string; multiplier?: number; bonus?: number; factor?: number }
-  | ({ kind: 'light' } & LightSpec);
+  | ({ kind: 'light' } & LightSpec)
+  | { kind: 'conjure'; note?: string; cost?: { resource: string; amount: number } };
 
 /** Um jeito de falar: até onde o alvo pode estar e até onde cada canal leva o conteúdo. */
 export interface SpeechMode {

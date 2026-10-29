@@ -48,4 +48,15 @@ describe('OfflineProvider', () => {
     expect(engine.state.log.at(-1)!.text).toContain('passos apressados');
     expect(events.filter((e) => e.type === 'tool' && !e.ok)).toEqual([]);
   }, 20_000);
+
+  it('o motor barra o item tirado do nada, mesmo quando o mestre tenta criar', async () => {
+    const gm = new GameMaster({ provider: new OfflineProvider() });
+    const engine = GameEngine.create('demo', 3);
+    const events: GmEvent[] = [];
+    await gm.setup(engine, () => {});
+    await gm.play(engine, 'Tiro uma bomba de fedor do bolso.', (e) => events.push(e));
+    const refused = events.filter((e) => e.type === 'tool' && !e.ok);
+    expect(refused).toMatchObject([{ name: 'create_items', summary: expect.stringContaining('não pode surgir com Prof. Tanaka') }]);
+    expect(Object.values(engine.state.items).map((i) => i.name)).not.toContain('Bomba de fedor');
+  }, 20_000);
 });
