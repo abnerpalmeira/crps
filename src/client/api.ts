@@ -4,6 +4,8 @@ import type { GmEvent } from '../gm/gm';
 export interface StateResponse {
   world: WorldState | null;
   busy: boolean;
+  /** dev: custo em US$ e bastidores; release: só créditos. */
+  mode: 'dev' | 'release';
   model: string;
 }
 

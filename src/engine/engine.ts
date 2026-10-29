@@ -18,6 +18,7 @@ import type {
   Pos,
   ResourceDef,
   Ruleset,
+  SpeechMode,
   Thread,
   ThreadStatus,
   Visibility,
@@ -36,6 +37,28 @@ export const CORE_RESOURCES: ResourceDef[] = [
 ];
 const CORE_ALIASES: Record<string, string[]> = { vida: ['vida', 'hp', 'saude', 'pontos_de_vida', 'health'] };
 
+/**
+ * Modos de fala padrão. A voz normal cobre uma sala de aula. Cochichar exige estar colado, e o
+ * conteúdo é só do alvo: som 0,5 não alcança nem quem está do lado, a não ser com audição
+ * aguçada (×2 já ouve a 1 tile).
+ */
+export const DEFAULT_SPEECH: Record<string, SpeechMode> = {
+  fala: { label: 'fala', reach: 12, channels: { som: 12, labios: 6 } },
+  cochicho: { label: 'cochicha', reach: 2, channels: { som: 0.5, labios: 3 } },
+  grito: { label: 'grita', reach: 40, channels: { som: 40, labios: 8 } },
+};
+
+/** Todo mundo ouve (som 1); ler lábios e mentes só com perk. */
+export const DEFAULT_SENSES: Record<string, number> = { som: 1, labios: 0, mente: 0 };
+
+export const DEFAULT_REACHES: Record<string, number> = {
+  toque: 1,
+  corpo_a_corpo: 1,
+  entregar: 2,
+  arremesso: 8,
+  visao: 40,
+};
+
 export const DEFAULT_RULESET: Ruleset = {
   name: 'Sistema Universal CRPS',
   attributes: [
@@ -45,6 +68,9 @@ export const DEFAULT_RULESET: Ruleset = {
   ],
   resources: [...CORE_RESOURCES, { id: 'energia', name: 'Energia', max: 10, description: 'disposição física e mental', visibility: 'self' }],
   perks: [],
+  speech: DEFAULT_SPEECH,
+  senses: DEFAULT_SENSES,
+  reaches: DEFAULT_REACHES,
   dice: '2d6',
   difficulties: { facil: 7, normal: 9, dificil: 11, muito_dificil: 13 },
   notes: 'Atributos e perícias vão de 0 a 5 (1 = mediano, 3 = muito bom, 5 = lendário).',
@@ -66,6 +92,9 @@ function migrate(state: WorldState): WorldState {
   state.frames ??= [];
   const rules = state.ruleset;
   rules.perks ??= [];
+  rules.speech ??= structuredClone(DEFAULT_SPEECH);
+  rules.senses ??= { ...DEFAULT_SENSES };
+  rules.reaches ??= { ...DEFAULT_REACHES };
   for (const a of rules.attributes) {
     a.visibility ??= 'self';
     a.default ??= 1;
@@ -233,10 +262,10 @@ export class GameEngine {
     return JSON.stringify(this.state);
   }
 
-  /** Cópia para o cliente, com histórico e retratos encurtados. */
+  /** Cópia para o cliente, com histórico e retratos encurtados e a narração como o jogador a percebeu. */
   snapshot(maxLog = 200, maxFrames = 80): WorldState {
     const copy = structuredClone(this.state);
-    copy.log = copy.log.slice(-maxLog);
+    copy.log = copy.log.slice(-maxLog).map(({ playerText, ...e }) => (playerText === undefined ? e : { ...e, text: playerText }));
     copy.frames = copy.frames.slice(-maxFrames);
     return copy;
   }
@@ -534,8 +563,8 @@ export class GameEngine {
 
   // --------------------------------------------------------------- mutações
 
-  log(kind: LogKind, text: string): void {
-    this.state.log.push({ turn: this.state.turn, clock: { ...this.state.clock }, kind, text });
+  log(kind: LogKind, text: string, playerText?: string): void {
+    this.state.log.push({ turn: this.state.turn, clock: { ...this.state.clock }, kind, text, ...(playerText !== undefined ? { playerText } : {}) });
   }
 
   beginTurn(): number {
@@ -566,6 +595,9 @@ export class GameEngine {
       attributes: input.attributes.map((a) => this.attributeDef(a, 1)),
       resources: input.resources.map((r) => this.resourceDef(r)),
       perks: [],
+      speech: structuredClone(DEFAULT_SPEECH),
+      senses: { ...DEFAULT_SENSES },
+      reaches: { ...DEFAULT_REACHES },
       dice,
       difficulties,
       notes: input.notes ?? DEFAULT_RULESET.notes,
@@ -594,11 +626,42 @@ export class GameEngine {
     resources?: ResourceInput[];
     perks?: PerkInput[];
     visibility?: Record<string, Visibility>;
+    speech_modes?: Record<string, SpeechMode>;
+    senses?: Record<string, number>;
+    reaches?: Record<string, number>;
     reason: string;
   }) {
     const rules = this.state.ruleset;
     const characters = Object.values(this.state.characters);
-    const added: { kind: 'atributo' | 'recurso' | 'perk' | 'visibilidade'; id: string; name: string; visibility?: Visibility }[] = [];
+    const added: {
+      kind: 'atributo' | 'recurso' | 'perk' | 'visibilidade' | 'modo de fala' | 'sentido' | 'alcance';
+      id: string;
+      name: string;
+      visibility?: Visibility;
+    }[] = [];
+    const tiles = (v: number, what: string) => {
+      if (!Number.isFinite(v) || v < 0 || v > 200) throw new EngineError(`${what} precisa ficar entre 0 e 200.`);
+      return Math.round(v * 10) / 10;
+    };
+    for (const [rawId, mode] of Object.entries(input.speech_modes ?? {})) {
+      const id = slugify(rawId, 20);
+      rules.speech[id] = {
+        label: mode.label,
+        reach: tiles(mode.reach, `O alcance de "${id}"`),
+        channels: Object.fromEntries(Object.entries(mode.channels).map(([c, r]) => [slugify(c, 20), tiles(r, `O canal "${c}"`)])),
+      };
+      added.push({ kind: 'modo de fala', id, name: mode.label, visibility: 'hidden' });
+    }
+    for (const [channel, value] of Object.entries(input.senses ?? {})) {
+      const id = slugify(channel, 20);
+      rules.senses[id] = tiles(value, `O sentido "${id}"`);
+      added.push({ kind: 'sentido', id, name: id, visibility: 'hidden' });
+    }
+    for (const [action, value] of Object.entries(input.reaches ?? {})) {
+      const id = slugify(action, 24);
+      rules.reaches[id] = tiles(value, `O alcance "${id}"`);
+      added.push({ kind: 'alcance', id, name: id, visibility: 'hidden' });
+    }
     for (const a of input.attributes ?? []) {
       const def = this.attributeDef(a, 0);
       this.assertNewStat(def.id);
@@ -623,7 +686,9 @@ export class GameEngine {
       def.visibility = visibility;
       added.push({ kind: 'visibilidade', id: def.id, name: def.name, visibility });
     }
-    if (!added.length) throw new EngineError('Nada para estender: informe attributes, resources, perks ou visibility.');
+    if (!added.length) {
+      throw new EngineError('Nada para estender: informe attributes, resources, perks, visibility, speech_modes, senses ou reaches.');
+    }
     if (rules.attributes.length > 10 || rules.resources.length > 8) {
       throw new EngineError('Regras grandes demais (máx. 10 atributos e 8 recursos). Prefira perícias, que são livres.');
     }
@@ -669,6 +734,15 @@ export class GameEngine {
     if (this.state.ruleset.perks.some((x) => x.id === id)) throw new EngineError(`Já existe um perk com o id "${id}".`);
     const grants: PerkGrant[] = p.grants.map((g) => {
       if (g.kind === 'see_stat') return { kind: 'see_stat', stat: this.findStatDef(g.stat).id };
+      if (g.kind === 'sense') {
+        if (g.multiplier === undefined && g.bonus === undefined) throw new EngineError(`O perk "${p.name}" precisa de multiplier ou bonus no canal ${g.channel}.`);
+        return {
+          kind: 'sense',
+          channel: slugify(g.channel, 20),
+          ...(g.multiplier !== undefined ? { multiplier: clamp(g.multiplier, 0, 20) } : {}),
+          ...(g.bonus !== undefined ? { bonus: clamp(Math.round(g.bonus), -50, 200) } : {}),
+        };
+      }
       if (g.kind === 'check_bonus') {
         return {
           kind: 'check_bonus',
@@ -999,8 +1073,42 @@ export class GameEngine {
     return { fixture_id: f.id, text: f.text, state: f.state };
   }
 
-  skillCheck(input: { character_id: string; attribute: string; skill?: string; difficulty: DifficultyName | number; modifier?: number; reason: string }) {
+  /** Alcance de uma ação com alvo: um número de tiles ou uma chave de ruleset.reaches. */
+  private resolveReach(reach: string | number | undefined): { name: string; tiles: number } {
+    const reaches = this.state.ruleset.reaches;
+    if (typeof reach === 'number') return { name: `${reach} tiles`, tiles: reach };
+    const key = reach === undefined ? 'visao' : slugify(reach, 24);
+    if (reaches[key] === undefined) {
+      throw new EngineError(`Alcance "${reach}" não existe. Alcances: ${Object.entries(reaches).map(([k, v]) => `${k} (${v})`).join(', ')}; crie com extend_ruleset.`);
+    }
+    return { name: key, tiles: reaches[key] };
+  }
+
+  skillCheck(input: {
+    character_id: string;
+    attribute: string;
+    skill?: string;
+    difficulty: DifficultyName | number;
+    modifier?: number;
+    reason: string;
+    target_id?: string;
+    reach?: string | number;
+  }) {
     const c = this.findCharacter(input.character_id);
+    let opponent: { id: string; name: string; distance: number; reach: string } | null = null;
+    if (input.target_id) {
+      const t = this.findCharacter(input.target_id);
+      const reach = this.resolveReach(input.reach);
+      const d = c.pos && t.pos && c.locationId === t.locationId ? chebyshev(c.pos, t.pos) : null;
+      if (d === null) throw new EngineError(`${c.name} e ${t.name} não estão no mesmo local.`);
+      if (d > reach.tiles) {
+        throw new EngineError(
+          `${t.name} está a ${d} tiles de ${c.name}, e "${reach.name}" alcança ${reach.tiles}. ` +
+            'Aproxime os dois com move_character antes, ou escolha uma ação de alcance maior.',
+        );
+      }
+      opponent = { id: t.id, name: t.name, distance: d, reach: reach.name };
+    }
     const attrId = this.resolveAttributeId(input.attribute);
     const attr = this.state.ruleset.attributes.find((a) => a.id === attrId)!;
     const skill = input.skill ? slugify(input.skill, 24) : null;
@@ -1024,6 +1132,7 @@ export class GameEngine {
     return {
       character_id: c.id,
       character: c.name,
+      against: opponent,
       attribute: { id: attrId, name: attr.name, value: c.attributes[attrId] ?? 0 },
       skill: skill ? { id: skill, value: skillValue } : null,
       modifier,

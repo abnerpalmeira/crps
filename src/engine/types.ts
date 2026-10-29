@@ -33,11 +33,26 @@ export interface ResourceDef {
   core?: boolean;
 }
 
-/** Efeito mecânico de um perk, aplicado pelo motor. */
+/**
+ * Efeito mecânico de um perk, aplicado pelo motor. `sense` mexe num canal sensorial qualquer
+ * (som, labios, mente ou um canal novo criado pelo mestre): multiplier substitui o multiplicador
+ * base do canal, bonus soma tiles de alcance.
+ */
 export type PerkGrant =
   | { kind: 'see_stat'; stat: string }
   | { kind: 'see_thoughts' }
-  | { kind: 'check_bonus'; bonus: number; attribute?: string; skill?: string };
+  | { kind: 'check_bonus'; bonus: number; attribute?: string; skill?: string }
+  | { kind: 'sense'; channel: string; multiplier?: number; bonus?: number };
+
+/** Um jeito de falar: até onde o alvo pode estar e até onde cada canal leva o conteúdo. */
+export interface SpeechMode {
+  /** Verbo para a interface: "fala", "cochicha", "grita". */
+  label: string;
+  /** Distância máxima (tiles) entre quem fala e o alvo. */
+  reach: number;
+  /** Alcance base (tiles) do conteúdo em cada canal sensorial. */
+  channels: Record<string, number>;
+}
 
 export interface PerkDef {
   id: string;
@@ -54,6 +69,12 @@ export interface Ruleset {
   attributes: AttributeDef[];
   resources: ResourceDef[];
   perks: PerkDef[];
+  /** Modos de fala (fala, cochicho, grito e os que o mestre criar). */
+  speech: Record<string, SpeechMode>;
+  /** Multiplicador base de cada canal sensorial para todo personagem (som 1; mente e labios 0). */
+  senses: Record<string, number>;
+  /** Alcance (tiles) de ações com alvo: toque, corpo_a_corpo, arremesso… */
+  reaches: Record<string, number>;
   /** Teste = dados + atributo + perícia + modificador >= dificuldade. */
   dice: string;
   difficulties: Record<DifficultyName, number>;
@@ -175,6 +196,8 @@ export interface LogEntry {
   clock: Clock;
   kind: LogKind;
   text: string;
+  /** Versão que o jogador vê, quando difere (falas que ele não ouviu viram só o gesto). */
+  playerText?: string;
 }
 
 /** Retrato da cena no fim de um turno: o que o replay precisa para mostrar o passado. */

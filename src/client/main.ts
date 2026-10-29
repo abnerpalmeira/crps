@@ -69,6 +69,10 @@ function handle(event: GmEvent, turn: TurnView): void {
     case 'usage':
       ui.addUsage(event.usage);
       break;
+    case 'cost':
+      turn.cost(event);
+      ui.addCost(event);
+      break;
     case 'done':
       break;
   }
@@ -138,6 +142,7 @@ async function fetchStateWithRetry(): Promise<Awaited<ReturnType<typeof fetchSta
 void (async () => {
   try {
     const state = await fetchStateWithRetry();
+    ui.setMode(state.mode);
     ui.setModel(state.model);
     if (state.world) {
       applyWorld(state.world);

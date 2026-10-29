@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GameEngine } from '../src/engine/engine';
 import { parseBeats } from '../src/engine/frames';
+import { distanceBetween } from '../src/engine/perception';
 import { buildLocation } from '../src/engine/layout';
 import { GameMaster, type GmEvent } from '../src/gm/gm';
 import { DEMO_CLASSROOM, OfflineProvider } from '../src/gm/offline';
@@ -27,5 +28,10 @@ describe('OfflineProvider', () => {
     const speakers = parseBeats(engine.state.log.at(-1)!.text).flatMap((b) => (b.kind === 'speech' ? [b.speakerId] : []));
     expect(speakers).toEqual(['voce', 'aiko', 'haruto']);
     expect(speakers.every((id) => engine.state.characters[id])).toBe(true);
+    // Haruto foi até a Mei antes de cochichar. O conteúdo é só dos dois, mesmo com colegas do lado,
+    // e do professor se ele estiver a até 3 tiles ("Lê a turma" é mente +3).
+    const whisper = engine.state.facts.find((f) => f.text.includes('bom humor'))!;
+    const readsMind = distanceBetween(engine.state, 'voce', 'haruto')! <= 3;
+    expect(whisper.knownBy).toEqual(readsMind ? ['voce', 'haruto', 'mei'] : ['haruto', 'mei']);
   });
 });

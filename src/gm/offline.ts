@@ -48,7 +48,12 @@ function setupSteps(): StepResult[] {
           resources: [{ name: 'Energia', max: 10, description: 'fôlego até o fim do dia' }],
           perks: [
             { id: 'olho_clinico', name: 'Olho clínico', description: 'percebe na hora quem não está bem', grants: [{ kind: 'see_stat', stat: 'vida' }] },
-            { id: 'le_a_turma', name: 'Lê a turma', description: 'anos de sala de aula: adivinha o que os alunos pensam', grants: [{ kind: 'see_thoughts' }] },
+            {
+              id: 'le_a_turma',
+              name: 'Lê a turma',
+              description: 'anos de sala de aula: adivinha o que pensam os alunos que estão perto',
+              grants: [{ kind: 'sense', channel: 'mente', bonus: 3 }],
+            },
           ],
         }),
         call('create_location', { id: 'sala_2b', name: 'Sala 2-B', description: 'Sala de aula de uma escola japonesa, com janelas para o pátio.', layout: DEMO_CLASSROOM }),
@@ -110,6 +115,8 @@ function turnSteps(action: string, playerId: string, boardId: string | null): St
   const tools = [
     call('skill_check', { character_id: playerId, attribute: 'didatica', difficulty: 'normal', reason: action.slice(0, 60) }),
     call('advance_time', { minutes: 5, reason: 'o turno passou' }),
+    // Para cochichar, Haruto precisa ir até a Mei: o motor recusa cochicho à distância.
+    call('move_character', { character_id: 'haruto', to: { near: 'mei' } }),
   ];
   if (boardId && /quadro/i.test(action)) tools.push(call('update_fixture', { fixture_id: boardId, append_text: quoted ?? new Date().toLocaleDateString('pt-BR') }));
   return [
@@ -119,7 +126,8 @@ function turnSteps(action: string, playerId: string, boardId: string | null): St
         'O motor rolou os dados e o relógio andou cinco minutos.',
         `@${playerId}: ${quoted ?? 'Muito bem, turma. Vamos começar.'}`,
         '@aiko: Sim, professor!',
-        '@haruto: *cochicha para a Mei* Ele tá de bom humor hoje.',
+        'Haruto se levanta, vai até a carteira da Mei e se inclina para ela.',
+        '@haruto[cochicho>mei]: Ele tá de bom humor hoje.',
         '',
         '(Modo offline: sem o modelo, o mestre só registra a ação.)',
       ].join('\n'),
@@ -149,7 +157,8 @@ class OfflineSession implements ModelSession {
       handlers.onText?.(chunk);
       await new Promise((r) => setTimeout(r, 18));
     }
-    return next;
+    // Uso zerado, para o custo e os créditos aparecerem na demo sem gasto.
+    return { ...next, usage: { model: 'offline', inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } };
   }
 
   addToolResults(): void {}

@@ -1,5 +1,6 @@
 import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { LEGEND } from './layout';
+import { perceptionOf } from './perception';
 import { formatClock, truncate } from './text';
 import type { Character, DifficultyName, Location, PerkDef, Visibility } from './types';
 
@@ -32,6 +33,11 @@ export function describePerk(perk: PerkDef): string {
   const effects = perk.grants.map((g) => {
     if (g.kind === 'see_stat') return `vê ${g.stat} de todos`;
     if (g.kind === 'see_thoughts') return 'percebe o que os outros pensam';
+    if (g.kind === 'sense') {
+      const mult = g.multiplier !== undefined ? ` ×${g.multiplier}` : '';
+      const bonus = g.bonus ? ` ${g.bonus > 0 ? '+' : ''}${g.bonus} tiles` : '';
+      return `sentido ${g.channel}${mult}${bonus}`;
+    }
     const scope = [g.attribute && `de ${g.attribute}`, g.skill && `com ${g.skill}`].filter(Boolean).join(' ');
     return `${g.bonus > 0 ? '+' : ''}${g.bonus} em testes${scope ? ` ${scope}` : ''}`;
   });
@@ -127,15 +133,17 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     }
     out.push(`\nMóveis:\n${lines.join('\n') || '(nenhum)'}`);
 
+    const view = perceptionOf(s, s.playerId);
     const people = engine.charactersIn(loc.id).map((c) => {
       sceneIds.add(c.id);
+      const mind = c.thoughts ? `; pensa${view.canSeeThoughts(c.id) ? ' (o jogador percebe)' : ''}: "${truncate(c.thoughts, 160)}"` : '';
       const where = c.seatId ? `sentado(a) em ${shortId(loc, c.seatId)}` : 'em pé';
       const res = resourceLine(engine, c, !c.isPlayer);
       const perks = engine.perksOf(c).map((perk) => perk.name);
       return (
         `- ${markers.get(c.id) ?? '?'} ${c.name} [${c.id}]${c.isPlayer ? ' (VOCÊ, jogador)' : ''}: ${c.role}; ${where} (${c.pos?.x},${c.pos?.y}), olhando ${c.facing}; ` +
         `${c.detail === 'sketch' ? 'esboço' : 'completo'}; traços: ${c.traits.join(', ') || '—'}${res ? `; ${res}` : ''}` +
-        `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${c.thoughts ? `; pensa: "${truncate(c.thoughts, 160)}"` : ''}`
+        `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${mind}`
       );
     });
     out.push(`\nPersonagens aqui:\n${people.join('\n') || '(ninguém)'}`);
@@ -159,7 +167,7 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     const perks = engine.perksOf(p);
     out.push(
       `Perks: ${perks.map((perk) => `${perk.name} (${describePerk(perk)})`).join('; ') || 'nenhum'}. ` +
-        'O jogador só percebe valores ocultos e pensamentos alheios por perks; sem eles, não os revele na narração.',
+        'O jogador só percebe os valores ocultos que os perks mostram e os pensamentos marcados com "(o jogador percebe)"; não revele os outros na narração.',
     );
   } else {
     out.push('\n(Ainda não há personagem do jogador.)');

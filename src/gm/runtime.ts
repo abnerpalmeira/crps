@@ -1,11 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { WorkloadIdentityError } from '@anthropic-ai/sdk/lib/credentials/types';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GameEngine } from '../engine/engine';
 import { ClaudeProvider } from './claude';
 import { GameMaster } from './gm';
 import { OfflineProvider } from './offline';
+import type { Mode } from './pricing';
 import type { Effort } from './provider';
 
 const EFFORTS = new Set<string>(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -69,4 +70,20 @@ export class SaveStore {
     const id = this.load()?.state.id ?? 'campanha';
     renameSync(this.current, join(this.dir, `${id}-${Date.now()}.json`));
   }
+
+  /** Uma linha por turno em ledger.jsonl: quanto cada turno custou, por modelo. */
+  appendLedger(entry: Record<string, unknown>): void {
+    mkdirSync(this.dir, { recursive: true });
+    appendFileSync(join(this.dir, 'ledger.jsonl'), `${JSON.stringify(entry)}\n`);
+  }
+}
+
+export function modeFromEnv(): Mode {
+  return process.env.CRPS_MODE === 'release' ? 'release' : 'dev';
+}
+
+/** Quanto vale 1 crédito em US$ (padrão: US$ 0,01). */
+export function creditUsdFromEnv(): number {
+  const value = Number(process.env.CRPS_CREDIT_USD);
+  return Number.isFinite(value) && value > 0 ? value : 0.01;
 }

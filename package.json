@@ -9,8 +9,9 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite",
     "demo": "CRPS_PROVIDER=offline CRPS_SAVES=saves/demo CRPS_API_PORT=8788 npm run dev",
+    "demo:release": "CRPS_MODE=release npm run demo",
     "play": "tsx src/cli.ts",
-    "start": "vite build && tsx src/server/index.ts",
+    "start": "vite build && CRPS_MODE=release tsx src/server/index.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build"

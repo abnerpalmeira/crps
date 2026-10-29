@@ -43,7 +43,8 @@ Outros comandos:
 | `npm run demo` | Interface com o provedor **offline**: roteiro fixo de sala de aula, sem modelo nem tokens (API em :8788, roda junto com o jogo real) |
 | `npm test` | Testes do motor, do layout e do loop do mestre (com um provedor roteirizado) |
 | `npm run build` | Typecheck e bundle de produção em `dist/` |
-| `npm start` | Build e servidor único que serve a interface e a API em :8787 |
+| `npm start` | Build e servidor único, em modo **release**, que serve a interface e a API em :8787 |
+| `npm run demo:release` | A demo offline em modo release, para ver a interface que o jogador final vê |
 
 A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anterior ao lado.
 
@@ -59,6 +60,22 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 | `CRPS_PROVIDER` | `claude` | `offline` usa o roteiro fixo |
 | `CRPS_SAVES` | `saves` | Pasta dos saves |
 | `CRPS_API_PORT` | `8787` | Porta da API (o Vite encaminha `/api` para ela) |
+| `CRPS_MODE` | `dev` | `release` mostra só créditos e esconde os bastidores (`npm start` já usa) |
+| `CRPS_CREDIT_USD` | `0.01` | Quanto vale 1 crédito em US$ |
+
+### Custo e créditos
+
+O servidor soma o uso de todas as chamadas de cada turno (mestre, correções e verificador),
+calcula o custo pela tabela de preços (`src/gm/pricing.ts`) e decide o que mostrar:
+
+- **dev:** cada turno mostra o custo em US$ e em créditos, e o rodapé mostra o total da sessão e os
+  tokens. O detalhe por modelo fica no tooltip e no log do servidor.
+- **release:** o servidor não manda dólares, tokens nem nomes de modelo; o jogador vê só os
+  créditos de cada turno e da sessão, e o botão de bastidores some.
+
+Cada turno também vira uma linha em `saves/ledger.jsonl`, com US$, créditos e tokens por modelo,
+nos dois modos. Um turno que falha no meio também entra na conta, porque já gastou tokens. Saldo,
+compra de créditos e margem sobre o custo ainda não existem.
 
 As chamadas ao Claude usam `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`):
 se um classificador de segurança recusar um pedido legítimo (uma cena de luta, por
@@ -74,9 +91,10 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   layout.ts     layout ASCII → local validado (paredes, conectividade, acesso, orientação)
   engine.ts     regras: posicionamento, caminhos, alcance, testes, fatos, tempo
   tools.ts      as 18 tools (schemas zod → JSON Schema) e a execução atômica
-  perception.ts o que o jogador percebe (visibilidade e perks)
+  perception.ts o que cada um percebe (visibilidade, sentidos e perks)
+  speech.ts     falas: alcance de cada modo, quem ouve e o que o jogador vê
   brief.ts      o resumo do estado que o modelo recebe a cada turno
-  frames.ts     falas `@id:` → passos do replay; retratos da cena por turno
+  frames.ts     falas `@id[modo>alvo]:` → passos do replay; retratos da cena por turno
 src/gm/       o mestre
   gm.ts         loop do turno, eventos, verificador e rollback se a API falhar
   provider.ts   interface do provedor de modelo
@@ -110,11 +128,15 @@ Princípios que o motor impõe:
 - **Vida universal e visibilidade.** Todo personagem tem vida, mesmo oculta. Cada atributo
   e recurso é `public` (o jogador vê de todos), `self` (só o próprio) ou `hidden` (só o mestre).
 - **Perks ligados a traços**, com efeito aplicado pelo motor: `see_stat` (ver a vida de
-  todos), `see_thoughts` (ler o pensamento dos NPCs, que o mestre mantém em `thoughts`) e
-  `check_bonus` (+N em testes). O verificador aponta quando a narração revela um valor oculto
-  ou um pensamento sem o perk, e os chips não mostram o que o jogador não percebe.
+  todos), `check_bonus` (+N em testes) e `sense`, que muda o alcance de um canal sensorial
+  (veja [Falas, alcance e sentidos](#falas-alcance-e-sentidos)). Ler pensamentos é o canal
+  `mente`: o mestre mantém o que cada NPC pensa em `thoughts`, e o resumo marca quais o
+  jogador percebe agora. O verificador aponta quando a narração revela um valor oculto ou um
+  pensamento que o jogador não percebe, e os chips não mostram o que ele não percebe.
 - **O espaço importa.** Entregar algo exige estar a até 2 tiles; mover passa por
-  busca de caminho; assentos e tiles não podem ser ocupados por dois.
+  busca de caminho; assentos e tiles não podem ser ocupados por dois. Falas e ações com
+  alvo (`skill_check` com `target_id` e `reach`: toque, corpo a corpo, arremesso…) têm
+  alcance, e o motor recusa o que está longe demais.
 
 ### Tools do mestre
 
@@ -139,8 +161,9 @@ Princípios que o motor impõe:
 ### Replay com balões de fala
 
 Cada turno é um frame. O mestre escreve cada fala numa linha própria, `@id: fala`
-(gestos curtos entre asteriscos). No 3D, cada fala vira um balão sobre quem fala, com até
-três na tela, os mais antigos esmaecendo, e a narração vira legenda. No fim de cada turno o
+(gestos curtos entre asteriscos; modos e alvos na seção seguinte). No 3D, cada fala vira um
+balão sobre quem fala, com até três na tela, os mais antigos esmaecendo, e a narração vira
+legenda. O balão do cochicho é tracejado e o do grito, em negrito. No fim de cada turno o
 motor guarda um retrato da cena (posições, itens, quadro, relógio), então voltar a um
 frame antigo mostra o mundo como estava naquele momento.
 
@@ -148,6 +171,38 @@ Controles no palco: ⏮ turno anterior · ‹ fala anterior · ▶ tocar/pausar 
 ⏭ próximo turno · "ao vivo" volta ao presente. Com o foco fora da caixa de texto: ← →,
 espaço e Esc. Cada turno do painel tem um botão "▶ rever", e o turno novo toca sozinho
 quando termina.
+
+### Falas, alcance e sentidos
+
+Cada fala diz o modo e, quando há, o alvo:
+
+| Linha | Alvo a até | Ouvem o conteúdo (audição normal) |
+|---|---|---|
+| `@haruto: Bom dia!` | — | quem está a até 12 tiles |
+| `@haruto[>mei]: Bom dia!` | 12 tiles | idem, dirigida à Mei |
+| `@haruto[cochicho>mei]: Ele tá de bom humor.` | 2 tiles | só a Mei |
+| `@haruto[grito]: Socorro!` | 40 tiles | o local inteiro |
+
+O motor confere cada fala antes de aceitar a narração: cochichar com quem está do outro lado
+da sala vira correção para o mestre (mover antes ou trocar a ação), na mesma rodada do
+verificador. Depois calcula quem percebeu. O conteúdo de uma fala que nem todos ouviram vira
+fato conhecido só por quem ouviu, e, se o personagem do jogador não percebeu, o jogador vê
+só o gesto (🤫 "cochicha algo para Mei"). A troca acontece no servidor, inclusive durante o
+streaming; o texto original fica nos bastidores.
+
+Quem percebe depende de canais sensoriais, que são dados como o resto das regras. `som`,
+`labios` e `mente` vêm de fábrica (só o som funciona sem perk), e o alcance num canal é o
+alcance base do modo × o multiplicador do personagem + bônus em tiles. Perks `sense` mudam
+isso:
+
+| Perk (exemplo) | Grant | Efeito |
+|---|---|---|
+| Super audição | `{ "kind": "sense", "channel": "som", "multiplier": 4 }` | ouve cochichos a até 2 tiles e falas a até 48 |
+| Leitura labial | `{ "kind": "sense", "channel": "labios", "multiplier": 1 }` | lê cochichos a até 3 tiles e falas a até 6 |
+| Telepatia | `{ "kind": "sense", "channel": "mente", "bonus": 8 }` | percebe pensamentos e falas de quem está a até 8 tiles |
+
+Modos de fala, canais e alcances novos (um rádio, língua de sinais, telepatia como modo de
+fala) entram com `extend_ruleset` quando a história pede, sem mudar o código.
 
 ### Layout ASCII
 

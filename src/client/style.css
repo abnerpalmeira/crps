@@ -271,6 +271,31 @@ body.replaying #hud-replay {
   color: #6b6257;
 }
 
+.balloon-anchor[data-mode='cochicho'] .balloon {
+  border: 1px dashed #a89f90;
+  background: #f1eee6;
+  font-size: 12px;
+}
+
+.balloon-anchor[data-mode='grito'] .balloon {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.speech-mode {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hidden-speech {
+  color: var(--muted);
+}
+
+.speech-via {
+  color: var(--accent);
+  font-size: 12px;
+}
+
 .balloon-anchor[data-age='1'] .balloon {
   opacity: 0.7;
   transform: translateX(-50%) scale(0.93);
@@ -536,6 +561,17 @@ body.backstage .chip.backstage {
 .narration p.speech b {
   margin-right: 6px;
   font-weight: 600;
+}
+
+.turn-meta {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+body.release .toggle {
+  display: none;
 }
 
 .replay {

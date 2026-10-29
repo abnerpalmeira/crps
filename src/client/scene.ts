@@ -148,7 +148,7 @@ export class WorldView {
    * Balões de fala sobre os personagens: um por personagem (a fala mais recente dele).
    * `age` 0 é a fala atual; 1 e 2 vão esmaecendo. Devolve os ids que não estão em cena.
    */
-  setBalloons(lines: { speakerId: string; html: string; age: number }[]): string[] {
+  setBalloons(lines: { speakerId: string; html: string; age: number; mode?: string }[]): string[] {
     const wanted = new Map(lines.map((l) => [l.speakerId, l]));
     for (const id of [...this.balloons.keys()]) if (!wanted.has(id)) this.removeBalloon(id);
     const missing: string[] = [];
@@ -171,6 +171,7 @@ export class WorldView {
       const age = Math.min(line.age, 2);
       balloon.element.firstElementChild!.innerHTML = line.html;
       balloon.element.dataset.age = String(age);
+      balloon.element.dataset.mode = line.mode ?? 'fala';
       // Falas mais antigas sobem: vizinhos que falam em sequência não se sobrepõem.
       balloon.position.set(0, (actor.seated ? 1.86 : 2.24) + age * 0.5, 0);
     }

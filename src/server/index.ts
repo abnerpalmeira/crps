@@ -3,7 +3,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { GameEngine } from '../engine/engine';
 import type { Emit, GmEvent } from '../gm/gm';
-import { SaveStore, createGameMaster, describeError, loadEnv } from '../gm/runtime';
+import { CostMeter, costEvent, describeCost } from '../gm/pricing';
+import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, loadEnv, modeFromEnv } from '../gm/runtime';
 
 loadEnv();
 // Variável própria: PORT costuma ser definida para o servidor web (Vite) por quem o inicia.
@@ -20,6 +21,8 @@ const MIME: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
+const MODE = modeFromEnv();
+const CREDIT_USD = creditUsdFromEnv();
 const store = new SaveStore();
 const gm = createGameMaster();
 let engine: GameEngine | null = store.load();
@@ -43,11 +46,23 @@ async function readText(req: IncomingMessage, field: string): Promise<string> {
   return typeof value === 'string' ? value.trim().slice(0, MAX_TEXT) : '';
 }
 
-/** Transmite os eventos do turno em NDJSON. Quem chama já marcou `busy`. */
+/** Transmite os eventos do turno em NDJSON e fecha com o custo. Quem chama já marcou `busy`. */
 async function streamTurn(res: ServerResponse, run: (emit: Emit) => Promise<void>): Promise<void> {
   res.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
-  const emit = (event: GmEvent) => {
+  const send = (event: GmEvent) => {
     if (!res.writableEnded) res.write(`${JSON.stringify(event)}\n`);
+  };
+  const meter = new CostMeter();
+  // No release, tokens e modelos não saem do servidor: o jogador só vê créditos.
+  const emit = (event: GmEvent) => {
+    if (event.type === 'usage') {
+      meter.add(event.usage);
+      if (MODE === 'release') return;
+    }
+    // No release, entrada e resultado das tools e o texto do verificador podem ter segredos.
+    if (MODE === 'release' && event.type === 'tool') return send({ ...event, input: null, result: '' });
+    if (MODE === 'release' && event.type === 'verify') return send({ ...event, issues: [] });
+    send(event);
   };
   try {
     await run(emit);
@@ -56,8 +71,24 @@ async function streamTurn(res: ServerResponse, run: (emit: Emit) => Promise<void
     emit({ type: 'error', message: describeError(err) });
   } finally {
     if (engine) store.save(engine);
+    // Turno que falhou no meio também gastou tokens: o custo é registrado igual.
+    const cost = meter.summary();
+    if (cost.requests) {
+      const turn = engine?.state.turn ?? 0;
+      const event = costEvent(cost, { mode: MODE, creditUsd: CREDIT_USD, turn });
+      send(event);
+      console.log(`[crps] turno ${turn}: US$ ${cost.usd.toFixed(4)} = ${event.credits} créditos · ${describeCost(cost)}`);
+      store.appendLedger({
+        at: new Date().toISOString(),
+        campaign: engine?.state.id ?? null,
+        turn,
+        usd: Number(cost.usd.toFixed(6)),
+        credits: event.credits,
+        byModel: cost.byModel,
+      });
+    }
     busy = false;
-    emit({ type: 'done' });
+    send({ type: 'done' });
     res.end();
   }
 }
@@ -77,7 +108,7 @@ const server = createServer(async (req, res) => {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
   try {
     if (pathname === '/api/state' && req.method === 'GET') {
-      json(res, 200, { world: engine?.snapshot() ?? null, busy, model: gm.label });
+      json(res, 200, { world: engine?.snapshot() ?? null, busy, mode: MODE, model: MODE === 'dev' ? gm.label : '' });
       return;
     }
     if (pathname === '/api/new' && req.method === 'POST') {
@@ -119,5 +150,8 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`[crps] servidor em http://127.0.0.1:${PORT} · mestre: ${gm.label}${engine ? ` · campanha carregada (turno ${engine.state.turn})` : ''}`);
+  console.log(
+    `[crps] servidor em http://127.0.0.1:${PORT} · modo ${MODE} · mestre: ${gm.label} · 1 crédito = US$ ${CREDIT_USD}` +
+      `${engine ? ` · campanha carregada (turno ${engine.state.turn})` : ''}`,
+  );
 });

@@ -1,6 +1,6 @@
 import { parseBeats, sceneAt, type Beat } from '../engine/frames';
 import type { Clock, SceneFrame, WorldState } from '../engine/types';
-import { inline } from './format';
+import { speechHtml } from './format';
 import type { WorldView } from './scene';
 
 /** Um turno da campanha visto como frame: a ação do jogador e as falas e narrações, em ordem. */
@@ -188,12 +188,14 @@ export class Playback {
     const speeches = shown.filter((b): b is Extract<Beat, { kind: 'speech' }> => b.kind === 'speech').slice(-3);
     const offset = current?.kind === 'speech' ? 0 : 1;
     const missing = this.view.setBalloons(
-      speeches.map((s, k) => ({ speakerId: s.speakerId, html: inline(s.text), age: speeches.length - 1 - k + offset })),
+      speeches.map((s, k) => ({ speakerId: s.speakerId, html: speechHtml(s), mode: s.mode, age: speeches.length - 1 - k + offset })),
     );
     if (!current) this.ui.caption(null);
     else if (current.kind === 'input') this.ui.caption(current.text, 'Você');
     else if (current.kind === 'narration') this.ui.caption(current.text);
-    else if (missing.includes(current.speakerId)) this.ui.caption(current.text, this.nameOf(current.speakerId) ?? current.speakerId);
+    else if (missing.includes(current.speakerId)) {
+      this.ui.caption(current.hidden ? `🤫 ${current.text}` : current.text, this.nameOf(current.speakerId) ?? current.speakerId);
+    }
     else this.ui.caption(null);
   }
 

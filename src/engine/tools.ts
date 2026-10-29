@@ -39,6 +39,12 @@ const perkGrant = z.discriminatedUnion('kind', [
     attribute: z.string().optional().describe('Só em testes deste atributo.'),
     skill: z.string().optional().describe('Só em testes com esta perícia.'),
   }),
+  z.object({
+    kind: z.literal('sense'),
+    channel: z.string().describe('Canal sensorial: som, labios, mente ou um canal novo.'),
+    multiplier: z.number().optional().describe('Substitui o multiplicador base do canal (som 1; labios e mente 0). Ex.: super audição = som 4.'),
+    bonus: z.number().optional().describe('Tiles a mais de alcance. Ex.: telepatia = mente +8.'),
+  }),
 ]);
 
 const perkInput = z.object({
@@ -166,14 +172,27 @@ export const TOOLS = [
     name: 'extend_ruleset',
     description:
       'Muda as regras no meio da campanha, quando a história muda de rumo (a aula vira uma epidemia, a investigação vira ' +
-      'tiroteio): novos atributos (ex.: pontaria), recursos (ex.: infecção), perks, e a visibilidade de atributos e recursos ' +
-      'existentes. Quem já existe recebe o valor padrão (attributes.default, padrão 0; resources.start, padrão o máximo); ' +
-      'ajuste os relevantes com update_character. Chame antes de usar a regra nova.',
+      'tiroteio): novos atributos (ex.: pontaria), recursos (ex.: infecção), perks, a visibilidade de atributos e recursos, ' +
+      'modos de fala (ex.: telepatia), sentidos base e alcances de ação (ex.: tiro). Quem já existe recebe o valor padrão ' +
+      '(attributes.default, padrão 0; resources.start, padrão o máximo); ajuste os relevantes com update_character. Chame ' +
+      'antes de usar a regra nova.',
     schema: z.object({
       attributes: z.array(attributeInput).max(4).optional(),
       resources: z.array(resourceInput).max(4).optional(),
       perks: z.array(perkInput).max(6).optional(),
       visibility: z.record(z.string(), visibility).optional().describe('Ex.: {"vida": "public"} quando o combate começa.'),
+      speech_modes: z
+        .record(
+          z.string(),
+          z.object({
+            label: z.string().describe('Verbo para a interface, ex. "transmite por telepatia".'),
+            reach: z.number().describe('Distância máxima até o alvo, em tiles.'),
+            channels: z.record(z.string(), z.number()).describe('Alcance do conteúdo por canal sensorial, ex. {"mente": 20}.'),
+          }),
+        )
+        .optional(),
+      senses: z.record(z.string(), z.number()).optional().describe('Multiplicador base de um canal para todos, ex. {"olfato": 1}.'),
+      reaches: z.record(z.string(), z.number()).optional().describe('Alcance de ações com alvo, ex. {"tiro_pistola": 20}.'),
       reason: z.string(),
     }),
     mutates: true,
@@ -290,7 +309,9 @@ export const TOOLS = [
     name: 'skill_check',
     description:
       'Resolve uma ação incerta com consequências. O motor rola os dados e decide sucesso ou falha; narre de acordo com o ' +
-      'resultado, nunca o contradiga. Use quando o resultado não for óbvio; ações triviais não precisam de teste.',
+      'resultado, nunca o contradiga. Use quando o resultado não for óbvio; ações triviais não precisam de teste. Ação com ' +
+      'alvo (empurrar, atacar, tocar, arremessar, examinar de perto): informe target_id e reach; o motor recusa se o alvo ' +
+      'estiver longe demais.',
     schema: z.object({
       character_id: z.string(),
       attribute: z.string().describe('Id ou nome de um atributo do ruleset.'),
@@ -298,6 +319,11 @@ export const TOOLS = [
       difficulty,
       modifier: z.number().int().optional().describe('Bônus ou penalidade da situação (-3 a +3).'),
       reason: z.string().describe('O que está sendo tentado, em poucas palavras.'),
+      target_id: z.string().optional().describe('Personagem alvo da ação, se houver.'),
+      reach: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe('Alcance da ação com alvo: chave de reaches (toque, corpo_a_corpo, arremesso, visao…) ou tiles. Padrão: visao.'),
     }),
     mutates: true,
     run(engine, input) {

@@ -8,6 +8,12 @@
       "port": 5173
     },
     {
+      "name": "crps-demo-release",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "demo:release"],
+      "port": 5173
+    },
+    {
       "name": "crps",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],

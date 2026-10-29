@@ -2,9 +2,10 @@ import { stdin, stdout } from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { compileBrief } from './engine/brief';
 import { GameEngine } from './engine/engine';
-import { SPEECH_LINE } from './engine/frames';
+import { parseSpeechLine } from './engine/frames';
 import type { GmEvent } from './gm/gm';
-import { SaveStore, createGameMaster, describeError, loadEnv } from './gm/runtime';
+import { CostMeter, describeCost, toCredits } from './gm/pricing';
+import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, loadEnv } from './gm/runtime';
 
 loadEnv();
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -23,13 +24,26 @@ async function ask(prompt: string): Promise<string | null> {
 let streamed = '';
 let pendingLine = '';
 let current: GameEngine | null = null;
+let meter = new CostMeter();
 
-/** Falas `@id: texto` aparecem como "Nome: texto". */
+/** A CLI é ferramenta de desenvolvimento: mostra o custo em US$ e em créditos. */
+function printCost(): void {
+  const cost = meter.summary();
+  meter = new CostMeter();
+  if (!cost.requests) return;
+  const credits = toCredits(cost.usd, creditUsdFromEnv());
+  stdout.write(dim(`  💲 US$ ${cost.usd.toFixed(4)} (${credits} créditos) · ${describeCost(cost)}\n`));
+}
+
+/** Falas `@id[modo>alvo]: texto` aparecem como "Nome (cochicho → Mei): texto"; as não ouvidas, só como gesto. */
 function formatLine(line: string): string {
-  const speech = SPEECH_LINE.exec(line);
+  const speech = parseSpeechLine(line);
   if (!speech) return line;
-  const name = current?.state.characters[speech[1].toLowerCase()]?.name ?? speech[1];
-  return `\x1b[1m${name}:\x1b[0m ${speech[2]}`;
+  const nameOf = (id: string) => current?.state.characters[id]?.name ?? id;
+  if (speech.hidden) return dim(`${nameOf(speech.speakerId)} 🤫 ${speech.text}`);
+  const to = speech.targetId ? `→ ${nameOf(speech.targetId).split(' ')[0]}` : '';
+  const how = [speech.mode !== 'fala' ? speech.mode : '', to].filter(Boolean).join(' ') + (speech.via ? `, via ${speech.via}` : '');
+  return `\x1b[1m${nameOf(speech.speakerId)}${how ? ` (${how})` : ''}:\x1b[0m ${speech.text}`;
 }
 
 /** A narração chega em pedaços; cada linha só é impressa inteira, já formatada. */
@@ -70,6 +84,9 @@ function print(event: GmEvent): void {
     case 'error':
       stdout.write(`\n⚠️  ${event.message}\n`);
       break;
+    case 'usage':
+      meter.add(event.usage);
+      break;
     default:
       break;
   }
@@ -81,7 +98,11 @@ async function newGame(): Promise<GameEngine | null> {
   store.archive();
   const engine = GameEngine.create(premise);
   current = engine;
-  await gm.setup(engine, print);
+  try {
+    await gm.setup(engine, print);
+  } finally {
+    printCost();
+  }
   store.save(engine);
   return engine;
 }
@@ -93,7 +114,7 @@ async function main(): Promise<void> {
   if (engine) {
     const last = [...engine.state.log].reverse().find((e) => e.kind === 'narration');
     console.log(dim('\nContinuando a campanha salva.'));
-    if (last) console.log(`\n${last.text.split('\n').map(formatLine).join('\n')}`);
+    if (last) console.log(`\n${(last.playerText ?? last.text).split('\n').map(formatLine).join('\n')}`);
   } else {
     engine = await newGame();
   }
@@ -113,6 +134,8 @@ async function main(): Promise<void> {
       }
     } catch (err) {
       print({ type: 'error', message: describeError(err) });
+    } finally {
+      printCost();
     }
   }
   rl.close();

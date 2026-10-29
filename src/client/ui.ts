@@ -2,6 +2,7 @@ import { perceptionOf } from '../engine/perception';
 import { formatClock } from '../engine/text';
 import type { Character, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
+import type { CostEvent } from '../gm/pricing';
 import type { Usage } from '../gm/provider';
 import { escapeHtml, formatNarration, inline, type Speaker } from './format';
 import type { PlaybackState } from './playback';
@@ -24,6 +25,9 @@ function statTexts(world: WorldState, c: Character): { id: string; text: string 
     ...world.ruleset.resources.map((r) => ({ id: r.id, text: `${r.name} ${c.resources[r.id] ?? r.max}/${r.max}` })),
   ];
 }
+
+const usd = (value: number) => `US$ ${value.toLocaleString('pt-BR', { minimumFractionDigits: 3, maximumFractionDigits: 3 })}`;
+const credits = (n: number) => `${n} ${n === 1 ? 'crédito' : 'créditos'}`;
 
 type ChipKind = 'dice' | 'world' | 'backstage';
 
@@ -92,6 +96,13 @@ export class TurnView {
     this.scroll();
   }
 
+  /** Custo do turno: US$ no modo dev, só créditos no release. */
+  cost(e: CostEvent): void {
+    const meta = el('div', 'turn-meta', e.usd === undefined ? `🪙 ${credits(e.credits)}` : `💲 ${usd(e.usd)} · ${credits(e.credits)}`);
+    if (e.detail) meta.title = e.detail;
+    this.root.insertBefore(meta, this.root.querySelector('.replay'));
+  }
+
   /** Liga o turno ao replay: botão para rever no 3D. */
   setTurn(turn: number): void {
     if (this.root.querySelector('.replay')) return;
@@ -140,6 +151,8 @@ export class Ui {
   private readonly premise = $<HTMLTextAreaElement>('#premise');
   private readonly inspector = $('#inspector');
   private usage = { input: 0, cached: 0, output: 0 };
+  private spent = { usd: 0, credits: 0 };
+  private mode: 'dev' | 'release' = 'dev';
   private busy = false;
   private inspected: Pick | null = null;
   private world: WorldState | null = null;
@@ -222,12 +235,37 @@ export class Ui {
     this.log.append(el('li', 'notice', text));
   }
 
+  /** dev: custo em US$, tokens e bastidores; release: só créditos, sem bastidores. */
+  setMode(mode: 'dev' | 'release'): void {
+    this.mode = mode;
+    document.body.classList.toggle('release', mode === 'release');
+    if (mode === 'release') {
+      document.body.classList.remove('backstage');
+      $<HTMLInputElement>('#backstage').checked = false;
+    }
+  }
+
   addUsage(u: Usage): void {
     this.usage.input += u.inputTokens + u.cacheReadTokens + u.cacheWriteTokens;
     this.usage.cached += u.cacheReadTokens;
     this.usage.output += u.outputTokens;
+    this.renderFooter();
+  }
+
+  addCost(e: CostEvent): void {
+    this.spent.credits += e.credits;
+    this.spent.usd += e.usd ?? 0;
+    this.renderFooter();
+  }
+
+  private renderFooter(): void {
     const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-    $('#usage').textContent = `tokens nesta sessão: ${k(this.usage.input)} entrada (${k(this.usage.cached)} do cache) · ${k(this.usage.output)} saída`;
+    const session = `nesta sessão: ${this.mode === 'dev' ? `${usd(this.spent.usd)} (${credits(this.spent.credits)})` : credits(this.spent.credits)}`;
+    const tokens =
+      this.mode === 'dev' && this.usage.input
+        ? ` · ${k(this.usage.input)} tokens de entrada (${k(this.usage.cached)} do cache), ${k(this.usage.output)} de saída`
+        : '';
+    $('#usage').textContent = session + tokens;
   }
 
   /** Legenda do replay: narração, ação do jogador ou fala de quem não está em cena. */

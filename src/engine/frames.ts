@@ -3,11 +3,38 @@ import type { SceneFrame, WorldState } from './types';
 /** Um passo do replay de um turno: a ação do jogador, uma fala ou um trecho de narração. */
 export type Beat =
   | { kind: 'input'; text: string }
-  | { kind: 'speech'; speakerId: string; text: string }
+  | { kind: 'speech'; speakerId: string; text: string; mode: string; targetId: string | null; hidden: boolean; via: string | null }
   | { kind: 'narration'; text: string };
 
-/** Fala na narração do mestre: uma linha `@id: texto`. */
-export const SPEECH_LINE = /^\s*@([a-z0-9_]+)\s*:\s*(.+)$/i;
+/**
+ * Fala na narração do mestre: `@id: texto`, `@id[>alvo]: texto`, `@id[cochicho>alvo]: texto`.
+ * Na versão do jogador, `|oculto` marca a fala que ele não ouviu (o texto vira só o gesto) e
+ * `|via Perk` a que ele só percebeu graças a um perk.
+ */
+export const SPEECH_LINE = /^\s*@([a-z0-9_]+)(?:\[([a-z0-9_]*)(?:>([a-z0-9_]+))?(?:\|([^\]]+))?\])?\s*:\s*(.+)$/i;
+
+export interface ParsedSpeech {
+  speakerId: string;
+  mode: string;
+  targetId: string | null;
+  hidden: boolean;
+  via: string | null;
+  text: string;
+}
+
+export function parseSpeechLine(line: string): ParsedSpeech | null {
+  const m = SPEECH_LINE.exec(line);
+  if (!m) return null;
+  const note = m[4]?.trim() ?? '';
+  return {
+    speakerId: m[1].toLowerCase(),
+    mode: (m[2] || 'fala').toLowerCase(),
+    targetId: m[3]?.toLowerCase() ?? null,
+    hidden: note === 'oculto',
+    via: note.startsWith('via ') ? note.slice(4).trim() : null,
+    text: m[5].trim(),
+  };
+}
 
 export const MAX_FRAMES = 400;
 const MAX_CAPTION = 240;
@@ -37,10 +64,10 @@ export function parseBeats(narration: string): Beat[] {
     paragraph = [];
   };
   for (const line of narration.split('\n')) {
-    const speech = SPEECH_LINE.exec(line);
+    const speech = parseSpeechLine(line);
     if (speech) {
       flush();
-      beats.push({ kind: 'speech', speakerId: speech[1].toLowerCase(), text: speech[2].trim() });
+      beats.push({ kind: 'speech', ...speech });
     } else if (line.trim()) paragraph.push(line.trim());
     else flush();
   }

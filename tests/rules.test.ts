@@ -133,12 +133,13 @@ describe('percepção do jogador', () => {
 
   it('o resumo diz ao mestre perks, pensamentos e o que o jogador percebe', () => {
     const e = school();
+    e.updateCharacter({ character_id: 'yuki', thoughts: 'esqueceu o trabalho em casa' });
+    expect(compileBrief(e)).toContain('pensa: "esqueceu o trabalho em casa"');
     e.extendRuleset({ reason: 'traço', perks: [{ name: 'Telepata', description: '', grants: [{ kind: 'see_thoughts' }] }] });
     e.updateCharacter({ character_id: 'kenji', perks_add: ['telepata'] });
-    e.updateCharacter({ character_id: 'yuki', thoughts: 'esqueceu o trabalho em casa' });
     const brief = compileBrief(e);
     expect(brief).toContain('vida (máx 10, oculto, universal)');
-    expect(brief).toContain('pensa: "esqueceu o trabalho em casa"');
+    expect(brief).toContain('pensa (o jogador percebe): "esqueceu o trabalho em casa"');
     expect(brief).toContain('Perks: Telepata (percebe o que os outros pensam)');
     expect(verifierPrompt({ state: brief, changes: [], input: '', narration: '' })).toContain('revelação indevida');
   });
