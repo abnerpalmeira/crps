@@ -8,3 +8,5 @@ saves/
 /assets/
 # Modelos gerados dos assets da Synty por npm run assets (derivados de arquivos licenciados).
 /public/models/
+# Cache do Python dos scripts de assets.
+__pycache__/

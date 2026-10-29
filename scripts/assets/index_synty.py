@@ -3,9 +3,13 @@ Repertório dos modelos da Synty extraídos em assets/synty: o que existe, de qu
 
 Uso: python3 -I scripts/assets/index_synty.py
 
-Lê só os nomes dos arquivos FBX (nunca os modelos) e classifica pelo prefixo que a Synty usa
-(SK_Chr = personagem, SM_Prop = objeto, SM_Veh = veículo…) e por palavras inteiras do nome
-(Dog, Horse, Shark… = animal). Escreve assets/synty/repertorio.json, com um item por modelo, e
+Classifica pelo nome do arquivo FBX, pelo prefixo que a Synty usa (SK_Chr = personagem, SM_Prop =
+objeto, SM_Veh = veículo…) e por palavras inteiras do nome (Dog, Horse, Shark… = animal). Quando
+há descrições de quem olhou as miniaturas (assets/synty/_catalogo/descricoes/*.jsonl, feitas a
+partir das grades de sheets_synty.py), elas valem por cima: o que o modelo é (desc), a categoria
+corrigida e, para personagens e animais, o corpo (figure) e o visual (look); sensivel marca símbolo
+de ódio ou conteúdo sexual explícito, e sem_imagem, o que foi descrito só pelo nome porque a
+miniatura não saiu. Escreve assets/synty/repertorio.json, com um item por modelo, e
 assets/synty/REPERTORIO.md, o resumo por categoria e pacote. Os dois ficam fora do git, junto
 dos arquivos-fonte, e são só texto: é o que pode chegar ao mestre.
 """
@@ -92,11 +96,25 @@ def classify(stem, folders=()):
     return category, tags
 
 
+def seen():
+    """Descrições de quem olhou as miniaturas, pelo caminho do FBX."""
+    out = {}
+    folder = os.path.join(ROOT, '_catalogo', 'descricoes')
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        with open(os.path.join(folder, name), encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    row = json.loads(line)
+                    out[row['src']] = row
+    return out
+
+
 def main():
     items = []
+    looked = seen()
     for pack in sorted(os.listdir(ROOT)):
         base = os.path.join(ROOT, pack)
-        if not os.path.isdir(base):
+        if not os.path.isdir(base) or pack.startswith('_'):
             continue
         for folder, _dirs, files in os.walk(base):
             for f in files:
@@ -109,7 +127,11 @@ def main():
                     continue
                 stem = f[:-4]
                 category, tags = classify(stem, folders)
-                items.append({'id': stem, 'pack': pack, 'src': rel, 'category': category, 'tags': tags})
+                item = {'id': stem, 'pack': pack, 'src': rel, 'category': category, 'tags': tags}
+                view = looked.get(rel)
+                if view:
+                    item.update({k: view[k] for k in ('desc', 'category', 'figure', 'look', 'sensivel', 'sem_imagem') if view.get(k)})
+                items.append(item)
 
     with open(os.path.join(ROOT, 'repertorio.json'), 'w', encoding='utf-8') as out:
         json.dump({'count': len(items), 'items': items}, out, ensure_ascii=False, indent=0)
@@ -117,7 +139,7 @@ def main():
     by_cat = defaultdict(list)
     for item in items:
         by_cat[item['category']].append(item)
-    lines = ['# Repertório Synty', '', f'{len(items)} modelos em {len({i["pack"] for i in items})} pacotes. Gerado por scripts/assets/index_synty.py, só a partir dos nomes dos arquivos.', '']
+    lines = ['# Repertório Synty', '', f'{len(items)} modelos em {len({i["pack"] for i in items})} pacotes. Gerado por scripts/assets/index_synty.py, pelos nomes dos arquivos e pelas descrições de quem olhou as miniaturas.', '']
     lines += ['| Categoria | Modelos | Pacotes |', '|---|---:|---:|']
     for cat in sorted(by_cat, key=lambda c: -len(by_cat[c])):
         lines.append(f'| {LABEL[cat]} | {len(by_cat[cat])} | {len({i["pack"] for i in by_cat[cat]})} |')
@@ -128,16 +150,17 @@ def main():
         lines += ['', f'## {LABEL[cat]} ({len(group)})', '']
         per_pack = defaultdict(list)
         for item in group:
-            per_pack[item['pack']].append(item['id'])
+            per_pack[item['pack']].append(item)
         for pack, ids in sorted(per_pack.items(), key=lambda kv: -len(kv[1])):
-            # Nome sem prefixo e sem número, para o resumo caber: SM_Prop_Chair_Office_01 → Chair Office.
-            names = sorted({' '.join(w.capitalize() for w in classify(i)[1]) for i in ids} - {''})
+            # O que quem olhou viu; sem isso, o nome sem prefixo e sem número (SM_Prop_Chair_01 → Chair).
+            names = sorted({i.get('desc') or ' '.join(w.capitalize() for w in classify(i['id'])[1]) for i in ids} - {''})
             shown = ', '.join(names[:40]) + (f' … (+{len(names) - 40})' if len(names) > 40 else '')
             lines.append(f'- **{pack}** ({len(ids)}): {shown}')
     with open(os.path.join(ROOT, 'REPERTORIO.md'), 'w', encoding='utf-8') as out:
         out.write('\n'.join(lines) + '\n')
 
-    print(f'[repertório] {len(items)} modelos: ' + ', '.join(f'{LABEL[c]} {len(v)}' for c, v in sorted(by_cat.items(), key=lambda kv: -len(kv[1]))))
+    described = sum(1 for i in items if i.get('desc'))
+    print(f'[repertório] {len(items)} modelos ({described} olhados): ' + ', '.join(f'{LABEL[c]} {len(v)}' for c, v in sorted(by_cat.items(), key=lambda kv: -len(kv[1]))))
 
 
 if __name__ == '__main__':
