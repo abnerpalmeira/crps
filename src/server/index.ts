@@ -3,8 +3,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { GameEngine } from '../engine/engine';
 import type { Emit, GmEvent } from '../gm/gm';
-import { CostMeter, costEvent, describeCost } from '../gm/pricing';
-import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, loadEnv, modeFromEnv } from '../gm/runtime';
+import { MODEL_CHOICES, modelChoice } from '../gm/models';
+import { CostMeter, costEvent, describeCost, priceOf } from '../gm/pricing';
+import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, isOffline, loadEnv, modeFromEnv } from '../gm/runtime';
 
 loadEnv();
 // Variável própria: PORT costuma ser definida para o servidor web (Vite) por quem o inicia.
@@ -24,7 +25,7 @@ const MIME: Record<string, string> = {
 const MODE = modeFromEnv();
 const CREDIT_USD = creditUsdFromEnv();
 const store = new SaveStore();
-const gm = createGameMaster();
+let gm = createGameMaster({ model: store.loadSettings().model });
 let engine: GameEngine | null = store.load();
 let busy = false;
 
@@ -108,8 +109,21 @@ const server = createServer(async (req, res) => {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
   try {
     if (pathname === '/api/state' && req.method === 'GET') {
-      json(res, 200, { world: engine?.snapshot() ?? null, busy, mode: MODE, model: MODE === 'dev' ? gm.label : '' });
+      // O seletor de modelo é do modo dev; na demo offline o mestre é um roteiro fixo.
+      const models = MODE === 'dev' && !isOffline() ? MODEL_CHOICES.map(({ fallback: _f, ...m }) => ({ ...m, price: priceOf(m.id) })) : [];
+      json(res, 200, { world: engine?.snapshot() ?? null, busy, mode: MODE, model: MODE === 'dev' ? gm.label : '', models });
       return;
+    }
+    if (pathname === '/api/model' && req.method === 'POST') {
+      if (MODE !== 'dev') return json(res, 403, { error: 'A troca de modelo só existe no modo de desenvolvimento.' });
+      if (isOffline()) return json(res, 400, { error: 'Na demo offline o mestre é um roteiro fixo.' });
+      const choice = modelChoice(await readText(req, 'model'));
+      if (!choice) return json(res, 400, { error: `Modelo desconhecido. Opções: ${MODEL_CHOICES.map((m) => m.id).join(', ')}.` });
+      if (busy) return json(res, 409, { error: 'Espere o mestre terminar o turno para trocar de modelo.' });
+      gm = createGameMaster({ model: choice.id });
+      store.saveSettings({ ...store.loadSettings(), model: choice.id });
+      console.log(`[crps] mestre agora: ${gm.label}`);
+      return json(res, 200, { model: gm.label });
     }
     if (pathname === '/api/new' && req.method === 'POST') {
       const premise = await readText(req, 'premise');

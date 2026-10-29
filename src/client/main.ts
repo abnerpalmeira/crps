@@ -1,6 +1,6 @@
 import type { WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
-import { fetchState, streamEvents } from './api';
+import { chooseModel, fetchState, streamEvents } from './api';
 import { Playback } from './playback';
 import { WorldView } from './scene';
 import './style.css';
@@ -120,6 +120,18 @@ async function resync(failure: string): Promise<void> {
 ui.onSend = (text) => {
   if (!busy && world) void run('/api/turn', { input: text }, text);
 };
+let modelNames = new Map<string, string>();
+const modelName = (id: string) => modelNames.get(id) ?? id;
+
+ui.onModel = (id) => {
+  if (busy) return;
+  chooseModel(id)
+    .then((model) => {
+      ui.setModel(model);
+      ui.notice(`O mestre agora é o ${modelName(model)}. Vale a partir do próximo turno.`);
+    })
+    .catch((err: Error) => ui.notice(err.message));
+};
 ui.onNewGame = (premise) => {
   if (busy) return;
   ui.clearLog();
@@ -143,7 +155,8 @@ void (async () => {
   try {
     const state = await fetchStateWithRetry();
     ui.setMode(state.mode);
-    ui.setModel(state.model);
+    ui.setModel(state.model, state.models);
+    modelNames = new Map(state.models.map((m) => [m.id, m.name]));
     if (state.world) {
       applyWorld(state.world);
       ui.renderHistory(state.world);

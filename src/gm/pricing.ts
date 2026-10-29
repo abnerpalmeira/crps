@@ -9,9 +9,11 @@ interface Price {
 
 /**
  * US$ por milhão de tokens (tabela da Anthropic, out/2026; gravação de cache de 5 min = 1,25× a entrada).
- * Cache do Haiku estimado em 0,1× e 1,25× da entrada. "offline" é o roteiro da demo, sem custo.
+ * Cache do Haiku estimado em 0,1× e 1,25× da entrada; o Haiku 5.5 sobe para US$ 0,50/2,50 acima de
+ * 100 mil tokens de prompt, o que um turno do CRPS não alcança. "offline" é o roteiro da demo, sem custo.
  */
 const PRICES: Record<string, Price> = {
+  'claude-fable-5-1': { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
   'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
   'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
   'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
@@ -19,6 +21,12 @@ const PRICES: Record<string, Price> = {
   'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   offline: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
+
+/** Preço de entrada e saída (US$ por milhão de tokens), para o seletor de modelo. */
+export function priceOf(model: string): { input: number; output: number } | null {
+  const p = PRICES[model];
+  return p ? { input: p.input, output: p.output } : null;
+}
 
 export function usageCost(u: Usage): number | null {
   const p = PRICES[u.model];

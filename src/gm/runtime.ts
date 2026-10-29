@@ -3,8 +3,9 @@ import { WorkloadIdentityError } from '@anthropic-ai/sdk/lib/credentials/types';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { GameEngine } from '../engine/engine';
-import { ClaudeProvider } from './claude';
+import { ClaudeProvider, DEFAULT_MODEL } from './claude';
 import { GameMaster } from './gm';
+import { modelChoice } from './models';
 import { OfflineProvider } from './offline';
 import type { Mode } from './pricing';
 import type { Effort } from './provider';
@@ -20,12 +21,17 @@ function effortFromEnv(name: string, fallback: Effort): Effort {
   return value && EFFORTS.has(value) ? (value as Effort) : fallback;
 }
 
-export function createGameMaster(): GameMaster {
-  const offline = process.env.CRPS_PROVIDER === 'offline';
+export function isOffline(): boolean {
+  return process.env.CRPS_PROVIDER === 'offline';
+}
+
+/** Mestre com o modelo escolhido na interface, o de CRPS_MODEL ou o padrão, nessa ordem. */
+export function createGameMaster(opts: { model?: string } = {}): GameMaster {
+  const model = opts.model || process.env.CRPS_MODEL || DEFAULT_MODEL;
   return new GameMaster({
-    provider: offline
+    provider: isOffline()
       ? new OfflineProvider()
-      : new ClaudeProvider({ model: process.env.CRPS_MODEL, verifierModel: process.env.CRPS_VERIFIER_MODEL }),
+      : new ClaudeProvider({ model, fallback: modelChoice(model)?.fallback ?? true, verifierModel: process.env.CRPS_VERIFIER_MODEL }),
     effortSetup: effortFromEnv('CRPS_EFFORT_SETUP', 'medium'),
     effortTurn: effortFromEnv('CRPS_EFFORT_TURN', 'low'),
     verify: process.env.CRPS_VERIFY !== '0',
@@ -44,6 +50,10 @@ export function describeError(err: unknown): string {
     return `Erro da API do Claude (${err.status ?? '?'}): ${body?.error?.message ?? err.message}`;
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+export interface Settings {
+  model?: string;
 }
 
 /** Campanha atual em saves/current.json; campanhas anteriores são arquivadas ao lado. */
@@ -69,6 +79,21 @@ export class SaveStore {
     if (!existsSync(this.current)) return;
     const id = this.load()?.state.id ?? 'campanha';
     renameSync(this.current, join(this.dir, `${id}-${Date.now()}.json`));
+  }
+
+  /** Preferências que sobrevivem ao reinício do servidor, como o modelo do mestre. */
+  loadSettings(): Settings {
+    const file = join(this.dir, 'settings.json');
+    try {
+      return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Settings) : {};
+    } catch {
+      return {};
+    }
+  }
+
+  saveSettings(settings: Settings): void {
+    mkdirSync(this.dir, { recursive: true });
+    writeFileSync(join(this.dir, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`);
   }
 
   /** Uma linha por turno em ledger.jsonl: quanto cada turno custou, por modelo. */

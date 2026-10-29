@@ -16,6 +16,8 @@ const VerdictSchema = z.object({
 
 export interface ClaudeOptions {
   model?: string;
+  /** Pede fallback no servidor quando o modelo recusa (padrão: sim; o Haiku 5.5 não tem). */
+  fallback?: boolean;
   verifierModel?: string;
   maxTokens?: number;
   client?: Anthropic;
@@ -25,19 +27,21 @@ export class ClaudeProvider implements ModelProvider {
   readonly label: string;
   private readonly client: Anthropic;
   private readonly model: string;
+  private readonly fallback: boolean;
   private readonly verifierModel: string;
   private readonly maxTokens: number;
 
   constructor(opts: ClaudeOptions = {}) {
     this.client = opts.client ?? new Anthropic();
     this.model = opts.model || DEFAULT_MODEL;
+    this.fallback = opts.fallback ?? true;
     this.verifierModel = opts.verifierModel || DEFAULT_VERIFIER_MODEL;
     this.maxTokens = opts.maxTokens ?? 64000;
     this.label = this.model;
   }
 
   startSession(opts: SessionOptions): ModelSession {
-    return new ClaudeSession(this.client, this.model, this.maxTokens, opts);
+    return new ClaudeSession(this.client, this.model, this.fallback, this.maxTokens, opts);
   }
 
   async verify(prompt: string): Promise<{ verdict: Verdict; usage: Usage }> {
@@ -67,6 +71,7 @@ class ClaudeSession implements ModelSession {
   constructor(
     private readonly client: Anthropic,
     private readonly model: string,
+    private readonly fallback: boolean,
     private readonly maxTokens: number,
     private readonly opts: SessionOptions,
   ) {
@@ -80,8 +85,7 @@ class ClaudeSession implements ModelSession {
       const stream = this.client.beta.messages.stream({
         model: this.model,
         max_tokens: this.maxTokens,
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default',
+        ...(this.fallback ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {}),
         // Ferramentas + sistema são estáticos: um ponto de cache fixo, e o automático cobre a conversa.
         system: [{ type: 'text', text: this.opts.system, cache_control: { type: 'ephemeral' } }],
         cache_control: { type: 'ephemeral' },

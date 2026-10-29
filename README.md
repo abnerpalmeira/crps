@@ -52,7 +52,7 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 
 | Variável | Padrão | |
 |---|---|---|
-| `CRPS_MODEL` | `claude-opus-5-5` | Modelo do mestre |
+| `CRPS_MODEL` | `claude-opus-5-5` | Modelo do mestre (a escolha feita na interface tem prioridade) |
 | `CRPS_VERIFIER_MODEL` | `claude-haiku-5-5` | Verificador de consistência (barato) |
 | `CRPS_EFFORT_SETUP` | `medium` | Esforço na criação do mundo |
 | `CRPS_EFFORT_TURN` | `low` | Esforço nos turnos; suba se o mestre esquecer de chamar tools |
@@ -62,6 +62,13 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 | `CRPS_API_PORT` | `8787` | Porta da API (o Vite encaminha `/api` para ela) |
 | `CRPS_MODE` | `dev` | `release` mostra só créditos e esconde os bastidores (`npm start` já usa) |
 | `CRPS_CREDIT_USD` | `0.01` | Quanto vale 1 crédito em US$ |
+
+No modo dev, clicar no nome do modelo no topo do painel abre o seletor do mestre: Fable 5.1,
+Opus 5.5, Opus 5, Sonnet 5.5 ou Haiku 5.5, com o preço por milhão de tokens de cada um. A troca
+vale a partir do próximo turno e fica salva em `saves/settings.json`, então sobrevive ao
+reinício do servidor. O verificador continua no `CRPS_VERIFIER_MODEL`. O Haiku 5.5 não tem
+fallback no servidor quando recusa, então o mestre não pede fallback a ele. O seletor não
+aparece no release nem na demo offline.
 
 ### Custo e créditos
 

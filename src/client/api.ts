@@ -7,6 +7,24 @@ export interface StateResponse {
   /** dev: custo em US$ e bastidores; release: só créditos. */
   mode: 'dev' | 'release';
   model: string;
+  /** Modelos que podem ser o mestre (vazio no release e na demo offline). */
+  models: ModelOption[];
+}
+
+export interface ModelOption {
+  id: string;
+  name: string;
+  note: string;
+  /** US$ por milhão de tokens de entrada e de saída. */
+  price: { input: number; output: number } | null;
+}
+
+/** Troca o modelo do mestre; devolve o id que ficou valendo. */
+export async function chooseModel(id: string): Promise<string> {
+  const res = await fetch('/api/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id }) });
+  const body = (await res.json().catch(() => ({}))) as { model?: string; error?: string };
+  if (!res.ok || !body.model) throw new Error(body.error ?? `O servidor respondeu ${res.status}.`);
+  return body.model;
 }
 
 export async function fetchState(): Promise<StateResponse> {

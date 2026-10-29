@@ -33,7 +33,11 @@
 
       <aside id="panel">
         <header>
-          <div class="brand"><span class="logo">CRPS</span><span id="model" class="muted small"></span></div>
+          <div class="brand">
+            <span class="logo">CRPS</span>
+            <button id="model" class="model-picker" type="button" aria-haspopup="menu" aria-expanded="false"></button>
+            <div id="model-menu" class="model-menu" role="menu" hidden></div>
+          </div>
           <button id="new-game-button" type="button">Novo jogo</button>
         </header>
         <nav class="tabs">

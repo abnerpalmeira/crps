@@ -1,11 +1,11 @@
 import { lightAt, lightLabel, lightSources } from '../engine/light';
 import { perceptionOf } from '../engine/perception';
-import { hhmm } from '../engine/text';
-import { formatClock } from '../engine/text';
+import { formatClock, hhmm } from '../engine/text';
 import type { Character, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 import type { CostEvent } from '../gm/pricing';
 import type { Usage } from '../gm/provider';
+import type { ModelOption } from './api';
 import { escapeHtml, formatNarration, inline, type Speaker } from './format';
 import type { PlaybackState } from './playback';
 import { hash } from './props';
@@ -145,6 +145,7 @@ export class Ui {
   onSelect: (pick: Pick | null) => void = () => {};
   onReplay: (turn: number) => void = () => {};
   onControl: (command: string) => void = () => {};
+  onModel: (id: string) => void = () => {};
 
   private readonly log = $('#log');
   private readonly input = $<HTMLTextAreaElement>('#input');
@@ -156,6 +157,7 @@ export class Ui {
   private spent = { usd: 0, credits: 0 };
   private mode: 'dev' | 'release' = 'dev';
   private busy = false;
+  private model = { current: '', options: [] as ModelOption[] };
   private inspected: Pick | null = null;
   private world: WorldState | null = null;
   private readonly ctx: TurnContext = {
@@ -197,6 +199,13 @@ export class Ui {
       this.onNewGame(premise);
     });
     $('#cancel').addEventListener('click', () => this.dialog.close());
+    $('#model').addEventListener('click', () => this.toggleModelMenu());
+    document.addEventListener('click', (e) => {
+      if (!$('.brand').contains(e.target as Node)) this.closeModelMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.closeModelMenu();
+    });
   }
 
   openNewGame(firstTime: boolean): void {
@@ -205,13 +214,50 @@ export class Ui {
     this.dialog.showModal();
   }
 
-  setModel(label: string): void {
-    $('#model').textContent = label;
+  /** Nome do modelo no topo; com opções (modo dev, fora da demo), clicar abre o seletor. */
+  setModel(current: string, options: ModelOption[] = this.model.options): void {
+    this.model = { current, options };
+    const button = $<HTMLButtonElement>('#model');
+    const choice = options.find((m) => m.id === current);
+    button.textContent = choice ? `${choice.name} ▾` : current;
+    button.hidden = !current;
+    button.disabled = !options.length || this.busy;
+    button.title = options.length ? 'Trocar o modelo do mestre' : current;
+  }
+
+  private toggleModelMenu(): void {
+    const menu = $('#model-menu');
+    if (!menu.hidden) return this.closeModelMenu();
+    const money = (n: number) => n.toLocaleString('pt-BR', { maximumFractionDigits: 2 });
+    menu.replaceChildren(
+      ...this.model.options.map((m) => {
+        const b = el('button', `model-option${m.id === this.model.current ? ' current' : ''}`);
+        b.type = 'button';
+        b.setAttribute('role', 'menuitemradio');
+        b.setAttribute('aria-checked', String(m.id === this.model.current));
+        b.append(el('strong', '', m.name), el('span', 'price', m.price ? `US$ ${money(m.price.input)} / ${money(m.price.output)}` : ''), el('span', 'muted', m.note));
+        b.addEventListener('click', () => {
+          this.closeModelMenu();
+          if (m.id !== this.model.current) this.onModel(m.id);
+        });
+        return b;
+      }),
+      el('p', 'hint', 'Preço por milhão de tokens (entrada / saída). Vale a partir do próximo turno.'),
+    );
+    menu.hidden = false;
+    $('#model').setAttribute('aria-expanded', 'true');
+  }
+
+  private closeModelMenu(): void {
+    $('#model-menu').hidden = true;
+    $('#model').setAttribute('aria-expanded', 'false');
   }
 
   setBusy(busy: boolean): void {
     this.busy = busy;
     this.send.disabled = busy;
+    $<HTMLButtonElement>('#model').disabled = busy || !this.model.options.length;
+    if (busy) this.closeModelMenu();
     document.body.classList.toggle('busy', busy);
     if (!busy) this.input.focus();
   }
