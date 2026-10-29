@@ -122,6 +122,26 @@ button {
   background: #e5776b;
 }
 
+.exit-sign {
+  padding: 1px 8px;
+  border: 1px solid rgb(143 209 181 / 0.35);
+  border-radius: 6px;
+  background: rgb(22 58 44 / 0.78);
+  color: #d9f2e6;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  /* Abaixo dos nomes e balões, que o renderizador ordena por distância a partir de 1. */
+  z-index: 0 !important;
+}
+
+.exit-sign:hover,
+.exit-sign.selected {
+  border-color: #fff;
+  background: rgb(30 84 62 / 0.92);
+}
+
 .thought {
   color: #b9c4ff;
   font-style: italic;

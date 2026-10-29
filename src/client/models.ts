@@ -12,8 +12,10 @@ interface Catalog {
   textures: Record<string, string[]>;
   props: Record<string, { file: string; pack: string; size: [width: number, height: number, depth: number] }>;
   /** Peças de cada tipo de móvel do motor: posição em metros no espaço do móvel (frente = +z), yaw em graus. */
-  fixtures: Record<string, { model: string; x?: number; y?: number; z?: number; yaw?: number; scale?: number }[]>;
-  characters: Record<string, { file: string; pack: string; figure: Figure }>;
+  fixtures: Record<string, { model: string; x?: number; y?: number; z?: number; yaw?: number; scale?: number; stretch?: boolean }[]>;
+  characters: Record<string, { file: string; pack: string; figure: Figure; look: string }>;
+  /** Onde fica o quadril de quem senta em cada tipo de assento, para a frente do centro (metros). */
+  seats?: Record<string, number>;
   /** Clipes por sexo, já no esqueleto dos personagens: idle, walk, talk, nod, sit. */
   anims: Record<'masc' | 'femn', { file: string; clips: string[] }>;
 }
@@ -30,6 +32,7 @@ export interface CharacterModel {
 const BASE = '/models/';
 const loader = new GLTFLoader();
 let catalog: Promise<Catalog | null> | null = null;
+let loaded: Catalog | null = null;
 const sources = new Map<string, Promise<THREE.Object3D>>();
 const clipSets = new Map<string, Promise<THREE.AnimationClip[]>>();
 const atlases = new Map<string, THREE.Material>();
@@ -37,8 +40,14 @@ const atlases = new Map<string, THREE.Material>();
 function loadCatalog(): Promise<Catalog | null> {
   catalog ??= fetch(`${BASE}catalog.json`)
     .then((res) => (res.ok ? (res.json() as Promise<Catalog>) : null))
+    .then((cat) => (loaded = cat))
     .catch(() => null);
   return catalog;
+}
+
+/** Recuo de quem senta num assento com modelo; null antes do catálogo carregar ou sem dado para o tipo. */
+export function seatOffset(kind: Fixture['kind']): number | null {
+  return loaded?.seats?.[kind] ?? null;
 }
 
 function hash(s: string): number {
@@ -86,9 +95,10 @@ function paint(root: THREE.Object3D, material: THREE.Material): void {
 
 /**
  * O móvel montado com os modelos do catálogo, no espaço local do móvel (o chamador posiciona e
- * gira). Peça maior que o espaço do móvel encolhe por inteiro para caber. null = sem modelo.
+ * gira). Peça maior que o espaço do móvel encolhe por inteiro para caber; com stretch, a peça
+ * mais curta estica no comprimento. `span` é o comprimento da peça principal. null = sem modelo.
  */
-export async function fixtureModel(f: Fixture): Promise<{ group: THREE.Group; top: number } | null> {
+export async function fixtureModel(f: Fixture): Promise<{ group: THREE.Group; top: number; span: number } | null> {
   const cat = await loadCatalog();
   const parts = cat?.fixtures[f.kind];
   if (!cat || !parts) return null;
@@ -96,6 +106,7 @@ export async function fixtureModel(f: Fixture): Promise<{ group: THREE.Group; to
   const room = { w: alongX ? f.w : f.h, d: alongX ? f.h : f.w };
   const group = new THREE.Group();
   let top = 0;
+  let span = room.w;
   for (const part of parts) {
     const entry = cat.props[part.model];
     const obj = (await source(entry.file)).clone();
@@ -105,25 +116,35 @@ export async function fixtureModel(f: Fixture): Promise<{ group: THREE.Group; to
     const turned = Math.round((part.yaw ?? 0) / 90) % 2 !== 0;
     const scale = grow * Math.min(1, (room.w * 0.98) / (turned ? md : mw), (room.d * 0.98) / (turned ? mw : md));
     obj.scale.setScalar(scale);
+    const length = (turned ? entry.size[2] : entry.size[0]) * scale;
+    const stretch = part.stretch && !turned ? Math.max(1, (room.w * 0.95) / length) : 1;
+    obj.scale.x *= stretch;
     obj.position.set(part.x ?? 0, part.y ?? 0, part.z ?? 0);
     obj.rotation.y = THREE.MathUtils.degToRad(part.yaw ?? 0);
     group.add(obj);
     // A primeira peça é a principal (a mesa da carteira): é nela que os itens ficam apoiados.
-    if (part === parts[0]) top = (part.y ?? 0) + entry.size[1] * scale;
+    if (part === parts[0]) {
+      top = (part.y ?? 0) + entry.size[1] * scale;
+      span = length * stretch;
+    }
   }
-  return { group, top };
+  return { group, top, span };
 }
 
-/** Corpo do personagem: o que o mestre informou ou, sem isso, o que o papel sugere. */
+const FEMN = /\b(aluna|professora|diretora|menina|garota|filha|m[ãa]e|senhora|esposa|enfermeira|m[ée]dica|secret[áa]ria|cozinheira|dona|mulher|moça|moca|jovem mulher|ela)\b/;
+const MASC = /\b(aluno|professor|diretor|menino|garoto|filho|pai|senhor|marido|enfermeiro|m[ée]dico|cozinheiro|dono|homem|rapaz|moço|moco|ele)\b/;
+
+/**
+ * Corpo do personagem: o do visual escolhido, o que o mestre informou ou, sem isso, o que papel e
+ * aparência sugerem ("aluna", "mulher de uns quarenta anos"). Só no empate o id decide.
+ */
 export function figureOf(c: Character): Figure {
   if (c.figure) return c.figure;
+  const text = `${c.role} ${c.appearance}`.toLowerCase();
+  const young = /alun|estudante|crian|menin|garot|filh|colegial|adolescente|student|kid/.test(text);
   const role = c.role.toLowerCase();
-  const young = /alun|estudante|crian|menin|garot|filh|colegial|student|kid/.test(role);
-  const femn = /\b(aluna|professora|diretora|menina|garota|filha|m[ãa]e|senhora|esposa|enfermeira|m[ée]dica|secret[áa]ria|cozinheira|dona)\b/.test(role)
-    ? true
-    : /\b(aluno|professor|diretor|menino|garoto|filho|pai|senhor|marido|enfermeiro|m[ée]dico|cozinheiro|dono)\b/.test(role)
-      ? false
-      : hash(c.id) % 2 === 1;
+  const appearance = c.appearance.toLowerCase();
+  const femn = FEMN.test(role) ? true : MASC.test(role) ? false : FEMN.test(appearance) ? true : MASC.test(appearance) ? false : hash(c.id) % 2 === 1;
   return young ? (femn ? 'menina' : 'menino') : femn ? 'adulta' : 'adulto';
 }
 
@@ -131,15 +152,17 @@ export function figureOf(c: Character): Figure {
 export async function characterModel(c: Character): Promise<CharacterModel | null> {
   const cat = await loadCatalog();
   if (!cat?.characters) return null;
-  const figure = figureOf(c);
+  // O visual escolhido pelo mestre (e descrito na aparência); sem ele, um do mesmo corpo, pelo id.
+  const chosen = c.look ? cat.characters[c.look] : undefined;
+  const figure = chosen?.figure ?? figureOf(c);
   const options = Object.values(cat.characters).filter((m) => m.figure === figure);
-  if (!options.length) return null;
-  const h = hash(c.id);
-  const entry = options[h % options.length];
+  if (!chosen && !options.length) return null;
+  const entry = chosen ?? options[hash(c.id) % options.length];
   const sex = figure === 'adulta' || figure === 'menina' ? 'femn' : 'masc';
   const [model, clips] = await Promise.all([source(entry.file), animations(cat, sex)]);
   const root = cloneSkinned(model);
-  paint(root, atlas(cat, entry.pack, h >>> 8));
+  // Sempre a variante de cor principal: é a que as descrições dos visuais retratam.
+  paint(root, atlas(cat, entry.pack));
   // Adolescentes usam o mesmo esqueleto dos adultos: encolhem um pouco.
   if (figure === 'menino' || figure === 'menina') root.scale.setScalar(0.92);
   const mixer = new THREE.AnimationMixer(root);

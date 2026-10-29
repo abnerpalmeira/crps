@@ -1,7 +1,8 @@
 import { MAX_FRAMES, snapshotScene } from './frames';
-import { buildLocation, fixtureAt, isPassable, rectCenter, tileDef, type LocationSpec } from './layout';
+import { EXIT_KINDS, FLOOR_EXITS, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, type LocationSpec } from './layout';
 import { DEFAULT_VISION, sightOf, type Sight } from './perception';
 import { parseDice, pickMany, randInt, rollDice } from './rng';
+import { buildTemplate, type TemplateName, type TemplateOptions } from './templates';
 import { addMinutes, chebyshev, clockMinutes, dirTowards, fold, formatClock, hhmm, parseHHMM, slugify } from './text';
 import type {
   Character,
@@ -116,7 +117,15 @@ function migrate(state: WorldState): WorldState {
   rules.vision ??= { ...DEFAULT_VISION };
   rules.conditions ??= structuredClone(DEFAULT_CONDITIONS);
   rules.reaches ??= { ...DEFAULT_REACHES };
-  for (const l of Object.values(state.locations)) l.light ??= 1;
+  for (const l of Object.values(state.locations)) {
+    l.light ??= 1;
+    l.exits ??= defaultExits(l.fixtures);
+    // Saves de antes dos andares: um destino só, ou null.
+    for (const e of Object.values(l.exits)) {
+      const to = e.to as unknown;
+      if (!Array.isArray(to)) e.to = typeof to === 'string' ? [to] : [];
+    }
+  }
   for (const a of rules.attributes) {
     a.visibility ??= 'self';
     a.default ??= 1;
@@ -191,6 +200,13 @@ const DIR_ALIASES: Record<string, Dir> = {
   n: 'N', norte: 'N', s: 'S', sul: 'S', e: 'E', l: 'E', leste: 'E', w: 'W', o: 'W', oeste: 'W',
 };
 
+/** Para onde leva uma saída do local: destino (id de local, pode ainda não existir) e nome. */
+export interface ExitInput {
+  fixture: string;
+  to?: string;
+  label?: string;
+}
+
 export interface Placement {
   x?: number;
   y?: number;
@@ -214,6 +230,7 @@ export interface CharacterInput {
   role: string;
   appearance: string;
   figure?: Figure;
+  look?: string;
   traits?: string[];
   is_player?: boolean;
   attributes?: Record<string, number>;
@@ -236,6 +253,7 @@ export interface CharacterUpdate {
   role?: string;
   appearance?: string;
   figure?: Figure;
+  look?: string;
   traits_add?: string[];
   traits_remove?: string[];
   personality?: string;
@@ -932,32 +950,120 @@ export class GameEngine {
     });
   }
 
-  createLocation(spec: Omit<LocationSpec, 'id'> & { id?: string }): { location: Location; warnings: string[] } {
+  createLocation(
+    spec: Omit<LocationSpec, 'id' | 'layout'> & {
+      id?: string;
+      layout?: string | string[];
+      template?: TemplateOptions & { name: TemplateName };
+      exits?: ExitInput[];
+    },
+  ): { location: Location; warnings: string[] } {
+    if (!spec.layout && !spec.template) throw new EngineError('Informe layout (ASCII) ou template (saguao, corredor).');
+    // Layout pronto: o motor desenha; as saídas já saem com nome (rua, elevador, apartamentos).
+    const template = spec.template ? buildTemplate(spec.template.name, spec.template, () => randInt(this.state, 0, 999_999) / 1_000_000) : null;
     const id = this.claimId(spec.id, spec.name, 'o local');
-    const result = buildLocation({ ...spec, id });
+    const result = buildLocation({ ...spec, id, layout: template?.rows ?? spec.layout!, floor: spec.floor ?? template?.floor });
     if (!result.ok) {
       throw new EngineError(
         `Layout inválido:\n- ${result.errors.join('\n- ')}${result.warnings.length ? `\nAvisos:\n- ${result.warnings.join('\n- ')}` : ''}`,
       );
     }
     this.state.locations[id] = result.location;
+    if (template) {
+      const exits = result.location.fixtures.filter((f) => result.location.exits[f.id]);
+      exits.forEach((f, i) => (result.location.exits[f.id].label = template.label(f, i, exits)));
+    }
+    this.setExits(result.location, spec.exits ?? []);
     return { location: result.location, warnings: result.warnings };
   }
 
+  /** Dá destino e nome às saídas (porta, elevador, escada) de um local. */
+  private setExits(loc: Location, specs: ExitInput[]): void {
+    for (const spec of specs) {
+      const f = this.exitFixture(loc, spec.fixture);
+      if (spec.to !== undefined) {
+        if (spec.to) this.link(loc, f, slugify(spec.to, 24));
+        else loc.exits[f.id].to = [];
+      }
+      if (spec.label) loc.exits[f.id].label = spec.label;
+    }
+  }
+
+  /** A porta passa a levar só a `to`; elevador e escada ganham mais um andar. */
+  private link(loc: Location, f: Fixture, to: string): void {
+    const exit = loc.exits[f.id];
+    if (!FLOOR_EXITS.has(f.kind)) exit.to = [to];
+    else if (!exit.to.includes(to)) exit.to.push(to);
+  }
+
+  private exitFixture(loc: Location, ref: string): Fixture {
+    const f = loc.fixtures.find((x) => x.id === ref || x.id === `${loc.id}/${ref}`);
+    if (!f || !loc.exits[f.id]) {
+      const known = Object.keys(loc.exits).map((id) => id.slice(loc.id.length + 1)).join(', ') || 'nenhuma';
+      throw new EngineError(`"${ref}" não é uma saída de ${loc.name}. Saídas: ${known}.`);
+    }
+    return f;
+  }
+
+  /**
+   * A saída por onde o personagem deixa o local: a indicada (via), a que já leva ao destino ou a
+   * única ainda sem destino. Porta leva a um lugar só; elevador e escada, a qualquer andar. Local
+   * sem saída nenhuma (área aberta) não exige.
+   */
+  private exitTowards(loc: Location, targetId: string, via: string | undefined): Fixture | null {
+    const exits = Object.entries(loc.exits);
+    if (!exits.length) return null;
+    if (via) {
+      const f = this.exitFixture(loc, via);
+      const [to] = loc.exits[f.id].to;
+      if (!FLOOR_EXITS.has(f.kind) && to && to !== targetId) {
+        throw new EngineError(`${f.id.slice(loc.id.length + 1)} leva a ${this.state.locations[to]?.name ?? to}, não a ${this.findLocation(targetId).name}.`);
+      }
+      return f;
+    }
+    const linked = exits.find(([, e]) => e.to.includes(targetId));
+    if (linked) return this.findFixture(linked[0]);
+    const free = exits.filter(([, e]) => !e.to.length);
+    if (free.length === 1) return this.findFixture(free[0][0]);
+    const list = exits.map(([id, e]) => `${id.slice(loc.id.length + 1)} (${e.label}${e.to.length ? ` → ${e.to.join(', ')}` : ''})`).join(', ');
+    throw new EngineError(`Por onde ele sai de ${loc.name}? Informe via com uma das saídas: ${list}.`);
+  }
+
+  /**
+   * Onde o personagem chega: quem pega o elevador sai de um elevador (a escada, de uma escada); quem
+   * passa por uma porta chega pela que leva de volta ou por uma ainda livre.
+   */
+  private arrivalExit(loc: Location, fromId: string, kind: Fixture['kind'] | null): Fixture | null {
+    const exits = Object.entries(loc.exits).map(([id, e]) => ({ f: this.findFixture(id), to: e.to }));
+    const back = exits.filter((x) => x.to.includes(fromId));
+    const free = exits.filter((x) => !x.to.length);
+    const same = kind && FLOOR_EXITS.has(kind) ? exits.filter((x) => x.f.kind === kind) : [];
+    const pick =
+      back.find((x) => x.f.kind === kind) ??
+      same.find((x) => !x.to.length) ??
+      same[0] ??
+      back[0] ??
+      free.find((x) => x.f.kind === kind) ??
+      free.find((x) => x.f.kind === 'door') ??
+      free[0];
+    return pick?.f ?? null;
+  }
+
   /** Luz ambiente (acender ou apagar as luzes, anoitecer), nome e descrição de um local. */
-  updateLocation(input: { location_id: string; light?: number; name?: string; description?: string }) {
+  updateLocation(input: { location_id: string; light?: number; name?: string; description?: string; exits?: ExitInput[] }) {
     const loc = this.findLocation(input.location_id);
     const before = loc.light;
-    if (input.light === undefined && input.name === undefined && input.description === undefined) {
-      throw new EngineError('Nada para mudar: informe light, name ou description.');
+    if (input.light === undefined && input.name === undefined && input.description === undefined && !input.exits?.length) {
+      throw new EngineError('Nada para mudar: informe light, name, description ou exits.');
     }
+    this.setExits(loc, input.exits ?? []);
     if (input.light !== undefined) {
       if (!(input.light >= 0 && input.light <= 1)) throw new EngineError('light vai de 0 (breu) a 1 (dia claro ou luzes acesas).');
       loc.light = Math.round(input.light * 100) / 100;
     }
     if (input.name) loc.name = input.name;
     if (input.description !== undefined) loc.description = input.description;
-    return { location_id: loc.id, name: loc.name, light: { before, after: loc.light } };
+    return { location_id: loc.id, name: loc.name, light: { before, after: loc.light }, exits: loc.exits };
   }
 
   private statBlock(kind: 'atributo' | 'perícia', values: Record<string, number> | undefined, known: string[] | null): Record<string, number> {
@@ -1012,6 +1118,7 @@ export class GameEngine {
       role: input.role,
       appearance: input.appearance,
       ...(input.figure ? { figure: input.figure } : {}),
+      ...(input.look ? { look: input.look } : {}),
       traits: input.traits ?? [],
       attributes,
       skills: this.statBlock('perícia', input.skills, null),
@@ -1050,7 +1157,7 @@ export class GameEngine {
     return c;
   }
 
-  moveCharacter(input: { character_id: string; to: Placement & { location_id?: string }; face?: string }) {
+  moveCharacter(input: { character_id: string; to: Placement & { location_id?: string }; via?: string; face?: string }) {
     const c = this.findCharacter(input.character_id);
     const targetLoc = input.to.location_id ? this.findLocation(input.to.location_id) : c.locationId ? this.state.locations[c.locationId] : null;
     if (!targetLoc) throw new EngineError(`${c.name} não está em nenhum local; informe to.location_id.`);
@@ -1059,10 +1166,26 @@ export class GameEngine {
     const from = c.pos ? { location: c.locationId, x: c.pos.x, y: c.pos.y, seat: c.seatId } : null;
     let path: Pos[] | null = null;
     let spot: { pos: Pos; seatId: string | null };
+    let exitUsed: Fixture | null = null;
+    let arrival: Fixture | null = null;
     if (changing) {
+      // Sai por uma porta, elevador ou escada: quem está num local não muda de local do nada.
+      const fromLoc = c.locationId ? this.state.locations[c.locationId] : null;
+      if (fromLoc && c.pos) {
+        exitUsed = this.exitTowards(fromLoc, targetLoc.id, input.via);
+        if (exitUsed) {
+          const goal = this.nearestFreeAround(fromLoc, exitUsed, c.pos, c.id);
+          if (goal && !this.findPath(fromLoc, c.pos, goal)) {
+            throw new EngineError(`${c.name} não tem caminho até ${exitUsed.label} (${exitUsed.id.slice(fromLoc.id.length + 1)}).`);
+          }
+          this.link(fromLoc, exitUsed, targetLoc.id);
+        }
+      }
+      if (fromLoc) arrival = this.arrivalExit(targetLoc, fromLoc.id, exitUsed?.kind ?? null);
+      if (arrival && fromLoc) this.link(targetLoc, arrival, fromLoc.id);
       if (hasSpot) spot = this.resolvePlacement(targetLoc, input.to, c.id, null);
       else {
-        const p = this.entrance(targetLoc);
+        const p = arrival ? this.nearestFreeAround(targetLoc, arrival, null, c.id) : this.entrance(targetLoc);
         if (!p) throw new EngineError(`Não há espaço livre em ${targetLoc.name}.`);
         spot = { pos: p, seatId: null };
       }
@@ -1084,6 +1207,8 @@ export class GameEngine {
       character_id: c.id,
       from,
       to: { location: targetLoc.id, x: spot.pos.x, y: spot.pos.y, seat: spot.seatId },
+      ...(exitUsed ? { via: exitUsed.id } : {}),
+      ...(arrival ? { arrived_by: arrival.id } : {}),
       steps: path ? path.length - 1 : null,
       facing: c.facing,
       path: path ?? undefined,
@@ -1093,7 +1218,7 @@ export class GameEngine {
   updateCharacter(input: CharacterUpdate) {
     const c = this.findCharacter(input.character_id);
     const changes: string[] = [];
-    for (const key of ['name', 'role', 'appearance', 'personality', 'background', 'goals'] as const) {
+    for (const key of ['name', 'role', 'appearance', 'look', 'personality', 'background', 'goals'] as const) {
       const value = input[key];
       if (value !== undefined && value !== c[key]) {
         c[key] = value;

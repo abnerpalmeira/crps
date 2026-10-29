@@ -115,6 +115,11 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       return `${src.name} [${src.id}] ${carrier ? `com ${carrier}` : `em (${src.pos.x},${src.pos.y})`} (raio ${src.radius})`;
     });
     out.push(`Luz: ${lightLabel(loc.light)} (ambiente ${loc.light})${lit.length ? `; acesas: ${lit.join(', ')}` : ''}.`);
+    const exits = Object.entries(loc.exits ?? {}).map(([id, e]) => {
+      const to = e.to.length ? `→ ${e.to.map((id) => `${s.locations[id]?.name ?? id} [${id}]`).join(', ')}` : 'sem destino ainda';
+      return `${shortId(loc, id)} (${e.label}, ${to})`;
+    });
+    out.push(`Saídas: ${exits.join('; ') || 'nenhuma'}.`);
 
     const lines: string[] = [];
     const seatGroups = new Map<string, { free: string[]; total: number }>();

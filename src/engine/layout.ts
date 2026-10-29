@@ -1,5 +1,5 @@
 import { OPPOSITE, dirTowards } from './text';
-import type { Dir, Fixture, FixtureKind, FloorStyle, Location, Pos } from './types';
+import type { Dir, Exit, Fixture, FixtureKind, FloorStyle, Location, Pos } from './types';
 
 type FacingRule = 'interior' | 'board' | 'away_board' | 'table' | 'open_side' | 'none';
 
@@ -27,7 +27,7 @@ export const LEGEND: Record<string, TileDef> = Object.fromEntries(
     tile('#', 'wall', 'parede', 'parede', { wall: true }),
     tile('.', 'floor', 'chão', 'chao', { passable: true }),
     tile(' ', 'void', 'vazio/exterior', 'vazio'),
-    tile('D', 'door', 'porta', 'porta', { passable: true, wall: true, facing: 'interior' }),
+    tile('D', 'door', 'porta', 'porta', { passable: true, wall: true, merge: true, facing: 'interior' }),
     tile('W', 'window', 'janela', 'janela', { wall: true, merge: true, facing: 'interior' }),
     tile('B', 'board', 'quadro-negro', 'quadro', { wall: true, merge: true, facing: 'interior' }),
     tile('T', 'teacher_desk', 'mesa do professor', 'mesa-prof', { merge: true, facing: 'away_board' }),
@@ -41,10 +41,25 @@ export const LEGEND: Record<string, TileDef> = Object.fromEntries(
     tile('S', 'sofa', 'sofá', 'sofa', { seat: true, merge: true, facing: 'open_side' }),
     tile('C', 'counter', 'balcão', 'balcao', { merge: true, facing: 'open_side' }),
     tile('x', 'crate', 'caixa', 'caixa'),
+    tile('E', 'elevator', 'elevador', 'elevador', { passable: true, wall: true, merge: true, facing: 'interior' }),
+    tile('Z', 'stairs', 'escada', 'escada', { passable: true, wall: true, facing: 'interior' }),
   ].map((d) => [d.char, d]),
 );
 
 export const MAX_SIZE = 40;
+
+/** Móveis por onde se sai do local: levam a outro local. */
+export const EXIT_KINDS = new Set<FixtureKind>(['door', 'elevator', 'stairs']);
+
+/** Saídas que levam a qualquer andar do prédio, e não a um lugar só como a porta. */
+export const FLOOR_EXITS = new Set<FixtureKind>(['elevator', 'stairs']);
+
+export const EXIT_LABEL: Partial<Record<FixtureKind, string>> = { door: 'saída', elevator: 'elevador', stairs: 'escada' };
+
+/** Toda porta, elevador e escada começa como saída sem destino. */
+export function defaultExits(fixtures: Fixture[]): Record<string, Exit> {
+  return Object.fromEntries(fixtures.filter((f) => EXIT_KINDS.has(f.kind)).map((f) => [f.id, { to: [], label: EXIT_LABEL[f.kind]! }]));
+}
 
 export function legendSummary(): string {
   return Object.values(LEGEND)
@@ -312,7 +327,7 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
     if (!r.def.wall && !ringTiles(r).some((p) => def(p.x, p.y).passable)) {
       errors.push(`${at} está cercado(a) — deixe um corredor de chão ('.') encostado nele(a).`);
     }
-    if (r.def.kind === 'door' && !SIDES.some((s) => sideTiles(r, s).some((p) => def(p.x, p.y).passable))) {
+    if (EXIT_KINDS.has(r.def.kind as FixtureKind) && !SIDES.some((s) => sideTiles(r, s).some((p) => def(p.x, p.y).passable))) {
       errors.push(`${at} não dá para nenhum chão.`);
     }
     counters[r.def.slug] = (counters[r.def.slug] ?? 0) + 1;
@@ -333,8 +348,8 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
     });
   }
 
-  if (!spec.outdoor && !fixtures.some((f) => f.kind === 'door')) {
-    warnings.push(`Nenhuma porta ('D'): personagens não terão por onde entrar ou sair.`);
+  if (!spec.outdoor && !fixtures.some((f) => EXIT_KINDS.has(f.kind))) {
+    warnings.push(`Nenhuma porta ('D'), elevador ('E') ou escada ('Z'): personagens não terão por onde entrar ou sair.`);
   }
   if (errors.length) return { ok: false, errors, warnings };
 
@@ -352,6 +367,7 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
       floor: spec.floor ?? (spec.outdoor ? 'grass' : 'wood'),
       outdoor: spec.outdoor ?? false,
       light: Math.round(Math.min(1, Math.max(0, spec.light ?? 1)) * 100) / 100,
+      exits: defaultExits(fixtures),
     },
   };
 }

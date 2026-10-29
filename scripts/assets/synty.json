@@ -1,5 +1,5 @@
 {
-  "comment": "Modelos da Synty usados no 3D. Caminhos relativos a assets/synty (fora do git). textures: variantes de cor da paleta de cada pacote (móveis usam a primeira; personagens variam). props: scale corrige FBX exportados em outra unidade (os do City vêm 100× menores). fixtures monta cada tipo de móvel do motor com peças: x e z em metros no espaço do móvel (frente = +z), yaw em graus, scale para ajustar o tamanho (a carteira infantil cresce para caber os adolescentes). Lousa, janela e porta seguem primitivas: são parte da parede, e a lousa mostra o texto do jogo. characters: figure é o corpo pedido pelo motor (adulto, adulta, menino, menina). clips: animações transferidas para o esqueleto dos personagens, uma vez por sexo ({Sex} Masculine/Feminine, {Sx} Masc/Femn); sit é montada a partir de idle.",
+  "comment": "Modelos da Synty usados no 3D. Caminhos relativos a assets/synty (fora do git). textures: variantes de cor da paleta de cada pacote (móveis usam a primeira; personagens variam). props: scale corrige FBX exportados em outra unidade (os do City vêm 100× menores). fixtures monta cada tipo de móvel do motor com peças: x e z em metros no espaço do móvel (frente = +z), yaw em graus, scale para ajustar o tamanho (a carteira infantil cresce para caber os adolescentes), stretch para a peça esticar no comprimento até cobrir o móvel (sofá de 3 tiles). Lousa, janela, porta, elevador e escada seguem primitivas: são parte da parede, e a lousa mostra o texto do jogo. seats: onde fica o quadril de quem senta, em metros para a frente do centro do assento (no sofá vai à frente, para as pernas descerem na frente da base). characters: figure é o corpo (adulto, adulta, menino, menina) e look descreve o visual do modelo (na variante de cor principal), para o mestre escolher e descrever o personagem a partir dele. clips: animações transferidas para o esqueleto dos personagens, uma vez por sexo ({Sex} Masculine/Feminine, {Sx} Masc/Femn); sit é montada a partir de idle.",
   "textures": {
     "kids": ["kids/Textures/PolygonKids_Texture_01_A.png"],
     "town": ["town/Textures/PolygonTown_01_A.png", "town/Textures/PolygonTown_01_B.png", "town/Textures/PolygonTown_01_C.png"],
@@ -29,10 +29,11 @@
     "locker": [{ "model": "locker" }],
     "plant": [{ "model": "pot_plant" }],
     "bed": [{ "model": "single_bed" }],
-    "sofa": [{ "model": "couch" }],
+    "sofa": [{ "model": "couch", "stretch": true }],
     "counter": [{ "model": "shop_counter" }],
     "crate": [{ "model": "crate" }]
   },
+  "seats": { "desk": -0.3, "chair": 0, "sofa": 0.12 },
   "reference": "anim_base_locomotion/SourceFiles/Character/PolygonSyntyCharacter.fbx",
   "rig": "city/FBX/Characters/SK_Character_BusinessMan_Suit.fbx",
   "clips": {
@@ -42,21 +43,21 @@
     "nod": "anim_idles/SourceFiles/Animations/Polygon/{Sex}/HeadNod/Actions/A_POLY_IDL_HeadNod_Small_{Sx}.fbx"
   },
   "characters": [
-    { "id": "schoolboy", "pack": "town", "figure": "menino", "src": "town/FBX/Characters/SK_Character_SchoolBoy_01.fbx" },
-    { "id": "son", "pack": "town", "figure": "menino", "src": "town/FBX/Characters/SK_Character_Son_01.fbx" },
-    { "id": "schoolgirl", "pack": "town", "figure": "menina", "src": "town/FBX/Characters/SK_Character_SchoolGirl_01.fbx" },
-    { "id": "daughter", "pack": "town", "figure": "menina", "src": "town/FBX/Characters/SK_Character_Daughter_01.fbx" },
-    { "id": "father_1", "pack": "town", "figure": "adulto", "src": "town/FBX/Characters/SK_Character_Father_01.fbx" },
-    { "id": "father_2", "pack": "town", "figure": "adulto", "src": "town/FBX/Characters/SK_Character_Father_02.fbx" },
-    { "id": "shopkeeper", "pack": "town", "figure": "adulto", "src": "town/FBX/Characters/SK_Character_ShopKeeper_01.fbx" },
-    { "id": "businessman_shirt", "pack": "city", "figure": "adulto", "src": "city/FBX/Characters/SK_Character_BusinessMan_Shirt.fbx" },
-    { "id": "businessman_suit", "pack": "city", "figure": "adulto", "src": "city/FBX/Characters/SK_Character_BusinessMan_Suit.fbx" },
-    { "id": "male_hoodie", "pack": "city", "figure": "adulto", "src": "city/FBX/Characters/SK_Character_Male_Hoodie.fbx" },
-    { "id": "male_jacket", "pack": "city", "figure": "adulto", "src": "city/FBX/Characters/SK_Character_Male_Jacket.fbx" },
-    { "id": "mother_1", "pack": "town", "figure": "adulta", "src": "town/FBX/Characters/SK_Character_Mother_01.fbx" },
-    { "id": "mother_2", "pack": "town", "figure": "adulta", "src": "town/FBX/Characters/SK_Character_Mother_02.fbx" },
-    { "id": "businesswoman", "pack": "city", "figure": "adulta", "src": "city/FBX/Characters/SK_Character_BusinessWoman.fbx" },
-    { "id": "female_coat", "pack": "city", "figure": "adulta", "src": "city/FBX/Characters/SK_Character_Female_Coat.fbx" },
-    { "id": "female_jacket", "pack": "city", "figure": "adulta", "src": "city/FBX/Characters/SK_Character_Female_Jacket.fbx" }
+    { "id": "schoolboy", "pack": "town", "figure": "menino", "look": "adolescente de cabelo castanho com uniforme escolar: blazer azul-marinho, camisa branca e gravata", "src": "town/FBX/Characters/SK_Character_SchoolBoy_01.fbx" },
+    { "id": "son", "pack": "town", "figure": "menino", "look": "adolescente de boné e jaqueta vermelha com capuz, jeans", "src": "town/FBX/Characters/SK_Character_Son_01.fbx" },
+    { "id": "schoolgirl", "pack": "town", "figure": "menina", "look": "adolescente de cabelo castanho com uniforme escolar: camisa branca com laço vermelho e saia xadrez azul", "src": "town/FBX/Characters/SK_Character_SchoolGirl_01.fbx" },
+    { "id": "daughter", "pack": "town", "figure": "menina", "look": "adolescente de gorro escuro e jaqueta verde-oliva, jeans", "src": "town/FBX/Characters/SK_Character_Daughter_01.fbx" },
+    { "id": "father_1", "pack": "town", "figure": "adulto", "look": "homem de barba e cabelo escuro, camisa xadrez de manga curta, bermuda e sandálias", "src": "town/FBX/Characters/SK_Character_Father_01.fbx" },
+    { "id": "father_2", "pack": "town", "figure": "adulto", "look": "homem ruivo de barba, camisa verde aberta sobre camiseta cinza, calça cáqui", "src": "town/FBX/Characters/SK_Character_Father_02.fbx" },
+    { "id": "shopkeeper", "pack": "town", "figure": "adulto", "look": "homem mais velho, grisalho, de avental cinza sobre camisa verde", "src": "town/FBX/Characters/SK_Character_ShopKeeper_01.fbx" },
+    { "id": "businessman_shirt", "pack": "city", "figure": "adulto", "look": "homem de barba preta, camisa social azul-clara, gravata vermelha e calça preta", "src": "city/FBX/Characters/SK_Character_BusinessMan_Shirt.fbx" },
+    { "id": "businessman_suit", "pack": "city", "figure": "adulto", "look": "homem de cabelo escuro penteado para trás, terno escuro e gravata vermelha", "src": "city/FBX/Characters/SK_Character_BusinessMan_Suit.fbx" },
+    { "id": "male_hoodie", "pack": "city", "figure": "adulto", "look": "homem de cavanhaque e boné verde, moletom vermelho com zíper e jeans", "src": "city/FBX/Characters/SK_Character_Male_Hoodie.fbx" },
+    { "id": "male_jacket", "pack": "city", "figure": "adulto", "look": "homem de barba, jaqueta verde-oliva sobre camisa vermelha, jeans e botas", "src": "city/FBX/Characters/SK_Character_Male_Jacket.fbx" },
+    { "id": "mother_1", "pack": "town", "figure": "adulta", "look": "mulher de cabelo castanho preso, vestido azul-esverdeado com avental branco", "src": "town/FBX/Characters/SK_Character_Mother_01.fbx" },
+    { "id": "mother_2", "pack": "town", "figure": "adulta", "look": "mulher de cabelo castanho preso, vestido roxo sem mangas com listras amarelas", "src": "town/FBX/Characters/SK_Character_Mother_02.fbx" },
+    { "id": "businesswoman", "pack": "city", "figure": "adulta", "look": "mulher loira de coque e óculos, terninho cinza com saia", "src": "city/FBX/Characters/SK_Character_BusinessWoman.fbx" },
+    { "id": "female_coat", "pack": "city", "figure": "adulta", "look": "mulher loira de casaco vermelho elegante com gola branca", "src": "city/FBX/Characters/SK_Character_Female_Coat.fbx" },
+    { "id": "female_jacket", "pack": "city", "figure": "adulta", "look": "mulher loira de jaqueta vermelha, camiseta preta e jeans", "src": "city/FBX/Characters/SK_Character_Female_Jacket.fbx" }
   ]
 }

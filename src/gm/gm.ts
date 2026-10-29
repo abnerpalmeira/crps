@@ -31,6 +31,8 @@ export interface GameMasterOptions {
   effortTurn?: Effort;
   /** Roda o verificador de consistência depois de cada narração (padrão: sim). */
   verify?: boolean;
+  /** Prompt do mestre (padrão: SYSTEM_PROMPT, sem os visuais do catálogo 3D). */
+  system?: string;
   maxSteps?: number;
 }
 
@@ -91,7 +93,7 @@ export class GameMaster {
   }
 
   private async runTurn(engine: GameEngine, userMessage: string, effort: Effort, input: string, emit: Emit): Promise<void> {
-    const session = this.opts.provider.startSession({ system: SYSTEM_PROMPT, tools: toolSpecs(), userMessage, effort });
+    const session = this.opts.provider.startSession({ system: this.opts.system ?? SYSTEM_PROMPT, tools: toolSpecs(), userMessage, effort });
     const changes: string[] = [];
     let result = await this.loop(engine, session, emit, changes);
 

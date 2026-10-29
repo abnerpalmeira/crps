@@ -96,6 +96,7 @@ O prompt de sistema e as tools ficam em cache (`cache_control`), e as tools usam
 src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   types.ts      modelo de dados: personagens, itens, locais, móveis, fatos, fios, relógio
   layout.ts     layout ASCII → local validado (paredes, conectividade, acesso, orientação)
+  templates.ts  layouts prontos: saguão de prédio e corredor de andar
   engine.ts     regras: posicionamento, caminhos, alcance, testes, fatos, tempo
   tools.ts      as 19 tools (schemas zod → JSON Schema) e a execução atômica
   effects.ts    efeitos de perks e condições de cada personagem
@@ -282,12 +283,15 @@ O que entra está em [scripts/assets/synty.json](scripts/assets/synty.json):
 
 - **Móveis:** cada tipo da legenda do motor (carteira, mesa do professor, estante, armário…) é
   montado com peças do catálogo. A carteira, por exemplo, é a mesa infantil mais a cadeira
-  atrás. Lousa, janela e porta seguem primitivas, porque fazem parte da parede e a lousa mostra
-  o texto do jogo.
-- **Personagens:** adultos e adolescentes dos pacotes City e Town. O motor guarda o corpo de
-  cada personagem em `figure` (adulto, adulta, menino, menina), que o mestre informa ao criar.
-  Sem ele, a interface deduz pelo papel. A variante de cor vem do id, então cada aluno fica
-  sempre com a mesma roupa.
+  atrás. `seats` diz onde fica o quadril de quem senta em cada tipo (no sofá, mais à frente,
+  para as pernas descerem na frente da base). Lousa, janela, porta, elevador e escada seguem
+  primitivas, porque fazem parte da parede e a lousa mostra o texto do jogo.
+- **Personagens:** adultos e adolescentes dos pacotes City e Town, cada um com uma descrição
+  do visual (`look`). O prompt do mestre recebe a lista, e ele escolhe o `look` de cada
+  personagem e escreve a aparência a partir dele, então o card e o 3D descrevem a mesma
+  pessoa. Sem `look` (campanhas antigas), a interface usa `figure` (adulto, adulta, menino,
+  menina) ou deduz o corpo pelo papel e pela aparência. A cor é sempre a variante principal,
+  a que as descrições retratam.
 - **Animações:** parado, andando, falando com gesto, acenando com a cabeça e sentado (montada a
   partir da pose parada). Os personagens antigos da Synty e os pacotes de animação usam nomes
   de ossos diferentes, e os arquivos de animação têm outra pose de repouso. Por isso o
@@ -319,9 +323,33 @@ Se o layout tiver erro (caractere desconhecido, chão encostando no exterior, re
 desconectadas, móvel sem corredor), a tool devolve os erros com coordenadas e o modelo
 corrige.
 
+### Saídas e andares
+
+Porta `D`, elevador `E` e escada `Z` ficam na parede e são as saídas do local. Cada uma tem
+um nome e a lista de lugares para onde leva (`Location.exits`), e o resumo do turno mostra as
+duas coisas ao mestre. Mudar de local é passar por uma saída: `move_character` com
+`location_id` e `via`. O motor confere se há caminho até a saída e põe quem chega junto da
+saída que leva de volta. Na primeira passagem, ele liga os dois lados.
+
+A porta leva a um lugar só: o motor recusa usar a porta da rua para chegar ao 11º andar. O
+elevador e a escada levam a qualquer andar, e cada andar é um local. Quem sobe de elevador
+sai do elevador, e quem sobe de escada sai da escada. Local sem saída nenhuma (área aberta)
+continua permitindo chegar e sair de qualquer ponto.
+
+Para prédios, o mestre não precisa desenhar: `create_location` com `template` gera layouts
+coerentes, espelhados ao acaso:
+
+- `saguao`: porta dupla para a rua, portaria com balcão e cadeira de frente para a entrada,
+  dois elevadores (A e B) e a escada no fundo, estante, sofá e plantas.
+- `corredor` com `floor`: elevador numa ponta, escada na outra e as portas numeradas pelo
+  andar (no 11º, Apto 1101, 1102…).
+
+No 3D, cada saída ganha uma placa com o nome. Clicar nela abre o inspetor, com o texto pronto
+para passar pela porta, pegar o elevador ou usar a escada.
+
 ## Próximos passos
 
 - Trocar as primitivas por assets low-poly CC0 (Kenney, KayKit, Quaternius).
 - Agenda dos NPCs e eventos disparados pelo relógio (o sinal da escola, o intervalo).
-- Navegar entre locais no 3D e gerar o local vizinho sob demanda.
+- Mais layouts prontos (apartamento, loja, escritório) e gerar o local vizinho sob demanda.
 - Avaliação automática do mestre: roteiros de jogador e checagem de consistência ao longo de muitos turnos.

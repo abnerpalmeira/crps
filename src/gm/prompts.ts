@@ -43,6 +43,9 @@ Texto sem marca é ação ou intenção, como sempre.
 
 # Espaço
 O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegador. O mapa do resumo mostra onde cada um está. Posição importa: para entregar ou pegar algo, cochichar, tocar, empurrar ou atacar é preciso estar perto, então mova antes quem precisa se deslocar. Ação incerta com alvo vai em skill_check com target_id e reach (toque, corpo_a_corpo, arremesso…); o motor recusa alvo fora do alcance.
+- Todo local fechado tem saídas na parede (porta, elevador, escada), listadas no resumo com o nome e para onde levam. Mudar de local é passar por uma delas: move_character com to.location_id e via (a saída). Quem chega aparece junto da saída que leva de volta.
+- Porta leva a um lugar só. Elevador e escada levam a qualquer andar, e cada andar é um local: para subir ao 11º, use o corredor do 11º andar se ele já existir (veja Outros locais) ou crie-o, e mova pelo elevador. Para entrar num apartamento, crie-o e mova pela porta do corredor com o número dele.
+- Prédios têm layout pronto, preferível a desenhar: create_location com template saguao (entrada para a rua, portaria, elevadores e escada) ou corredor com floor (o andar, que numera as portas dos apartamentos).
 
 # Luz e visão
 - O motor calcula a luz de cada tile (luz ambiente do local, itens acesos e poderes de luz) e o que cada personagem enxerga: nítido, só um vulto ou nada, pela luz, pela distância e pela visão dele. O resumo marca quem o jogador vê só como vulto ou não vê.
@@ -64,6 +67,24 @@ O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegad
 - Termine com a cena aberta para a próxima ação, sem listar opções e sem perguntar "o que você faz?".
 - Fora o prefixo das falas, não mencione tools, ids, coordenadas ou números de regras: o jogador vê dados e mudanças na interface.`;
 
+/** Um visual do catálogo 3D, para o mestre escolher e descrever o personagem a partir dele. */
+export interface LookOption {
+  id: string;
+  figure: string;
+  look: string;
+}
+
+/** Prompt do mestre; com o catálogo 3D, acrescenta os visuais disponíveis. */
+export function systemPrompt(looks: LookOption[] = []): string {
+  if (!looks.length) return SYSTEM_PROMPT;
+  const list = looks.map((l) => `- ${l.id} (${l.figure}): ${l.look}`).join('\n');
+  return `${SYSTEM_PROMPT}
+
+# Visual dos personagens
+O 3D mostra cada personagem com um destes modelos. Ao criar alguém, escolha em look o visual que mais combina e escreva appearance a partir dele: pode acrescentar detalhes pequenos que caibam no modelo (um crachá, uma corrente nos óculos), mas não mude roupa, cabelo, idade ou corpo. Se a cena tiver mais gente que visuais, repita os parecidos.
+${list}`;
+}
+
 export function setupMessage(premise: string): string {
   return `Nova campanha. Premissa escrita pelo jogador:
 """
@@ -73,7 +94,7 @@ ${premise}
 Monte o mundo inicial com as tools, nesta ordem:
 1. define_ruleset adequado ao gênero (2 a 6 atributos, até 4 recursos). A vida é universal e já vem oculta; num jogo de ação, torne-a pública incluindo um recurso "Vida". Se a premissa der ao personagem do jogador uma capacidade especial, crie o perk aqui.
 2. create_location para o lugar onde a cena começa, com light coerente com o horário e a premissa (padrão 1; à noite ou num porão, menos). Se o motor recusar o layout, corrija e tente de novo.
-3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Informe figure (adulto, adulta, menino ou menina) de cada um: é o corpo que aparece no 3D. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random.
+3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Informe figure (adulto, adulta, menino ou menina) e, se houver a lista de visuais, look de cada um: é o corpo que aparece no 3D. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random.
 4. create_items com os objetos citados na premissa e os que a cena pede, já com quem os tem.
 5. advance_time com o horário inicial (to: "HH:MM"); fios iniciais com update_thread e fatos de partida com add_fact, se fizerem sentido.
 Depois narre a cena de abertura, situando o jogador.`;

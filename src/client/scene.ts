@@ -5,7 +5,7 @@ import { tileDef } from '../engine/layout';
 import { lightSources } from '../engine/light';
 import { lifeStatId, perceptionOf, visionOf } from '../engine/perception';
 import type { Character, Fixture, Location, WorldState } from '../engine/types';
-import { characterModel, fixtureModel, type CharacterModel, type Clip } from './models';
+import { characterModel, fixtureModel, seatOffset, type CharacterModel, type Clip } from './models';
 import {
   DIR_VEC,
   SURFACE_Y,
@@ -48,6 +48,8 @@ interface WallPart {
 
 const PLAYER_COLOR = '#f0b35a';
 
+const EXIT_ICON: Partial<Record<Fixture['kind'], string>> = { door: '🚪', elevator: '🛗', stairs: '🪜' };
+
 function lerpAngle(a: number, b: number, t: number): number {
   const d = Math.atan2(Math.sin(b - a), Math.cos(b - a));
   return a + d * t;
@@ -83,11 +85,15 @@ export class WorldView {
   private items = new Map<string, THREE.Object3D>();
   private boards = new Map<string, { surface: THREE.Mesh; text: string; length: number }>();
   private balloons = new Map<string, CSS2DObject>();
+  /** Placa de cada saída (porta, elevador, escada) com o nome que ela tem no motor; clicar abre o inspetor. */
+  private signs = new Map<string, CSS2DObject>();
   private roomKey = '';
   /** Última fala que fez um personagem gesticular, para não repetir a cada passo do replay. */
   private lastTalk = '';
   /** Altura de apoio dos móveis que já trocaram a primitiva por modelo. */
   private surfaces = new Map<string, number>();
+  /** Comprimento do modelo de cada móvel, que pode ser menor que os tiles dele (um sofá de 3 tiles). */
+  private spans = new Map<string, number>();
   private shown: { world: WorldState; loc: Location } | null = null;
   private selected: Pick | null = null;
   private selectionRing = playerRing('#ffffff');
@@ -153,6 +159,7 @@ export class WorldView {
     if (!loc) return;
     this.shown = { world, loc };
     this.syncBoards(loc);
+    this.syncSigns(loc);
     this.syncActors(world, loc);
     this.syncItems(world, loc);
     this.syncLight(world, loc);
@@ -227,6 +234,7 @@ export class WorldView {
       }
     }
     for (const [id, a] of this.actors) a.label.element.classList.toggle('selected', pick?.kind === 'character' && pick.id === id);
+    for (const [id, s] of this.signs) s.element.classList.toggle('selected', pick?.kind === 'fixture' && pick.id === id);
     this.onPick(pick);
   }
 
@@ -255,11 +263,14 @@ export class WorldView {
 
   private clearRoom(): void {
     this.surfaces.clear();
+    this.spans.clear();
     for (const lamp of this.lamps.values()) lamp.dispose();
     this.lamps.clear();
     for (const id of [...this.balloons.keys()]) this.removeBalloon(id);
     for (const a of this.actors.values()) a.label.element.remove();
     this.actors.clear();
+    for (const s of this.signs.values()) s.element.remove();
+    this.signs.clear();
     this.items.clear();
     this.boards.clear();
     this.walls = [];
@@ -319,6 +330,17 @@ export class WorldView {
         const surface = obj.getObjectByName('board-surface') as THREE.Mesh;
         this.boards.set(f.id, { surface, text: '\u0000', length: f.facing === 'N' || f.facing === 'S' ? f.w : f.h });
       }
+      if (loc.exits?.[f.id]) {
+        const el = document.createElement('button');
+        el.className = 'exit-sign';
+        el.addEventListener('click', () => this.select({ kind: 'fixture', id: f.id }));
+        const sign = new CSS2DObject(el);
+        const [dx, dz] = DIR_VEC[f.facing];
+        sign.position.set(f.x + (f.w - 1) / 2 + dx * 0.6, 2.6, f.y + (f.h - 1) / 2 + dz * 0.6);
+        sign.userData.wall = obj;
+        this.room.add(sign);
+        this.signs.set(f.id, sign);
+      }
     }
     this.frame(loc);
   }
@@ -363,7 +385,12 @@ export class WorldView {
     obj.add(model.group);
     tagPick(obj, { kind: 'fixture', id: f.id });
     this.surfaces.set(f.id, model.top);
-    if (this.shown) this.syncItems(this.shown.world, this.shown.loc);
+    this.spans.set(f.id, model.span);
+    // Com o modelo, quem está sentado nele e o que está em cima mudam de lugar.
+    if (this.shown) {
+      this.syncActors(this.shown.world, this.shown.loc);
+      this.syncItems(this.shown.world, this.shown.loc);
+    }
   }
 
   private frame(loc: Location): void {
@@ -401,12 +428,31 @@ export class WorldView {
     }
   }
 
+  private syncSigns(loc: Location): void {
+    for (const [id, sign] of this.signs) {
+      const f = loc.fixtures.find((x) => x.id === id);
+      const exit = loc.exits?.[id];
+      if (!f || !exit) continue;
+      const text = `${EXIT_ICON[f.kind] ?? ''} ${exit.label}`.trim();
+      if (sign.element.textContent !== text) sign.element.textContent = text;
+    }
+  }
+
   private placement(c: Character, loc: Location): { pos: THREE.Vector3; yaw: number; seated: boolean } {
     const pos = new THREE.Vector3(c.pos!.x, 0, c.pos!.y);
     const seat = c.seatId ? loc.fixtures.find((f) => f.id === c.seatId) : undefined;
     if (!seat) return { pos, yaw: YAW[c.facing], seated: false };
     const yaw = YAW[seat.facing];
-    const back = seat.kind === 'desk' ? -0.3 : seat.kind === 'sofa' ? -0.1 : 0;
+    // Assento comprido com modelo mais curto que os tiles: quem senta fica dentro do modelo.
+    const alongX = seat.facing === 'N' || seat.facing === 'S';
+    const length = alongX ? seat.w : seat.h;
+    const span = this.spans.get(seat.id);
+    if (span !== undefined && length > 1) {
+      const k = Math.min(1, Math.max(0, span - 0.6) / (length - 1));
+      if (alongX) pos.x = seat.x + (seat.w - 1) / 2 + (pos.x - seat.x - (seat.w - 1) / 2) * k;
+      else pos.z = seat.y + (seat.h - 1) / 2 + (pos.z - seat.y - (seat.h - 1) / 2) * k;
+    }
+    const back = seatOffset(seat.kind) ?? (seat.kind === 'desk' ? -0.3 : seat.kind === 'sofa' ? -0.1 : 0);
     pos.add(new THREE.Vector3(back * Math.sin(yaw), 0, back * Math.cos(yaw)));
     return { pos, yaw, seated: seat.kind !== 'bed' };
   }
@@ -577,6 +623,8 @@ export class WorldView {
       const goal = w.normal && w.normal.dot(view) > 0.3 ? 0.08 : 1;
       w.obj.scale.y += (goal - w.obj.scale.y) * Math.min(1, dt * 8);
     }
+    // A placa desce junto com a parede baixada, para ficar na saída e não flutuar sobre a sala.
+    for (const s of this.signs.values()) s.position.y = 0.35 + 2.25 * (s.userData.wall as THREE.Object3D).scale.y;
     this.renderer.render(this.scene, this.camera);
     this.labels.render(this.scene, this.camera);
   }

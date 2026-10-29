@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { EngineError, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { legendSummary } from './layout';
+import { TEMPLATES } from './templates';
 import { lightLabel } from './light';
 import { perceptionOf } from './perception';
 import { truncate } from './text';
@@ -95,7 +96,7 @@ const resourceInput = z.object({
 });
 
 /** Campos de personagem que qualquer um percebe; o resto de um NPC só aparece nos bastidores. */
-const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'figure', 'traits']);
+const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'figure', 'look', 'traits']);
 
 const placement = z
   .object({
@@ -118,12 +119,15 @@ const holder = z
 
 const figure = z.enum(['adulto', 'adulta', 'menino', 'menina']).describe('Corpo no 3D: adulto, adulta, menino ou menina (crianças e adolescentes).');
 
+const look = z.string().describe('Id do visual no 3D (lista em "Visual dos personagens"); a aparência descreve esse visual.');
+
 const characterInput = z.object({
   id: z.string().optional().describe('Slug curto e estável, ex. "yuki". Se omitido, vem do primeiro nome.'),
   name: z.string(),
   role: z.string().describe('Papel ou profissão, ex. "aluna do 2º ano".'),
   appearance: z.string().describe('Uma ou duas frases.'),
   figure: figure.optional(),
+  look: look.optional(),
   traits: z.array(z.string()).max(6).optional().describe('1 a 3 traços marcantes.'),
   is_player: z.boolean().optional(),
   attributes: statMap.optional().describe('Atributos do ruleset (0 a 5). Não informados ficam em 1.'),
@@ -148,6 +152,12 @@ const itemInput = z.object({
   quantity: z.number().int().min(1).optional(),
   holder,
   light: lightInput.optional().describe('Para itens que iluminam (lanterna, vela, tocha).'),
+});
+
+const exitInput = z.object({
+  fixture: z.string().describe('Id ou slug da porta, elevador ou escada, ex. "porta-1".'),
+  to: z.string().optional().describe('Id do local para onde leva (pode ainda não existir). Em elevador e escada, acrescenta um andar; "" limpa.'),
+  label: z.string().optional().describe('Nome curto da saída, ex. "Rua Augusta", "Elevador", "Apto 1104".'),
 });
 
 const difficulty = z.union([z.enum(['facil', 'normal', 'dificil', 'muito_dificil']), z.number().int()]);
@@ -251,18 +261,29 @@ export const TOOLS = [
   tool({
     name: 'create_location',
     description:
-      'Cria um local a partir de um grid ASCII (1 caractere = 1 tile de ~1 m). O motor valida e devolve os ids dos móveis; ' +
-      'se houver erro, corrija o layout e chame de novo. Regras: paredes "#" fecham o perímetro; porta "D", janela "W" e ' +
-      'quadro "B" ficam NA linha da parede; deixe corredores "." para tudo ser alcançável; todas as linhas com a mesma largura. ' +
+      'Cria um local a partir de um grid ASCII (1 caractere = 1 tile de ~1 m) ou de um layout pronto (template), que é o ' +
+      'preferido para lugares que ele cobre. O motor valida e devolve os ids dos móveis e das saídas; ' +
+      'se houver erro, corrija o layout e chame de novo. Regras: paredes "#" fecham o perímetro; porta "D", elevador "E", ' +
+      'escada "Z", janela "W" e quadro "B" ficam NA linha da parede; todo local fechado precisa de ao menos uma saída (D, E ou Z); ' +
+      'deixe corredores "." para tudo ser alcançável; todas as linhas com a mesma largura. ' +
       `Legenda: ${legendSummary()}. Sala de aula típica: 12 a 16 colunas × 9 a 12 linhas. Exemplo:\n${EXAMPLE_CLASSROOM}`,
     schema: z.object({
       id: z.string().optional().describe('Slug curto, ex. "sala_1a". Se omitido, vem do nome.'),
       name: z.string(),
       description: z.string(),
-      layout: z.union([z.string(), z.array(z.string())]).describe('Uma string com quebras de linha, ou uma string por fileira.'),
+      layout: z.union([z.string(), z.array(z.string())]).optional().describe('Uma string com quebras de linha, ou uma string por fileira. Dispensado com template.'),
+      template: z
+        .object({
+          name: z.enum(['saguao', 'corredor']),
+          floor: z.number().int().optional().describe('Andar do corredor: numera os apartamentos (11 → Apto 1101…).'),
+          width: z.number().int().optional().describe('Largura do saguão ou comprimento do corredor, em tiles.'),
+        })
+        .optional()
+        .describe(`Layout pronto, em vez de desenhar: ${Object.entries(TEMPLATES).map(([k, v]) => `${k} (${v})`).join('; ')}.`),
       floor: z.enum(['wood', 'tile', 'stone', 'carpet', 'grass', 'dirt']).optional(),
       outdoor: z.boolean().optional().describe('true para áreas abertas (pátio, rua, floresta): dispensa paredes no perímetro.'),
       light: z.number().optional().describe('Luz ambiente de 0 a 1: 1 dia claro ou luzes acesas (padrão), 0.5 penumbra, 0.1 noite, 0 breu.'),
+      exits: z.array(exitInput).optional().describe('Nome e destino das saídas (porta, elevador, escada); sem destino, ele é ligado na primeira passagem.'),
     }),
     mutates: true,
     run(engine, input) {
@@ -270,8 +291,9 @@ export const TOOLS = [
       const fixtures = location.fixtures.map(
         (f) => `${f.id}: ${f.label} (${f.x},${f.y})${f.w > 1 || f.h > 1 ? ` ${f.w}×${f.h}` : ''}, frente ${f.facing}`,
       );
+      const exits = Object.entries(location.exits).map(([id, e]) => `${id.split('/').pop()}: ${e.label}${e.to.length ? ` → ${e.to.join(', ')}` : ''}`);
       return {
-        content: { location_id: location.id, size: `${location.width}×${location.height}`, fixtures, warnings },
+        content: { location_id: location.id, size: `${location.width}×${location.height}`, fixtures, exits, layout: location.tiles, warnings },
         summary: `🗺️ Local: ${location.name} (${location.width}×${location.height}, ${location.fixtures.length} móveis)`,
       };
     },
@@ -418,6 +440,7 @@ export const TOOLS = [
       role: z.string().optional(),
       appearance: z.string().optional(),
       figure: figure.optional(),
+      look: look.optional(),
       traits_add: z.array(z.string()).optional(),
       traits_remove: z.array(z.string()).optional(),
       personality: z.string().optional(),
@@ -464,11 +487,14 @@ export const TOOLS = [
     name: 'move_character',
     description:
       'Move um personagem: para um tile {x, y}, para um assento {seat}, para perto de algo ou alguém {near}, ou para outro ' +
-      'local {location_id}. O motor calcula o caminho e recusa destinos ocupados ou inalcançáveis. "face" vira o personagem ' +
-      'para uma direção (N/S/E/W) ou para algo.',
+      'local {location_id}. O motor calcula o caminho e recusa destinos ocupados ou inalcançáveis. Para mudar de local, o ' +
+      'personagem sai por uma porta, elevador ou escada (via); o motor usa a que já leva ao destino e o faz chegar pela ' +
+      'saída que leva de volta. Porta leva a um lugar só; elevador e escada levam a qualquer andar (cada andar é um local). ' +
+      '"face" vira o personagem para uma direção (N/S/E/W) ou para algo.',
     schema: z.object({
       character_id: z.string(),
       to: placement.extend({ location_id: z.string().optional() }),
+      via: z.string().optional().describe('Saída usada para mudar de local, ex. "porta-1", "elevador-1", "escada-1".'),
       face: z.string().optional(),
     }),
     mutates: true,
@@ -544,13 +570,14 @@ export const TOOLS = [
   tool({
     name: 'update_location',
     description:
-      'Muda a luz ambiente de um local (acender ou apagar as luzes, anoitecer, queda de energia), o nome ou a descrição. ' +
+      'Muda a luz ambiente de um local (acender ou apagar as luzes, anoitecer, queda de energia), o nome, a descrição ou as saídas. ' +
       'light vai de 0 (breu) a 1 (dia claro ou luzes acesas); 0.5 é penumbra, 0.1 é noite com pouca luz.',
     schema: z.object({
       location_id: z.string(),
       light: z.number().optional(),
       name: z.string().optional(),
       description: z.string().optional(),
+      exits: z.array(exitInput).optional().describe('Nome e destino de portas, elevadores e escadas.'),
       reason: z.string(),
     }),
     mutates: true,

@@ -2,7 +2,7 @@ import { lightAt, lightLabel, lightSources } from '../engine/light';
 import { perceptionOf } from '../engine/perception';
 import { findByName, hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
 import { chebyshev, formatClock, hhmm } from '../engine/text';
-import type { Character, LogEntry, WorldState } from '../engine/types';
+import type { Character, Fixture, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 import type { CostEvent } from '../gm/pricing';
 import type { Usage } from '../gm/provider';
@@ -527,17 +527,31 @@ export class Ui {
         actions.push([`Falar com ${first}`, `Digo a ${first}: "`], [`Sussurrar para ${first}`, `@${first} "`], [`Ir até ${first}`, `Vou até ${first}.`]);
       }
     } else if (pick.kind === 'fixture') {
-      const f = Object.values(world.locations).flatMap((l) => l.fixtures).find((fx) => fx.id === pick.id);
-      if (!f) return this.closeInspector();
-      body.append(el('h3', '', f.label[0].toUpperCase() + f.label.slice(1)));
+      const loc = Object.values(world.locations).find((l) => l.fixtures.some((fx) => fx.id === pick.id));
+      const f = loc?.fixtures.find((fx) => fx.id === pick.id);
+      if (!loc || !f) return this.closeInspector();
+      const exit = loc.exits?.[f.id];
+      const title = exit?.label ?? f.label;
+      body.append(el('h3', '', title[0].toUpperCase() + title.slice(1)));
+      if (exit?.to.length) {
+        const box = el('div', 'backstage-only');
+        box.append(el('p', 'hint', `Leva a (bastidores): ${exit.to.map((id) => world.locations[id]?.name ?? id).join(', ')}`));
+        body.append(box);
+      }
       if (f.text) body.append(el('p', 'board-text', f.text));
       if (f.state) body.append(el('p', 'muted', f.state));
       const on = Object.values(world.items).filter((i) => i.holder.kind === 'fixture' && i.holder.id === f.id);
       if (on.length) body.append(el('p', 'muted', `Aqui: ${on.map((i) => i.name).join(', ')}`));
       const sitter = Object.values(world.characters).find((c) => c.seatId === f.id);
       if (sitter) body.append(el('p', 'muted', `Ocupado por ${sitter.name}`));
-      actions.push([`Ir até ${f.label}`, `Vou até ${f.kind === 'board' ? 'o quadro' : `a ${f.label}`}.`]);
+      const noun = `${MASCULINE.has(f.kind) ? 'o' : 'a'} ${f.kind === 'board' ? 'quadro' : f.label}`;
+      actions.push([`Ir até ${noun}`, `Vou até ${noun}.`]);
       if (f.kind === 'board') actions.push(['Escrever no quadro', 'Escrevo no quadro: "']);
+      // Sem aspas, asteriscos nem parênteses: no texto do jogador, eles viram fala, ação ou pensamento.
+      const name = exit?.label.replace(/["“”*()]/g, '').trim();
+      if (exit && f.kind === 'door') actions.push(['Passar por esta porta', `Passo pela porta: ${name}.`]);
+      if (exit && f.kind === 'elevator') actions.push(['Pegar o elevador', `Pego o ${name} para o andar `]);
+      if (exit && f.kind === 'stairs') actions.push(['Usar a escada', 'Vou pela escada até o andar ']);
     } else {
       const item = world.items[pick.id];
       if (!item) return this.closeInspector();
@@ -697,6 +711,9 @@ export class Ui {
     journal.replaceChildren(...parts);
   }
 }
+
+/** Móveis de nome masculino, para o artigo do texto pronto ("vou até o sofá"). */
+const MASCULINE = new Set<Fixture['kind']>(['board', 'locker', 'plant', 'sofa', 'counter', 'elevator']);
 
 /** O que o HUD diz dos sentidos do jogador: condições, a luz onde ele está e se carrega uma luz. */
 function senseText(world: WorldState): string {

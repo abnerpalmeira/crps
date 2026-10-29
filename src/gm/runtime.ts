@@ -6,6 +6,7 @@ import { GameEngine } from '../engine/engine';
 import { ClaudeProvider, DEFAULT_MODEL } from './claude';
 import { GameMaster } from './gm';
 import { modelChoice } from './models';
+import { systemPrompt, type LookOption } from './prompts';
 import { OfflineProvider } from './offline';
 import type { Mode } from './pricing';
 import type { Effort } from './provider';
@@ -25,6 +26,16 @@ export function isOffline(): boolean {
   return process.env.CRPS_PROVIDER === 'offline';
 }
 
+/** Visuais do catálogo 3D convertido (public/models), se houver, para o mestre escolher. */
+export function lookOptions(path = join('public', 'models', 'catalog.json')): LookOption[] {
+  try {
+    const catalog = JSON.parse(readFileSync(path, 'utf8')) as { characters?: Record<string, { figure: string; look?: string }> };
+    return Object.entries(catalog.characters ?? {}).flatMap(([id, c]) => (c.look ? [{ id, figure: c.figure, look: c.look }] : []));
+  } catch {
+    return [];
+  }
+}
+
 /** Mestre com o modelo escolhido na interface, o de CRPS_MODEL ou o padrão, nessa ordem. */
 export function createGameMaster(opts: { model?: string } = {}): GameMaster {
   const model = opts.model || process.env.CRPS_MODEL || DEFAULT_MODEL;
@@ -35,6 +46,7 @@ export function createGameMaster(opts: { model?: string } = {}): GameMaster {
     effortSetup: effortFromEnv('CRPS_EFFORT_SETUP', 'medium'),
     effortTurn: effortFromEnv('CRPS_EFFORT_TURN', 'low'),
     verify: process.env.CRPS_VERIFY !== '0',
+    system: systemPrompt(isOffline() ? [] : lookOptions()),
   });
 }
 

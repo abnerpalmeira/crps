@@ -142,7 +142,14 @@ def convert_character(entry):
     head = arm.matrix_world @ arm.data.bones['Head'].head_local
     out = os.path.join(out_root, 'characters', f"{entry['id']}.glb")
     export_glb(out, skins=True)
-    return {'file': f"characters/{entry['id']}.glb", 'pack': entry['pack'], 'figure': entry['figure'], 'head': round(head.z, 3), 'bytes': os.path.getsize(out)}
+    return {
+        'file': f"characters/{entry['id']}.glb",
+        'pack': entry['pack'],
+        'figure': entry['figure'],
+        'look': entry.get('look', ''),
+        'head': round(head.z, 3),
+        'bytes': os.path.getsize(out),
+    }
 
 
 def world_rest(arm):
@@ -265,6 +272,7 @@ for section, convert in (('props', convert_prop), ('characters', convert_charact
         except Exception as err:  # um modelo ruim não derruba o resto
             print(f"[synty] ERRO em {entry['id']}: {err}")
 
+result['seats'] = catalog.get('seats', {})
 for kind, parts in catalog.get('fixtures', {}).items():
     missing = [p['model'] for p in parts if p['model'] not in result['props']]
     if missing:

@@ -214,12 +214,49 @@ function windowPiece(g: THREE.Group, length: number): void {
 function door(g: THREE.Group, length: number): void {
   g.add(box(length, WALL_H - 2.1, 1, WALL_COLOR, 0, (2.1 + WALL_H) / 2, 0));
   for (const side of [-1, 1]) g.add(box(0.08, 2.1, 1, '#8e7356', side * (length / 2 - 0.04), 1.05, 0));
-  const hinge = new THREE.Group();
-  hinge.position.set(-length / 2 + 0.08, 0, 0.45);
-  const panel = box(length - 0.18, 2.0, 0.05, '#9b6b43', (length - 0.18) / 2, 1.0, 0);
-  hinge.add(panel, box(0.04, 0.04, 0.12, '#d9c27a', length - 0.3, 1.0, 0.04));
-  hinge.rotation.y = -1.15;
-  g.add(hinge);
+  // Porta larga é dupla: uma folha presa em cada batente, as duas abertas para dentro.
+  const leaves = length >= 2 ? [-1, 1] : [-1];
+  const span = (length - 0.18) / leaves.length;
+  for (const side of leaves) {
+    const hinge = new THREE.Group();
+    hinge.position.set(side * (length / 2 - 0.08), 0, 0.45);
+    hinge.add(box(span, 2.0, 0.05, '#9b6b43', (-side * span) / 2, 1.0, 0), box(0.04, 0.04, 0.12, '#d9c27a', -side * (span - 0.12), 1.0, 0.04));
+    hinge.rotation.y = side * 1.15;
+    g.add(hinge);
+  }
+}
+
+/** Elevador na parede: portas de aço fechadas na moldura, botão de chamada aceso e o mostrador do andar. */
+function elevator(g: THREE.Group, length: number): void {
+  g.add(...wallPiece().children.map((c) => c.clone()));
+  if (length > 1) g.children.forEach((c) => (c.scale.x = length));
+  const w = Math.min(length * 0.8, 1.3);
+  g.add(box(w + 0.16, 2.2, 0.06, '#8b939c', 0, 1.1, 0.52));
+  for (const side of [-1, 1]) g.add(mesh(new THREE.BoxGeometry(w / 2 - 0.01, 2.04, 0.04), '#c9d0d6', (side * w) / 4, 1.04, 0.56, { metalness: 0.3, roughness: 0.45 }));
+  g.add(box(0.012, 2.04, 0.045, '#5d646c', 0, 1.04, 0.565));
+  g.add(box(0.1, 0.2, 0.03, '#3b4148', w / 2 + 0.2, 1.15, 0.515));
+  g.add(mesh(new THREE.BoxGeometry(0.04, 0.04, 0.02), '#ffd27a', w / 2 + 0.2, 1.18, 0.535, { emissive: '#ffb347', emissiveIntensity: 0.8 }));
+  g.add(box(0.34, 0.1, 0.03, '#1f2329', 0, 2.27, 0.515));
+  g.add(mesh(new THREE.BoxGeometry(0.2, 0.05, 0.01), '#ff9b4a', 0, 2.27, 0.535, { emissive: '#ff7a2a', emissiveIntensity: 0.9 }));
+}
+
+/** Vão da escada na parede: degraus que sobem para dentro, corrimão e a placa verde de saída. */
+function stairs(g: THREE.Group, length: number): void {
+  g.add(box(length, WALL_H - 2.1, 1, WALL_COLOR, 0, (2.1 + WALL_H) / 2, 0));
+  for (const side of [-1, 1]) g.add(box(0.08, 2.1, 1, TRIM, side * (length / 2 - 0.04), 1.05, 0));
+  const steps = 6;
+  const rise = 0.17;
+  for (let i = 0; i < steps; i++) {
+    const h = rise * (i + 1);
+    g.add(box(length - 0.16, h, 1 / steps, i % 2 ? '#9a9389' : '#a69f95', 0, h / 2, 0.5 - (i + 0.5) / steps));
+  }
+  // Fundo escuro acima do último degrau: a escada segue para cima, fora de vista.
+  const top = rise * steps;
+  g.add(box(length - 0.16, 2.1 - top, 0.04, '#3a3530', 0, top + (2.1 - top) / 2, -0.48));
+  const rail = box(0.04, 0.04, Math.hypot(1, top), DARK_WOOD, length / 2 - 0.14, 0.9 + top / 2, 0);
+  rail.rotation.x = Math.atan2(top, 1);
+  g.add(rail);
+  g.add(mesh(new THREE.BoxGeometry(0.3, 0.12, 0.03), '#2f9e5b', 0, 2.26, 0.515, { emissive: '#1f8a4c', emissiveIntensity: 0.6 }));
 }
 
 export function buildFixture(f: Fixture): THREE.Group {
@@ -270,6 +307,12 @@ export function buildFixture(f: Fixture): THREE.Group {
       break;
     case 'door':
       door(g, w);
+      break;
+    case 'elevator':
+      elevator(g, w);
+      break;
+    case 'stairs':
+      stairs(g, w);
       break;
   }
   g.position.set(f.x + (f.w - 1) / 2, 0, f.y + (f.h - 1) / 2);

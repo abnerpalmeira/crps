@@ -122,8 +122,10 @@ export interface Character {
   isPlayer: boolean;
   role: string;
   appearance: string;
-  /** Corpo no 3D; sem ele, a interface deduz pelo papel. */
+  /** Corpo no 3D; sem ele, a interface deduz pelo papel e pela aparência. */
   figure?: Figure;
+  /** Visual no catálogo 3D, escolhido pelo mestre; a aparência descreve esse modelo. */
+  look?: string;
   traits: string[];
   attributes: Record<string, number>;
   skills: Record<string, number>;
@@ -174,7 +176,9 @@ export type FixtureKind =
   | 'bed'
   | 'sofa'
   | 'counter'
-  | 'crate';
+  | 'crate'
+  | 'elevator'
+  | 'stairs';
 
 /** Móvel ou elemento fixo gerado a partir do layout ASCII. */
 export interface Fixture {
@@ -207,6 +211,17 @@ export interface Location {
   outdoor: boolean;
   /** Luz ambiente, de 0 (breu) a 1 (dia claro ou luzes acesas). */
   light: number;
+  /** Portas, elevadores e escadas, pelo id do móvel: para onde levam. */
+  exits: Record<string, Exit>;
+}
+
+/**
+ * Saída de um local e para onde leva. Porta leva a um lugar só; elevador e escada levam a todos os
+ * andares por onde alguém já passou. Vazio enquanto ninguém passou por ela.
+ */
+export interface Exit {
+  to: string[];
+  label: string;
 }
 
 export interface Fact {
