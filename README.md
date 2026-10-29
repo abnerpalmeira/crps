@@ -299,11 +299,17 @@ conhecendo, como era, e com as vozes da última narração.
 O palco usa modelos low-poly da Synty (pacotes POLYGON e de animação) quando eles estão
 convertidos. Sem eles, segue com as primitivas, então o projeto roda em qualquer máquina.
 
-1. Extraia os "Source Files" de cada pacote em `assets/synty/<pacote>/` (por exemplo
-   `assets/synty/town/`, `assets/synty/anim_base_locomotion/`). A pasta fica fora do git: a
-   licença não permite compartilhar os arquivos-fonte fora da equipe.
-2. Rode `npm run assets` (precisa do Blender 4.2 ou mais novo no PATH). O resultado vai para
-   `public/models/`, também fora do git.
+1. Baixe os "SourceFiles" de cada pacote na biblioteca da Synty e extraia com
+   `python3 -I scripts/assets/unpack_synty.py --delete ~/Downloads/POLYGON_*_SourceFiles_*.zip`.
+   Ele guarda só FBX, texturas e a lista de materiais em `assets/synty/<pacote>/` (por exemplo
+   `assets/synty/town/`, `assets/synty/anim_base_locomotion/`) e apaga o zip. A pasta fica fora
+   do git: a licença não permite compartilhar os arquivos-fonte fora da equipe.
+2. `python3 -I scripts/assets/index_synty.py` monta o repertório: `assets/synty/repertorio.json`,
+   com um item por modelo (pacote, categoria e palavras do nome), e `assets/synty/REPERTORIO.md`,
+   o resumo. As categorias são personagem, animal, objeto, construção, ambiente, veículo, arma,
+   acessório, animação e efeito. Ele lê só os nomes dos arquivos, e o resultado é só texto.
+3. Rode `npm run assets` (precisa do Blender 4.2 ou mais novo no PATH) para converter os modelos
+   que o catálogo usa. O resultado vai para `public/models/`, também fora do git.
 
 O que entra está em [scripts/assets/synty.json](scripts/assets/synty.json):
 
