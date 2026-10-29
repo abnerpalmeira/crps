@@ -3,7 +3,7 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
 import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, StepStop, Usage, Verdict } from './provider';
 
-export const DEFAULT_MODEL = 'claude-opus-5-5';
+export const DEFAULT_MODEL = 'claude-haiku-5-5';
 export const DEFAULT_VERIFIER_MODEL = 'claude-haiku-5-5';
 
 /** Tipos de bloco do modelo que recusou e que não devem voltar após um fallback no meio da resposta. */

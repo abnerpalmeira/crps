@@ -8,6 +8,7 @@ import type { CostEvent } from '../gm/pricing';
 import type { Usage } from '../gm/provider';
 import type { ModelOption } from './api';
 import { INPUT_ICON, escapeHtml, formatNarration, formatPlayerInput, inline, type Speaker } from './format';
+import { randomPremise } from './premises';
 import type { PlaybackState } from './playback';
 import { hash } from './props';
 import type { Pick } from './scene';
@@ -204,6 +205,14 @@ export class Ui {
       this.onNewGame(premise);
     });
     $('#cancel').addEventListener('click', () => this.dialog.close());
+    const roll = $('#roll-premise');
+    roll.addEventListener('click', () => {
+      this.premise.value = randomPremise(Math.random, this.premise.value);
+      // Reinicia a animação do dado a cada clique.
+      roll.classList.remove('rolling');
+      void roll.offsetWidth;
+      roll.classList.add('rolling');
+    });
     $('#model').addEventListener('click', () => this.toggleModelMenu());
     for (const button of document.querySelectorAll<HTMLButtonElement>('[data-tag]')) {
       button.addEventListener('click', () => this.tag(button.dataset.tag as InputSegment['kind']));

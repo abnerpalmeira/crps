@@ -79,7 +79,10 @@
 
     <dialog id="new-game">
       <form method="dialog">
-        <h2>Qual história você quer viver?</h2>
+        <div class="dialog-head">
+          <h2>Qual história você quer viver?</h2>
+          <button id="roll-premise" type="button" class="roll" title="Sortear uma história"><span class="die">🎲</span> Sortear</button>
+        </div>
         <p class="muted">Descreva o cenário e quem você é. O mestre monta o lugar, as pessoas e os objetos.</p>
         <textarea id="premise" rows="4"></textarea>
         <div id="suggestions"></div>

@@ -8,11 +8,11 @@ export interface ModelChoice {
 }
 
 export const MODEL_CHOICES: ModelChoice[] = [
-  { id: 'claude-fable-5-1', name: 'Fable 5.1', note: 'o mais capaz; 2,5× o preço do Opus 5.5', fallback: true },
-  { id: 'claude-opus-5-5', name: 'Opus 5.5', note: 'o padrão', fallback: true },
-  { id: 'claude-opus-5', name: 'Opus 5', note: 'o Opus anterior; 1,25× o preço do Opus 5.5', fallback: true },
-  { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', note: 'metade do preço do Opus 5.5', fallback: true },
-  { id: 'claude-haiku-5-5', name: 'Haiku 5.5', note: 'o mais barato e o mais rápido', fallback: false },
+  { id: 'claude-fable-5-1', name: 'Fable 5.1', note: 'o mais capaz; 100× o preço do Haiku', fallback: true },
+  { id: 'claude-opus-5-5', name: 'Opus 5.5', note: 'narra melhor; 40× o preço do Haiku', fallback: true },
+  { id: 'claude-opus-5', name: 'Opus 5', note: 'o Opus anterior; 50× o preço do Haiku', fallback: true },
+  { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', note: 'meio-termo; 20× o preço do Haiku', fallback: true },
+  { id: 'claude-haiku-5-5', name: 'Haiku 5.5', note: 'o padrão: o mais barato e o mais rápido', fallback: false },
 ];
 
 export function modelChoice(id: string): ModelChoice | undefined {

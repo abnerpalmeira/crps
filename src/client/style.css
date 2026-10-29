@@ -1023,6 +1023,45 @@ dialog h2 {
   margin: 0 0 4px;
 }
 
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.roll {
+  flex: none;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.roll:hover {
+  border-color: var(--accent);
+}
+
+.roll .die {
+  display: inline-block;
+}
+
+.roll.rolling .die {
+  animation: roll-die 0.45s ease-out;
+}
+
+@keyframes roll-die {
+  50% {
+    transform: rotate(200deg) scale(1.3);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 #premise {
   width: 100%;
   margin-top: 8px;

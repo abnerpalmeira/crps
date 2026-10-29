@@ -52,7 +52,7 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 
 | Variável | Padrão | |
 |---|---|---|
-| `CRPS_MODEL` | `claude-opus-5-5` | Modelo do mestre (a escolha feita na interface tem prioridade) |
+| `CRPS_MODEL` | `claude-haiku-5-5` | Modelo do mestre (a escolha feita na interface tem prioridade) |
 | `CRPS_VERIFIER_MODEL` | `claude-haiku-5-5` | Verificador de consistência (barato) |
 | `CRPS_EFFORT_SETUP` | `medium` | Esforço na criação do mundo |
 | `CRPS_EFFORT_TURN` | `low` | Esforço nos turnos; suba se o mestre esquecer de chamar tools |
