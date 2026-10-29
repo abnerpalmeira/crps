@@ -110,6 +110,9 @@ export interface Ruleset {
   notes: string;
 }
 
+/** Corpo no 3D: adultos ou crianças e adolescentes. */
+export type Figure = 'adulto' | 'adulta' | 'menino' | 'menina';
+
 /** `sketch` = criado com o mínimo; `full` = aprofundado quando ficou relevante. */
 export type DetailLevel = 'sketch' | 'full';
 
@@ -119,6 +122,8 @@ export interface Character {
   isPlayer: boolean;
   role: string;
   appearance: string;
+  /** Corpo no 3D; sem ele, a interface deduz pelo papel. */
+  figure?: Figure;
   traits: string[];
   attributes: Record<string, number>;
   skills: Record<string, number>;

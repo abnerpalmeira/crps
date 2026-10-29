@@ -9,6 +9,7 @@ import type {
   Dir,
   DifficultyName,
   Fact,
+  Figure,
   Fixture,
   Item,
   ItemHolder,
@@ -212,6 +213,7 @@ export interface CharacterInput {
   name: string;
   role: string;
   appearance: string;
+  figure?: Figure;
   traits?: string[];
   is_player?: boolean;
   attributes?: Record<string, number>;
@@ -233,6 +235,7 @@ export interface CharacterUpdate {
   name?: string;
   role?: string;
   appearance?: string;
+  figure?: Figure;
   traits_add?: string[];
   traits_remove?: string[];
   personality?: string;
@@ -1008,6 +1011,7 @@ export class GameEngine {
       isPlayer: Boolean(input.is_player),
       role: input.role,
       appearance: input.appearance,
+      ...(input.figure ? { figure: input.figure } : {}),
       traits: input.traits ?? [],
       attributes,
       skills: this.statBlock('perícia', input.skills, null),
@@ -1095,6 +1099,10 @@ export class GameEngine {
         c[key] = value;
         changes.push(key);
       }
+    }
+    if (input.figure !== undefined && input.figure !== c.figure) {
+      c.figure = input.figure;
+      changes.push('figure');
     }
     if (input.traits_add?.length) {
       c.traits.push(...input.traits_add.filter((t) => !c.traits.includes(t)));

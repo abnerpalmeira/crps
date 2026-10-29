@@ -4,7 +4,8 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { tileDef } from '../engine/layout';
 import { lightSources } from '../engine/light';
 import { lifeStatId, perceptionOf, visionOf } from '../engine/perception';
-import type { Character, Location, WorldState } from '../engine/types';
+import type { Character, Fixture, Location, WorldState } from '../engine/types';
+import { characterModel, fixtureModel, type CharacterModel, type Clip } from './models';
 import {
   DIR_VEC,
   SURFACE_Y,
@@ -32,6 +33,11 @@ interface Actor {
   target: THREE.Vector3;
   yaw: number;
   seated: boolean;
+  /** Personagem animado do catálogo, quando já carregou (antes disso, o boneco primitivo). */
+  model?: CharacterModel;
+  clip?: Clip;
+  /** O clipe atual toca uma vez (fala, aceno) e depois volta ao estado do ator. */
+  once?: boolean;
 }
 
 interface WallPart {
@@ -78,6 +84,11 @@ export class WorldView {
   private boards = new Map<string, { surface: THREE.Mesh; text: string; length: number }>();
   private balloons = new Map<string, CSS2DObject>();
   private roomKey = '';
+  /** Última fala que fez um personagem gesticular, para não repetir a cada passo do replay. */
+  private lastTalk = '';
+  /** Altura de apoio dos móveis que já trocaram a primitiva por modelo. */
+  private surfaces = new Map<string, number>();
+  private shown: { world: WorldState; loc: Location } | null = null;
   private selected: Pick | null = null;
   private selectionRing = playerRing('#ffffff');
   private selectionBox: THREE.BoxHelper | null = null;
@@ -140,6 +151,7 @@ export class WorldView {
       this.roomKey = key;
     }
     if (!loc) return;
+    this.shown = { world, loc };
     this.syncBoards(loc);
     this.syncActors(world, loc);
     this.syncItems(world, loc);
@@ -179,6 +191,10 @@ export class WorldView {
       }
       const age = Math.min(line.age, 2);
       balloon.element.firstElementChild!.innerHTML = line.html;
+      if (line.age === 0 && this.lastTalk !== `${id}:${line.html}`) {
+        this.lastTalk = `${id}:${line.html}`;
+        if (!actor.seated) this.play(actor, 'talk', true);
+      }
       balloon.element.dataset.age = String(age);
       balloon.element.dataset.mode = line.mode ?? 'fala';
       // Falas mais antigas sobem: vizinhos que falam em sequência não se sobrepõem.
@@ -238,6 +254,7 @@ export class WorldView {
   }
 
   private clearRoom(): void {
+    this.surfaces.clear();
     for (const lamp of this.lamps.values()) lamp.dispose();
     this.lamps.clear();
     for (const id of [...this.balloons.keys()]) this.removeBalloon(id);
@@ -293,6 +310,7 @@ export class WorldView {
       obj.name = `fixture:${f.id}`;
       tagPick(obj, { kind: 'fixture', id: f.id });
       this.room.add(obj);
+      void this.upgradeFixture(obj, f);
       if (f.wall) {
         const [dx, dy] = DIR_VEC[f.facing];
         this.walls.push({ obj, normal: new THREE.Vector2(-dx, -dy) });
@@ -303,6 +321,49 @@ export class WorldView {
       }
     }
     this.frame(loc);
+  }
+
+  /** Troca o boneco primitivo pelo personagem animado do catálogo, quando ele carrega e se houver. */
+  private async upgradeActor(actor: Actor, c: Character): Promise<void> {
+    const room = this.room;
+    const model = await characterModel(c);
+    if (!model || this.room !== room || this.actors.get(c.id) !== actor) return;
+    const body = actor.obj.userData.body as THREE.Object3D | undefined;
+    if (body) actor.obj.remove(body);
+    actor.obj.add(model.root);
+    tagPick(actor.obj, { kind: 'character', id: c.id });
+    actor.model = model;
+    this.play(actor, actor.seated ? 'sit' : 'idle');
+  }
+
+  /** Troca o clipe com uma transição curta; `once` toca uma vez e devolve ao estado do ator. */
+  private play(actor: Actor, clip: Clip, once = false): void {
+    const next = actor.model?.actions[clip];
+    if (!actor.model || !next || (actor.clip === clip && !once)) return;
+    const previous = actor.clip ? actor.model.actions[actor.clip] : undefined;
+    next.reset();
+    next.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, Infinity);
+    next.fadeIn(0.25).play();
+    if (previous && previous !== next) previous.fadeOut(0.25);
+    actor.clip = clip;
+    actor.once = once;
+  }
+
+  /** Troca as primitivas do móvel pelo modelo do catálogo, quando ele carrega e se houver. */
+  private async upgradeFixture(obj: THREE.Group, f: Fixture): Promise<void> {
+    const room = this.room;
+    const model = await fixtureModel(f);
+    if (!model || this.room !== room) return;
+    for (const child of [...obj.children]) {
+      child.traverse((o) => {
+        if (o instanceof THREE.Mesh) o.geometry.dispose();
+      });
+      obj.remove(child);
+    }
+    obj.add(model.group);
+    tagPick(obj, { kind: 'fixture', id: f.id });
+    this.surfaces.set(f.id, model.top);
+    if (this.shown) this.syncItems(this.shown.world, this.shown.loc);
   }
 
   private frame(loc: Location): void {
@@ -374,6 +435,7 @@ export class WorldView {
         this.room.add(obj);
         actor = { obj, label, target: pos.clone(), yaw, seated: false };
         this.actors.set(c.id, actor);
+        void this.upgradeActor(actor, c);
       }
       // Quem o jogador não enxerga fica sem nome; quem ele vê como vulto vira "?".
       const sight = c.isPlayer ? 'nitido' : view.sight(c.id);
@@ -417,7 +479,7 @@ export class WorldView {
         const f = loc.fixtures.find((fx) => fx.id === h.id);
         if (f) {
           const s = hash(item.id);
-          pos = new THREE.Vector3(f.x + (f.w - 1) / 2 + ((s % 40) - 20) / 100, SURFACE_Y[f.kind] ?? 0.8, f.y + (f.h - 1) / 2 + (((s >>> 8) % 30) - 15) / 100);
+          pos = new THREE.Vector3(f.x + (f.w - 1) / 2 + ((s % 40) - 20) / 100, this.surfaces.get(f.id) ?? SURFACE_Y[f.kind] ?? 0.8, f.y + (f.h - 1) / 2 + (((s >>> 8) % 30) - 15) / 100);
           if (f.kind === 'desk') {
             const yaw = YAW[f.facing];
             pos.add(new THREE.Vector3(0.16 * Math.sin(yaw), 0, 0.16 * Math.cos(yaw)));
@@ -495,6 +557,13 @@ export class WorldView {
     const dt = Math.min(this.clock.getDelta(), 0.1);
     this.controls.update();
     for (const a of this.actors.values()) {
+      if (a.model) {
+        a.model.mixer.update(dt);
+        // Sentado, andando ou parado; um gesto de fala termina antes de voltar ao estado.
+        const state: Clip = a.seated ? 'sit' : a.obj.position.distanceTo(a.target) > 0.06 ? 'walk' : 'idle';
+        const gesturing = a.once && a.clip && a.model.actions[a.clip]?.isRunning() && state === 'idle';
+        if (!gesturing && a.clip !== state) this.play(a, state);
+      }
       a.obj.position.lerp(a.target, 1 - Math.exp(-dt * 5));
       a.obj.rotation.y = lerpAngle(a.obj.rotation.y, a.yaw, 1 - Math.exp(-dt * 8));
       if (a.obj.scale.x < 1) a.obj.scale.setScalar(Math.min(1, a.obj.scale.x + dt * 3));

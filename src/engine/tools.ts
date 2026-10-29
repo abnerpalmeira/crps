@@ -95,7 +95,7 @@ const resourceInput = z.object({
 });
 
 /** Campos de personagem que qualquer um percebe; o resto de um NPC só aparece nos bastidores. */
-const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'traits']);
+const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'figure', 'traits']);
 
 const placement = z
   .object({
@@ -116,11 +116,14 @@ const holder = z
   })
   .describe('Exatamente um: {character_id}, {fixture_id} ou {x, y} no chão (+ location_id se for outro local).');
 
+const figure = z.enum(['adulto', 'adulta', 'menino', 'menina']).describe('Corpo no 3D: adulto, adulta, menino ou menina (crianças e adolescentes).');
+
 const characterInput = z.object({
   id: z.string().optional().describe('Slug curto e estável, ex. "yuki". Se omitido, vem do primeiro nome.'),
   name: z.string(),
   role: z.string().describe('Papel ou profissão, ex. "aluna do 2º ano".'),
   appearance: z.string().describe('Uma ou duas frases.'),
+  figure: figure.optional(),
   traits: z.array(z.string()).max(6).optional().describe('1 a 3 traços marcantes.'),
   is_player: z.boolean().optional(),
   attributes: statMap.optional().describe('Atributos do ruleset (0 a 5). Não informados ficam em 1.'),
@@ -414,6 +417,7 @@ export const TOOLS = [
       name: z.string().optional(),
       role: z.string().optional(),
       appearance: z.string().optional(),
+      figure: figure.optional(),
       traits_add: z.array(z.string()).optional(),
       traits_remove: z.array(z.string()).optional(),
       personality: z.string().optional(),

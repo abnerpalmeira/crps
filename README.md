@@ -267,6 +267,38 @@ Na demo offline dá para testar sem gastar tokens: "Apago a luz e pego a lantern
 experimento de química" e "Acendo a luz". "Tiro uma bomba de fedor do bolso" mostra o motor
 barrando um item que o jogador não tem.
 
+### Modelos 3D (Synty)
+
+O palco usa modelos low-poly da Synty (pacotes POLYGON e de animação) quando eles estão
+convertidos. Sem eles, segue com as primitivas, então o projeto roda em qualquer máquina.
+
+1. Extraia os "Source Files" de cada pacote em `assets/synty/<pacote>/` (por exemplo
+   `assets/synty/town/`, `assets/synty/anim_base_locomotion/`). A pasta fica fora do git: a
+   licença não permite compartilhar os arquivos-fonte fora da equipe.
+2. Rode `npm run assets` (precisa do Blender 4.2 ou mais novo no PATH). O resultado vai para
+   `public/models/`, também fora do git.
+
+O que entra está em [scripts/assets/synty.json](scripts/assets/synty.json):
+
+- **Móveis:** cada tipo da legenda do motor (carteira, mesa do professor, estante, armário…) é
+  montado com peças do catálogo. A carteira, por exemplo, é a mesa infantil mais a cadeira
+  atrás. Lousa, janela e porta seguem primitivas, porque fazem parte da parede e a lousa mostra
+  o texto do jogo.
+- **Personagens:** adultos e adolescentes dos pacotes City e Town. O motor guarda o corpo de
+  cada personagem em `figure` (adulto, adulta, menino, menina), que o mestre informa ao criar.
+  Sem ele, a interface deduz pelo papel. A variante de cor vem do id, então cada aluno fica
+  sempre com a mesma roupa.
+- **Animações:** parado, andando, falando com gesto, acenando com a cabeça e sentado (montada a
+  partir da pose parada). Os personagens antigos da Synty e os pacotes de animação usam nomes
+  de ossos diferentes, e os arquivos de animação têm outra pose de repouso. Por isso o
+  conversor renomeia os ossos e transfere a rotação de cada um em espaço de mundo, tendo a pose
+  em T como referência comum. O resultado é um conjunto de clipes por sexo, que serve para todos
+  os personagens com o mesmo esqueleto.
+
+Cada móvel pesa de 6 a 215 KB, cada personagem cerca de 300 KB, e a cor vem de uma
+textura-paleta por pacote, baixada uma vez só. O mestre só conhece os modelos por texto (o corpo
+dos personagens). Modelos e imagens da cena nunca vão para o modelo de IA.
+
 ### Layout ASCII
 
 Um caractere por tile (~1 m). Porta, janela e quadro ficam na linha da parede; o motor

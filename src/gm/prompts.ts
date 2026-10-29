@@ -73,7 +73,7 @@ ${premise}
 Monte o mundo inicial com as tools, nesta ordem:
 1. define_ruleset adequado ao gênero (2 a 6 atributos, até 4 recursos). A vida é universal e já vem oculta; num jogo de ação, torne-a pública incluindo um recurso "Vida". Se a premissa der ao personagem do jogador uma capacidade especial, crie o perk aqui.
 2. create_location para o lugar onde a cena começa, com light coerente com o horário e a premissa (padrão 1; à noite ou num porão, menos). Se o motor recusar o layout, corrija e tente de novo.
-3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random.
+3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Informe figure (adulto, adulta, menino ou menina) de cada um: é o corpo que aparece no 3D. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random.
 4. create_items com os objetos citados na premissa e os que a cena pede, já com quem os tem.
 5. advance_time com o horário inicial (to: "HH:MM"); fios iniciais com update_thread e fatos de partida com add_fact, se fizerem sentido.
 Depois narre a cena de abertura, situando o jogador.`;

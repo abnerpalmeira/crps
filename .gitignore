@@ -4,3 +4,7 @@ saves/
 .env
 *.log
 .DS_Store
+# Arquivos-fonte de assets comprados (Synty): a licença proíbe compartilhar fora da equipe.
+/assets/
+# Modelos gerados dos assets da Synty por npm run assets (derivados de arquivos licenciados).
+/public/models/

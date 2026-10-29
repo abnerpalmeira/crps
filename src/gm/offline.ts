@@ -18,15 +18,15 @@ export const DEMO_CLASSROOM = [
   '#################',
 ];
 
-const STUDENTS: { name: string; appearance: string; traits: string[]; thoughts?: string; vida?: number }[] = [
-  { name: 'Yuki Sato', appearance: 'tranças e caderno cheio de desenhos', traits: ['tímida', 'desenhista'], thoughts: 'torce para o professor não pedir o trabalho de história' },
-  { name: 'Haruto Mori', appearance: 'gravata frouxa e sorriso de quem aprontou', traits: ['piadista'], thoughts: 'inventou a prova surpresa só para ver a cara da turma' },
-  { name: 'Aiko Ueda', appearance: 'óculos redondos e postura impecável', traits: ['representante de classe'], thoughts: 'quer impressionar o professor' },
-  { name: 'Ren Ito', appearance: 'cochila com o queixo apoiado na mão', traits: ['dorminhoco', 'gripado'], thoughts: 'só pensa em voltar a dormir', vida: 6 },
-  { name: 'Mei Kato', appearance: 'mochila cheia de chaveiros', traits: ['falante'] },
-  { name: 'Sora Abe', appearance: 'cabelo bagunçado, tênis de corrida', traits: ['atleta'] },
-  { name: 'Hina Fujita', appearance: 'fones de ouvido escondidos sob o cabelo', traits: ['distraída'] },
-  { name: 'Daichi Ono', appearance: 'mangas arregaçadas, mãos sujas de tinta', traits: ['curioso'] },
+const STUDENTS: { name: string; figure: 'menino' | 'menina'; appearance: string; traits: string[]; thoughts?: string; vida?: number }[] = [
+  { name: 'Yuki Sato', figure: 'menina', appearance: 'tranças e caderno cheio de desenhos', traits: ['tímida', 'desenhista'], thoughts: 'torce para o professor não pedir o trabalho de história' },
+  { name: 'Haruto Mori', figure: 'menino', appearance: 'gravata frouxa e sorriso de quem aprontou', traits: ['piadista'], thoughts: 'inventou a prova surpresa só para ver a cara da turma' },
+  { name: 'Aiko Ueda', figure: 'menina', appearance: 'óculos redondos e postura impecável', traits: ['representante de classe'], thoughts: 'quer impressionar o professor' },
+  { name: 'Ren Ito', figure: 'menino', appearance: 'cochila com o queixo apoiado na mão', traits: ['dorminhoco', 'gripado'], thoughts: 'só pensa em voltar a dormir', vida: 6 },
+  { name: 'Mei Kato', figure: 'menina', appearance: 'mochila cheia de chaveiros', traits: ['falante'] },
+  { name: 'Sora Abe', figure: 'menino', appearance: 'cabelo bagunçado, tênis de corrida', traits: ['atleta'] },
+  { name: 'Hina Fujita', figure: 'menina', appearance: 'fones de ouvido escondidos sob o cabelo', traits: ['distraída'] },
+  { name: 'Daichi Ono', figure: 'menino', appearance: 'mangas arregaçadas, mãos sujas de tinta', traits: ['curioso'] },
 ];
 
 let nextId = 0;
@@ -70,6 +70,7 @@ function setupSteps(): StepResult[] {
               id: 'voce',
               name: 'Prof. Tanaka',
               role: 'professor de história',
+              figure: 'adulto',
               appearance: 'camisa social amassada e uma caneca de café',
               is_player: true,
               position: { near: 'sala_2b/quadro-1' },

@@ -14,7 +14,8 @@
     "start": "vite build && CRPS_MODE=release tsx src/server/index.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "tsc --noEmit && vite build"
+    "build": "tsc --noEmit && vite build",
+    "assets": "blender -b --python-exit-code 1 --python scripts/assets/convert_synty.py -- scripts/assets/synty.json assets/synty public/models"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
