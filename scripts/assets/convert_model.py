@@ -4,8 +4,10 @@ quando o 3D pede um modelo do catálogo que ainda não foi convertido.
 
 Uso: blender -b --python scripts/assets/convert_model.py -- SRC PACOTE TIPO SAIDA CHAVE
 
-TIPO é prop (móvel, em metros, com a origem no centro da base) ou character (malha e esqueleto,
-com os ossos renomeados para os das animações). Escreve SAIDA/CHAVE.glb, só a geometria, e
+TIPO é prop (móvel, em metros, com a origem no centro da base), held (o mesmo objeto para ir na
+mão: a origem fica onde o arquivo a pôs, que nas armas da Synty é o punho, e os eixos são os do
+arquivo, com o cano em +Z e a lâmina em +Y) ou character (malha e esqueleto, com os ossos
+renomeados para os das animações). Escreve SAIDA/CHAVE.glb, só a geometria, e
 SAIDA/CHAVE.json com o tamanho e a textura de cada material (tex_<chave>), se ela é recorte e o tom
 das folhas cinzentas. As texturas ficam uma vez só em SAIDA/textures, em PNG de até 2048 px, para
 todos os modelos que as usam. Os materiais seguem as regras das miniaturas do catálogo
@@ -72,29 +74,46 @@ def export(path, skins):
     )
 
 
-def variants(meshes):
+def variants(meshes, held=False):
     """Tira as variantes sobrepostas: arquivos como o do cavalo trazem as cinco pelagens no mesmo
-    lugar, e juntas elas brigam na tela. Fica a primeira de cada lugar."""
+    lugar, e o dos arcos traz oito arcos; juntas elas brigam na tela. Fica a primeira de cada lugar:
+    outra peça com o centro ali e as duas maiores medidas quase iguais é variante (na mão, que é
+    sempre um objeto só, basta a maior). Peça dez vezes maior que as outras (uma corda de 148 m num
+    arco) é defeito do arquivo e sai também."""
+    boxes = {o: bounds([o]) for o in meshes}
+    diagonals = sorted((hi - lo).length for lo, hi in boxes.values())
+    median = diagonals[len(diagonals) // 2]
     kept, seen = [], []
     for o in meshes:
-        lo, hi = bounds([o])
-        size = max((hi - lo).length, 1e-6)
-        if any((lo - a).length < size * 0.01 and (hi - b).length < size * 0.01 for a, b in seen):
+        lo, hi = boxes[o]
+        center, size = (lo + hi) / 2, sorted(hi - lo, reverse=True)
+        diagonal = max((hi - lo).length, 1e-6)
+        if len(meshes) > 2 and diagonal > 10 * median:
             bpy.data.objects.remove(o)
             continue
-        seen.append((lo, hi))
+
+        def alike(c, s):
+            near = (center - c).length < 0.1 * diagonal
+            measures = 1 if held else 2
+            return near and all(abs(a - b) <= 0.25 * max(a, b) + 0.02 * diagonal for a, b in zip(size[:measures], s[:measures]))
+
+        if any(alike(c, s) for c, s in seen):
+            bpy.data.objects.remove(o)
+            continue
+        seen.append((center, size))
         kept.append(o)
     return kept
 
 
-def prop(meshes):
-    """Uma malha só, em metros, com a origem no centro da base. Há pacotes em centímetros (heist,
-    dungeon): um modelo com menos de 5 cm é um que veio 100 vezes pequeno."""
+def prop(meshes, held=False):
+    """Uma malha só, em metros, com a origem no centro da base (ou, na mão, na origem do arquivo).
+    Há pacotes em centímetros (heist, dungeon): um modelo com menos de 5 cm é um que veio 100
+    vezes pequeno."""
     # Móvel com esqueleto (bicho, carrinho de compras) fica na pose de repouso, sem o esqueleto.
     for o in meshes:
         for m in [m for m in o.modifiers if m.type == 'ARMATURE']:
             o.modifiers.remove(m)
-    meshes = variants(meshes)
+    meshes = variants(meshes, held)
     # Solta as peças do pai antes de aplicar a escala: aplicada no pai e no filho ao mesmo tempo,
     # ela se soma no filho (a copa da árvore saía com quilômetros).
     for o in meshes:
@@ -106,7 +125,8 @@ def prop(meshes):
         if o.type != 'MESH':
             bpy.data.objects.remove(o)
     bpy.context.view_layer.objects.active = meshes[0]
-    bpy.ops.object.transform_apply(location=False, rotation=True, scale=True)
+    # Na mão, a posição de cada peça também entra na malha: a origem passa a ser a do arquivo.
+    bpy.ops.object.transform_apply(location=held, rotation=True, scale=True)
     if len(meshes) > 1:
         bpy.ops.object.join()
     obj = bpy.context.view_layer.objects.active
@@ -116,9 +136,10 @@ def prop(meshes):
         obj.data.update()
         bpy.context.view_layer.update()
         lo, hi = bounds([obj])
-    obj.data.transform(Matrix.Translation(-Vector(((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, lo.z))))
-    obj.location = (0, 0, 0)
-    return hi - lo
+    if not held:
+        obj.data.transform(Matrix.Translation(-Vector(((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, lo.z))))
+        obj.location = (0, 0, 0)
+    return lo, hi
 
 
 def character(meshes):
@@ -158,7 +179,11 @@ def main():
         size, head = character(meshes)
         meta['head'] = round(head, 3)
     else:
-        size = prop(meshes)
+        lo, hi = prop(meshes, held=kind == 'held')
+        size = hi - lo
+        if kind == 'held':
+            # Caixa no glTF (Y para cima): x, z e -y do Blender. É por ela que o 3D acha o cano.
+            meta['bbox'] = [[round(lo.x, 3), round(lo.z, 3), round(-hi.y, 3)], [round(hi.x, 3), round(hi.z, 3), round(-lo.y, 3)]]
     # Blender é Z para cima; no glTF (Y para cima) a largura é x, a altura z e a profundidade y.
     meta['size'] = [round(size.x, 3), round(size.z, 3), round(size.y, 3)]
     os.makedirs(outdir, exist_ok=True)

@@ -149,14 +149,27 @@ export interface Character {
   pos: Pos | null;
   facing: Dir;
   seatId: string | null;
+  /**
+   * Pose do corpo (body.ts: ajoelhado, mirando, caído…); sem ela, de pé. Sentar num assento e
+   * deitar numa cama vêm do assento, e quem fica com a vida em 0 cai sozinho. Andar desfaz a pose.
+   */
+  pose?: string | null;
+  /** Para quem ou o quê a pose se volta (mirando, apontando): id de personagem ou de móvel. */
+  poseTarget?: string | null;
   /** Quem ele conhece (sabe o nome, reconhece o rosto e a voz): as arestas do grafo de conhecidos. */
   knows: string[];
   /** Conhecidos que ele ouviu falar onde está (id de quem falou → local): sabe quem é mesmo sem ver. */
   voices: Record<string, string>;
 }
 
+/** Como um item é empunhado (body.ts): decide a mão, o encaixe no 3D e as animações de quem o segura. */
+export type Grip = 'pistola' | 'arma_longa' | 'arco' | 'uma_mao' | 'duas_maos' | 'escudo' | 'objeto';
+
+export type Hand = 'direita' | 'esquerda';
+
 export type ItemHolder =
-  | { kind: 'character'; id: string }
+  /** Com um personagem; com `hand`, empunhado (na mão), senão guardado com ele. */
+  | { kind: 'character'; id: string; hand?: Hand }
   | { kind: 'fixture'; id: string }
   | { kind: 'ground'; locationId: string; x: number; y: number };
 
@@ -169,6 +182,10 @@ export interface Item {
   holder: ItemHolder;
   /** Itens que iluminam (lanterna, vela, tocha), acesos ou não. */
   light?: LightSpec & { on: boolean };
+  /** Modelo do catálogo 3D (`pacote:Arquivo`): como aparece no chão, num móvel e na mão. */
+  model?: string;
+  /** Como se empunha; sem ela, objeto. */
+  grip?: Grip;
 }
 
 /** Id de um tipo de objeto: da biblioteca (door, desk, vitrine…) ou criado pelo mestre. */
@@ -331,6 +348,8 @@ export interface SceneFrame {
       facing: Dir;
       resources?: Record<string, number>;
       conditions?: Character['conditions'];
+      pose?: string | null;
+      poseTarget?: string | null;
     }
   >;
   items: Record<string, ItemHolder>;

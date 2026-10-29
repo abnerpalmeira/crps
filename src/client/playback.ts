@@ -1,6 +1,7 @@
+import { parseActs } from '../engine/body';
 import { parseBeats, sceneAt, type Beat } from '../engine/frames';
 import type { Clock, SceneFrame, WorldState } from '../engine/types';
-import { capitalize, speechHtml } from './format';
+import { capitalize, readable, speechHtml } from './format';
 import type { WorldView } from './scene';
 
 /** Um turno da campanha visto como frame: a ação do jogador e as falas e narrações, em ordem. */
@@ -192,12 +193,14 @@ export class Playback {
     );
     if (!current) this.ui.caption(null);
     else if (current.kind === 'input') this.ui.caption(current.text, 'Você');
-    else if (current.kind === 'narration') this.ui.caption(current.text);
+    else if (current.kind === 'narration') this.ui.caption(readable(current.text) || null);
     else if (missing.includes(current.speakerId)) {
       const who = current.alias ? capitalize(current.alias) : (this.nameOf(current.speakerId) ?? current.speakerId);
-      this.ui.caption(current.hidden ? `🤫 ${current.text}` : current.text, who);
+      this.ui.caption(current.hidden ? `🤫 ${readable(current.text)}` : readable(current.text), who);
     }
     else this.ui.caption(null);
+    // Os gestos marcados neste passo acontecem agora no 3D.
+    if (current && current.kind !== 'input') this.view.act(parseActs(current.text));
   }
 
   private emit(): void {

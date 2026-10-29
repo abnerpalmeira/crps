@@ -1,3 +1,4 @@
+import { GRIPS, GRIP_IDS, POSES, POSE_IDS, gripOf, handFor } from './body';
 import { modelCatalog, type CatalogItem } from './catalog';
 import { MAX_FRAMES, snapshotScene } from './frames';
 import { LEGEND, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, tileOf, type LocationSpec } from './layout';
@@ -15,6 +16,8 @@ import type {
   Fact,
   Figure,
   Fixture,
+  Grip,
+  Hand,
   Item,
   ItemHolder,
   Location,
@@ -258,6 +261,8 @@ export interface Placement {
 
 export interface HolderRef {
   character_id?: string;
+  /** Com character_id: na mão, empunhado. */
+  hand?: Hand;
   fixture_id?: string;
   location_id?: string;
   x?: number;
@@ -311,6 +316,10 @@ export interface CharacterUpdate {
   conditions_add?: (string | { id: string; minutes?: number })[];
   conditions_remove?: string[];
   thoughts?: string;
+  /** Pose do corpo (body.ts); de_pe volta ao normal. */
+  pose?: string;
+  /** Para quem ou o quê a pose se volta; vazio tira. */
+  pose_target?: string;
 }
 
 interface Rect {
@@ -506,7 +515,7 @@ export class GameEngine {
   }
 
   describeHolder(h: ItemHolder): string {
-    if (h.kind === 'character') return `com ${this.state.characters[h.id]?.name ?? h.id}`;
+    if (h.kind === 'character') return `${h.hand ? `na mão ${h.hand} de` : 'com'} ${this.state.characters[h.id]?.name ?? h.id}`;
     if (h.kind === 'fixture') return `em ${h.id}`;
     return `no chão de ${h.locationId} (${h.x},${h.y})`;
   }
@@ -1068,7 +1077,7 @@ export class GameEngine {
    * o visual de um personagem precisa ser um. Sem o catálogo nesta máquina, vale o que veio (o 3D
    * usa o parecido ou o corpo).
    */
-  private catalogModel(id: string, use: 'type' | 'look'): CatalogItem | null {
+  private catalogModel(id: string, use: 'type' | 'look' | 'item'): CatalogItem | null {
     const catalog = modelCatalog();
     if (!catalog) return null;
     const item = catalog.get(id);
@@ -1076,7 +1085,7 @@ export class GameEngine {
     if (use === 'look' && item.category !== 'personagem') {
       throw new EngineError(`"${id}" é ${item.category}, não personagem: o visual (look) precisa ser um personagem do catálogo.`);
     }
-    if (use === 'type' && item.category === 'personagem') throw new EngineError(`"${id}" é um personagem: gente entra com create_characters e look.`);
+    if (use !== 'look' && item.category === 'personagem') throw new EngineError(`"${id}" é um personagem: gente entra com create_characters e look.`);
     return item;
   }
 
@@ -1312,6 +1321,11 @@ export class GameEngine {
       c.voices = {};
       for (const o of Object.values(this.state.characters)) delete o.voices[c.id];
     }
+    // Quem sai do lugar desfaz a pose (o ajoelhado se levanta para andar).
+    if (changing || !c.pos || c.pos.x !== spot.pos.x || c.pos.y !== spot.pos.y || c.seatId !== spot.seatId) {
+      c.pose = null;
+      c.poseTarget = null;
+    }
     c.locationId = targetLoc.id;
     c.pos = spot.pos;
     c.seatId = spot.seatId;
@@ -1425,6 +1439,18 @@ export class GameEngine {
       c.thoughts = input.thoughts.trim() || null;
       changes.push('thoughts');
     }
+    if (input.pose !== undefined) {
+      if (!POSES[input.pose]) throw new EngineError(`A pose "${input.pose}" não existe. Poses: ${POSE_IDS.join(', ')}.`);
+      const pose = input.pose === 'de_pe' ? null : input.pose;
+      // Pose nova sem alvo solta o alvo da anterior.
+      const target = input.pose_target === undefined ? null : this.poseTarget(c, input.pose_target);
+      if (pose !== (c.pose ?? null) || target !== (c.poseTarget ?? null)) changes.push('pose');
+      c.pose = pose;
+      c.poseTarget = target;
+    } else if (input.pose_target !== undefined) {
+      c.poseTarget = this.poseTarget(c, input.pose_target);
+      changes.push('pose');
+    }
     const resourceChanges: { id: string; before: number; after: number; max: number }[] = [];
     const applyResource = (key: string, next: (cur: number) => number) => {
       const rid = this.resolveResourceId(key);
@@ -1445,10 +1471,23 @@ export class GameEngine {
     };
   }
 
+  /** Alvo de uma pose: alguém ou algo no mesmo local; vazio tira. */
+  private poseTarget(c: Character, ref: string): string | null {
+    const id = ref.trim();
+    if (!id) return null;
+    const other = this.state.characters[id.toLowerCase()];
+    if (other) {
+      if (other.locationId !== c.locationId) throw new EngineError(`${other.name} não está no mesmo local que ${c.name}.`);
+      return other.id;
+    }
+    return this.findFixture(id, c.locationId).id;
+  }
+
   private resolveHolder(ref: HolderRef, fallbackLocationId: string | null): ItemHolder {
     const modes = [ref.character_id, ref.fixture_id, ref.x !== undefined || ref.y !== undefined].filter(Boolean).length;
     if (modes !== 1) throw new EngineError('Informe exatamente um destino: {character_id}, {fixture_id} ou {x, y} (+ location_id).');
-    if (ref.character_id) return { kind: 'character', id: this.findCharacter(ref.character_id).id };
+    if (ref.hand && !ref.character_id) throw new EngineError('hand só vale com character_id: é a mão de alguém.');
+    if (ref.character_id) return { kind: 'character', id: this.findCharacter(ref.character_id).id, ...(ref.hand ? { hand: ref.hand } : {}) };
     if (ref.fixture_id) return { kind: 'fixture', id: this.findFixture(ref.fixture_id, ref.location_id ?? fallbackLocationId).id };
     if (ref.x === undefined || ref.y === undefined) throw new EngineError('Informe x e y juntos.');
     const locId = ref.location_id ?? fallbackLocationId;
@@ -1471,8 +1510,46 @@ export class GameEngine {
     return c?.locationId && c.pos ? { locationId: c.locationId, rect: pointRect(c.pos) } : null;
   }
 
-  createItem(input: { id?: string; name: string; description: string; tags?: string[]; quantity?: number; holder: HolderRef; light?: LightInput }): Item {
+  /**
+   * Põe o item na mão certa para o jeito de empunhar; o que ocupava essa mão (ou as duas, numa
+   * arma de duas mãos) volta a ficar guardado com a pessoa. Devolve os nomes do que foi guardado.
+   */
+  private wield(item: Item, holder: ItemHolder): string[] {
+    if (holder.kind !== 'character' || !holder.hand) return [];
+    holder.hand = handFor(item, holder.hand);
+    const both = GRIPS[gripOf(item)].both;
+    const stowed: string[] = [];
+    for (const other of Object.values(this.state.items)) {
+      const h = other.holder;
+      if (other.id === item.id || h.kind !== 'character' || h.id !== holder.id || !h.hand) continue;
+      if (both || GRIPS[gripOf(other)].both || h.hand === holder.hand) {
+        delete h.hand;
+        stowed.push(other.name);
+      }
+    }
+    return stowed;
+  }
+
+  private checkGrip(grip: string | undefined): Item['grip'] {
+    if (grip === undefined) return undefined;
+    if (!GRIP_IDS.includes(grip as Grip)) throw new EngineError(`grip "${grip}" não existe. Opções: ${GRIP_IDS.join(', ')}.`);
+    return grip as Grip;
+  }
+
+  createItem(input: {
+    id?: string;
+    name: string;
+    description: string;
+    tags?: string[];
+    quantity?: number;
+    holder: HolderRef;
+    light?: LightInput;
+    model?: string;
+    grip?: string;
+  }): Item {
     const holder = this.resolveHolder(input.holder, this.currentLocation?.id ?? null);
+    if (input.model) this.catalogModel(input.model, 'item');
+    const grip = this.checkGrip(input.grip);
     if (holder.kind === 'character' && holder.id === this.state.playerId && this.state.turn > 0) {
       this.conjureFor(this.state.characters[holder.id], `"${input.name}"`);
     }
@@ -1485,7 +1562,10 @@ export class GameEngine {
       quantity,
       holder,
       ...(input.light ? { light: { ...lightSpec(input.light), on: input.light.on ?? false } } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(grip ? { grip } : {}),
     };
+    this.wield(item, holder);
     this.state.items[item.id] = item;
     return item;
   }
@@ -1494,6 +1574,7 @@ export class GameEngine {
     const item = this.findItem(input.item_id);
     const fallbackLoc = this.holderPlace(item.holder)?.locationId ?? this.currentLocation?.id ?? null;
     const holder = this.resolveHolder(input.to, fallbackLoc);
+    if (holder.kind === 'character' && holder.hand) holder.hand = handFor(item, holder.hand);
     if (JSON.stringify(holder) === JSON.stringify(item.holder)) {
       throw new EngineError(`${item.name} já está ${this.describeHolder(holder)}.`);
     }
@@ -1523,7 +1604,8 @@ export class GameEngine {
     } else {
       item.holder = holder;
     }
-    return { item_id: moved.id, name: moved.name, quantity: qty, from, to: this.describeHolder(holder) };
+    const stowed = this.wield(moved, holder);
+    return { item_id: moved.id, name: moved.name, quantity: qty, from, to: this.describeHolder(holder), ...(stowed.length ? { stowed } : {}) };
   }
 
   updateItem(input: {
@@ -1535,11 +1617,22 @@ export class GameEngine {
     destroy?: boolean;
     light?: LightInput | null;
     light_on?: boolean;
+    model?: string;
+    grip?: string;
   }) {
     const item = this.findItem(input.item_id);
     if (input.name) item.name = input.name;
     if (input.description) item.description = input.description;
     if (input.tags) item.tags = input.tags;
+    if (input.model) {
+      this.catalogModel(input.model, 'item');
+      item.model = input.model;
+    }
+    if (input.grip) {
+      item.grip = this.checkGrip(input.grip);
+      // Com outro jeito de empunhar, a mão pode mudar (o arco vai para a esquerda).
+      if (item.holder.kind === 'character' && item.holder.hand) this.wield(item, item.holder);
+    }
     const holder = item.holder;
     if ((input.quantity_delta ?? 0) > 0 && holder.kind === 'character' && holder.id === this.state.playerId && this.state.turn > 0) {
       this.conjureFor(this.state.characters[holder.id], `Mais ${item.name}`);

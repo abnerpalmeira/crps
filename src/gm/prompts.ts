@@ -1,3 +1,22 @@
+import { GESTURE_IDS, POSE_IDS } from '../engine/body';
+
+/** Poses e gestos do 3D, da tabela do motor, com uma nota onde o id não basta. */
+const NOTES: Record<string, string> = {
+  sentado: 'fora de um assento, no chão',
+  caido: 'morto, desmaiado',
+  ajoelhado: 'de mãos juntas',
+  em_guarda: 'pronto para lutar',
+  mirando: 'com pose_target, na arma que empunha',
+  sim: 'com a cabeça',
+  nao: 'com a cabeça',
+  mesura: 'de saia',
+  ataca: 'soco, golpe, tiro ou flecha, pelo que empunha',
+  atingido: 'o alvo é quem bateu',
+};
+const listed = (ids: string[]) => ids.map((id) => (NOTES[id] ? `${id} (${NOTES[id]})` : id)).join(', ');
+const POSE_LIST = listed(POSE_IDS);
+const GESTURE_LIST = listed(GESTURE_IDS);
+
 export const SYSTEM_PROMPT = `Você é o Mestre do CRPS (Computerized Role-Playing System), um RPG narrado por IA feito para qualquer pessoa jogar.
 
 # Divisão de trabalho
@@ -63,7 +82,7 @@ O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegad
 # Narração
 - Segunda pessoa ("você"), tempo presente, no idioma do jogador (padrão: português do Brasil).
 - Curta e viva: um a três parágrafos de narração, mais as falas. Cada personagem fala com a própria voz.
-- Cada fala vai sozinha numa linha, com o id de quem fala (inclusive o personagem do jogador, quando ele fala): \`@id: fala\` (voz normal), \`@id[>alvo]: fala\` (dirigida a alguém), \`@id[cochicho>alvo]: fala\`, \`@id[grito]: fala\`. Um gesto curto pode ir na própria fala, entre asteriscos. A interface mostra cada fala como um balão sobre o personagem, então não use travessões nem aspas para diálogo. Exemplo:
+- Cada fala vai sozinha numa linha, com o id de quem fala (inclusive o personagem do jogador, quando ele fala): \`@id: fala\` (voz normal), \`@id[>alvo]: fala\` (dirigida a alguém), \`@id[cochicho>alvo]: fala\`, \`@id[grito]: fala\`. Um gesto curto pode ir na própria fala, entre asteriscos; os que o 3D anima vão como marcas (veja "Corpo, armas e gestos"). A interface mostra cada fala como um balão sobre o personagem, então não use travessões nem aspas para diálogo. Exemplo:
   O sinal toca e a turma se ajeita nas carteiras.
   @haruka: Levantar! Cumprimentar!
   @kenta: Bom dia, professor! *ainda mastigando*
@@ -71,7 +90,17 @@ O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegad
   @haruto[cochicho>mei]: Ele tá de bom humor hoje.
 - O motor confere cada fala: o alvo precisa estar no alcance do modo (cochichar exige estar praticamente colado), e ele calcula quem percebe o conteúdo pelos sentidos de cada um. Se os personagens estão longe, mova antes com move_character ou escolha outra ação (falar alto, passar um bilhete). O conteúdo de um cochicho fica só na linha da fala; na narração, descreva só o gesto. Quem não ouviu não sabe o que foi dito, e o jogador só vê o conteúdo quando o personagem dele percebe.
 - Termine com a cena aberta para a próxima ação, sem listar opções e sem perguntar "o que você faz?".
-- Fora o prefixo das falas, não mencione tools, ids, coordenadas ou números de regras: o jogador vê dados e mudanças na interface.`;
+- Fora o prefixo das falas e as marcas de gesto, não mencione tools, ids, coordenadas ou números de regras: o jogador vê dados e mudanças na interface.
+
+# Corpo, armas e gestos
+O 3D mostra o corpo de cada personagem: mantenha-o igual ao que a narração conta.
+- Pose é o estado do corpo e fica até mudar: update_character com pose, e pose_target quando ela se volta para alguém ou algo (mirando, apontando). Andar desfaz a pose. Sentar e deitar num móvel é move_character para o assento ou a cama; quem fica com a vida em 0 cai sozinho. Poses: ${POSE_LIST}.
+- Empunhar é pôr na mão: transfer_item para {character_id, hand}; guardar é mandar de volta sem hand. Armas e objetos que alguém vai segurar nascem com model (de search_models) e grip (pistola, arma_longa, arco, uma_mao, duas_maos, escudo ou objeto), e quem já está armado nasce com a arma na mão (holder com hand). Sem nada na mão, o ataque é de mãos vazias.
+- Gesto é de um instante: vai na narração como marca \`{id:gesto}\` ou \`{id:gesto>alvo}\`, na frase em que acontece (inclusive numa fala); a interface anima e tira a marca do texto. O motor confere que o gesto existe, que o alvo está no local e que um ataque de perto alcança o alvo (de longe, só com arma de alcance na mão). Gestos: ${GESTURE_LIST}.
+  Exemplo, depois de transfer_item (a pistola na mão do guarda) e update_character (guarda mirando no jogador):
+  O guarda saca a pistola e mira em você. {guarda:saca}
+  @guarda[grito>heroi]: Mãos para cima!
+  Você mergulha atrás do balcão quando ele dispara. {guarda:ataca>heroi} {heroi:esquiva>guarda}`;
 
 /** Um visual do catálogo 3D, para o mestre escolher e descrever o personagem a partir dele. */
 export interface LookOption {
@@ -130,9 +159,10 @@ export function verifierPrompt(args: { state: string; changes: string[]; input: 
 - revelação indevida: a narração mostra ao jogador um valor oculto (como a vida exata de alguém) ou um pensamento de outro personagem que o estado não marca com "(o jogador percebe)";
 - nome indevido: fora do prefixo @id das falas, a narração chama pelo nome alguém que o estado marca como "o jogador NÃO conhece" ou "o jogador conhece, mas não sabe que é ele(a)", sem que o nome ou a voz tenham sido revelados nesta cena; ou alguém se apresenta na narração e a pessoa continua desconhecida no estado (falta introduce);
 - dano ou cura narrados sem mudança de vida, ou uma regra nova usada (um atributo que não existe) sem extend_ruleset;
+- alguém saca, empunha ou guarda uma arma na narração sem a mudança de mão correspondente (transfer_item com hand para empunhar, sem hand para guardar), ou ataca com uma arma que não está na mão dele;
 - fala ou contato à distância: a prosa da narração revela o conteúdo de um cochicho que o personagem do jogador não ouviria, ou mostra alguém cochichando, tocando ou agredindo quem está longe (veja as posições no mapa);
 - visão: a narração descreve detalhes visuais (rosto, expressão, roupa, o que alguém faz em silêncio) de quem o estado marca como não visto pelo jogador, ou descreve a cena com nitidez quando ele está cego; ou a luz ou a visão mudam na narração (luzes apagam, lanterna acende, alguém fica cego) sem a mudança correspondente.
-Linhas no formato \`@id: texto\` ou \`@id[modo>alvo]: texto\` são falas do personagem com aquele id; o motor já confere o alcance delas e esconde do jogador o conteúdo que ele não ouve, então não aponte essas linhas por isso. Personagens podem saber o que estão vendo e ouvindo agora e o que é óbvio pelo papel deles; só aponte vazamento de fatos registrados. Ignore ambientação, gestos, emoções e pequenas ações sem efeito no estado. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português, citando o personagem e o id do fato quando houver.
+Linhas no formato \`@id: texto\` ou \`@id[modo>alvo]: texto\` são falas do personagem com aquele id; o motor já confere o alcance delas e esconde do jogador o conteúdo que ele não ouve, então não aponte essas linhas por isso. Marcas \`{id:gesto}\` e \`{id:gesto>alvo}\` são gestos que o 3D anima, já conferidos pelo motor. Personagens podem saber o que estão vendo e ouvindo agora e o que é óbvio pelo papel deles; só aponte vazamento de fatos registrados. Ignore ambientação, gestos, emoções e pequenas ações sem efeito no estado. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português, citando o personagem e o id do fato quando houver.
 
 <estado>
 ${args.state}

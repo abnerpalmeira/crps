@@ -91,6 +91,8 @@ function setupSteps(): StepResult[] {
               description: 'lanterna de emergência guardada na gaveta',
               holder: { fixture_id: 'sala_2b/mesa-prof-1' },
               light: { radius: 5, intensity: 0.9, on: false },
+              model: 'police_station:SM_Prop_Flashlight_01',
+              grip: 'objeto',
             },
             { name: 'Caderno de chamada', description: 'capa azul, nomes em ordem alfabética', holder: { fixture_id: 'sala_2b/mesa-prof-1' } },
             { name: 'Apagador', description: 'apagador de feltro cheio de pó', holder: { fixture_id: 'sala_2b/quadro-1' } },
@@ -105,9 +107,9 @@ function setupSteps(): StepResult[] {
       text: [
         'O sol da manhã entra enviesado pelas janelas da Sala 2-B e acende o pó de giz que ainda flutua perto do quadro. ' +
           'Você gira o toco de giz entre os dedos enquanto a turma se acomoda.',
-        '@haruto: Professor, é verdade que hoje tem prova surpresa?',
-        '@aiko: Haruto, para de inventar coisa. *ajeita os óculos* Bom dia, professor!',
-        '@ren: …zzz',
+        '@haruto: Professor, é verdade que hoje tem prova surpresa? {haruto:acena>voce}',
+        '@aiko: Haruto, para de inventar coisa. *ajeita os óculos* Bom dia, professor! {aiko:nao_nao>haruto}',
+        '@ren: …zzz {ren:boceja}',
         '',
         'Alguém ri baixo no fundo. O Ren apoiou o queixo na mão como quem pretende dormir de olhos abertos.',
         '',
@@ -156,7 +158,7 @@ function turnSteps(action: string, ctx: TurnContext): StepResult[] {
     dark = false;
   }
   if (/lanterna/.test(said)) {
-    if (!ctx.holdsLantern) tools.push(call('transfer_item', { item_id: 'lanterna', to: { character_id: playerId } }));
+    if (!ctx.holdsLantern) tools.push(call('transfer_item', { item_id: 'lanterna', to: { character_id: playerId, hand: 'direita' } }));
     tools.push(call('update_item', { item_id: 'lanterna', light_on: true }));
     events.push('Você tateia a gaveta da mesa, acha a lanterna de emergência e acende. Um círculo amarelado corta o escuro.');
     dark = false;
@@ -185,7 +187,7 @@ function turnSteps(action: string, ctx: TurnContext): StepResult[] {
         ...events,
         'O motor rolou os dados e o relógio andou cinco minutos.',
         ...playerLines,
-        blind ? '@aiko[grito]: Professor! Lava os olhos, rápido!' : '@aiko: Sim, professor!',
+        blind ? '@aiko[grito]: Professor! Lava os olhos, rápido!' : '@aiko: Sim, professor! {aiko:sim}',
         seesRoom ? 'Haruto se levanta, vai até a carteira da Mei e se inclina para ela.' : 'Uma cadeira arrasta; passos apressados vão até o fundo da sala.',
         '@haruto[cochicho>mei]: Ele tá de bom humor hoje.',
         '',

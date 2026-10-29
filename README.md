@@ -161,13 +161,13 @@ Princípios que o motor impõe:
 | `create_location` | Local a partir de layout ASCII |
 | `create_characters` | Personagens em lote (`seat: "random"` senta em assento livre) |
 | `introduce` | Quem conhece quem: sabe o nome e reconhece o rosto e a voz |
-| `create_items` | Itens no inventário, sobre um móvel ou no chão |
+| `create_items` | Itens no inventário, na mão, sobre um móvel ou no chão, com modelo 3D e jeito de empunhar |
 | `random` | Sorteios (intervalo, lista ou dados) |
 | `skill_check` | Teste resolvido pelo motor |
 | `inspect` / `recall` | Consultar detalhes e fatos fora do resumo |
-| `update_character` | Aprofundar NPCs, traços, dano e cura, perks, condições e pensamentos |
+| `update_character` | Aprofundar NPCs, traços, dano e cura, perks, condições, pensamentos e a pose do corpo |
 | `move_character` | Mover por caminho, sentar, ir até alguém, trocar de local |
-| `transfer_item` / `update_item` | Pegar, entregar, largar, consumir, acender e apagar luzes |
+| `transfer_item` / `update_item` | Pegar, entregar, largar, empunhar e guardar, consumir, acender e apagar luzes |
 | `update_fixture` | Escrever no quadro (aparece no 3D), abrir portas |
 | `update_location` | Luz ambiente (acender ou apagar as luzes, anoitecer) e descrição do local |
 | `add_fact` / `update_thread` | Memória da história |
@@ -197,7 +197,8 @@ NPC que reage a um pensamento que não poderia perceber.
 Cada turno é um frame. O mestre escreve cada fala numa linha própria, `@id: fala`
 (gestos curtos entre asteriscos; modos e alvos na seção seguinte). No 3D, cada fala vira um
 balão sobre quem fala, com até três na tela, os mais antigos esmaecendo, e a narração vira
-legenda. O balão do cochicho é tracejado e o do grito, em negrito. No fim de cada turno o
+legenda. Os gestos marcados (`{id:gesto}`, em "Corpo, armas e gestos") acontecem no passo em
+que aparecem. O balão do cochicho é tracejado e o do grito, em negrito. No fim de cada turno o
 motor guarda um retrato da cena (posições, itens, quadro, relógio), então voltar a um
 frame antigo mostra o mundo como estava naquele momento.
 
@@ -325,12 +326,15 @@ O que entra está em [scripts/assets/synty.json](scripts/assets/synty.json):
   pessoa. Sem `look` (campanhas antigas), a interface usa `figure` (adulto, adulta, menino,
   menina) ou deduz o corpo pelo papel e pela aparência. A cor é sempre a variante principal,
   a que as descrições retratam.
-- **Animações:** parado, andando, falando com gesto, acenando com a cabeça e sentado (montada a
-  partir da pose parada). Os personagens antigos da Synty e os pacotes de animação usam nomes
-  de ossos diferentes, e os arquivos de animação têm outra pose de repouso. Por isso o
-  conversor renomeia os ossos e transfere a rotação de cada um em espaço de mundo, tendo a pose
-  em T como referência comum. O resultado é um conjunto de clipes por sexo, que serve para todos
-  os personagens com o mesmo esqueleto.
+- **Animações:** a tabela `clips` (cerca de 110: andar, poses, gestos, golpes, tiros) aponta
+  cada clipe para um arquivo dos pacotes de animação. Os personagens antigos da Synty e os
+  pacotes de animação usam nomes de ossos diferentes, e os arquivos de animação têm outra pose
+  de repouso. Por isso o conversor renomeia os ossos e transfere a rotação de cada um em espaço
+  de mundo, tendo a pose em T como referência comum. Cada clipe vira um GLB por sexo
+  (`public/models/anims/<sexo>/<clipe>.glb`, uns 90 KB), que o 3D carrega quando a cena pede,
+  e serve para todos os personagens com o mesmo esqueleto. Algumas poses são montadas pelo
+  conversor (sentar, sentar no chão, deitar, mãos ao alto, o coice do tiro), e
+  `npm run assets -- anims` (ou o 4º argumento do script) refaz só as animações.
 
 Cada móvel pesa de 6 a 215 KB, cada personagem cerca de 300 KB, e a cor vem de uma
 textura-paleta por pacote, baixada uma vez só. O mestre só conhece os modelos por texto (o corpo
@@ -365,6 +369,44 @@ tudo no repertório.
   - Arquivos com várias variantes no mesmo lugar (as pelagens do cavalo) mostram só a primeira.
   - Os pacotes "simple" vêm em miniatura, então um bicho bem menor que o espaço que o mestre deu
     cresce até ocupá-lo.
+
+### Corpo, armas e gestos
+
+O corpo de cada personagem no 3D segue o motor, em três camadas descritas como dados em
+[src/engine/body.ts](src/engine/body.ts):
+
+- **Pose** é o estado do corpo e fica até mudar: ajoelhado, agachado, mãos ao alto, braços
+  cruzados, encostado, ao telefone, bêbado, em guarda, mirando… O mestre muda com
+  `update_character` (`pose`, e `pose_target` para mirar ou apontar para alguém ou algo, em
+  qualquer ângulo). Andar desfaz a pose. Sentar e deitar vêm do assento e da cama, e quem fica
+  com a vida em 0 cai sozinho (o 3D toca a queda). O retrato do turno guarda a pose, então o
+  replay mostra o corpo como estava.
+- **Item na mão:** empunhar é `transfer_item` para `{character_id, hand}`, e guardar é mandar de
+  volta sem `hand`. O item tem `model` (do catálogo) e `grip`, o jeito de empunhar: pistola,
+  arma longa, arco, uma mão, duas mãos, escudo ou objeto. O arco e o escudo vão na esquerda,
+  e fuzil e lança ocupam as duas mãos; o que estava na mão volta a ficar guardado. A pose usa o
+  clipe da arma: "mirando" com pistola estica o braço, com fuzil leva a arma ao rosto, com arco
+  puxa a corda.
+- **Gesto** é de um instante e vai na narração, na frase em que acontece: `{id:gesto}` ou
+  `{id:gesto>alvo}` (aceno, reverência, continência, aplauso, birra, golpe, tiro, esquiva…).
+  - O motor confere: o gesto existe (sinônimos e infinitivos viram o da tabela, como
+    `atira` → `ataca`), o alvo está no local e um ataque de perto alcança o alvo. De longe, só com
+    arma de alcance na mão.
+  - `ataca` toca o golpe da arma na mão: soco, espada, tiro ou flecha. O tiro tem clarão no cano
+    e rastro até o alvo.
+  - A interface tira as marcas do texto, e a versão do jogador some com os gestos de quem ele
+    não vê.
+  - Sentado ou ajoelhado, o gesto mexe só o tronco e os braços.
+
+A biblioteca da Synty não tem animação de arma de fogo. A pistola mira com o braço do clipe de
+apontar, o fuzil mira com a pose do arco (a coronha no ombro, a mão de apoio no guarda-mão) e
+descansa atravessado no peito.
+
+O item na mão é a conversão `held` do mesmo modelo, com a origem no punho e o cano em +z ou a
+lâmina em +y, como as armas da Synty vêm. A cada quadro, o 3D o encaixa pela posição do pulso e
+das juntas do indicador e do médio, o que não depende de como cada esqueleto orienta os ossos.
+Haste com o punho no meio (lança, cajado, tocha) é segurada perto da ponta de baixo, e lança ou
+cajado em descanso fica em pé, apoiado no chão.
 
 ### Layout ASCII
 

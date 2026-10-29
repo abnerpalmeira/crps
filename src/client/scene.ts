@@ -1,13 +1,25 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
+import { GESTURES, GRIPS, POSES, bodyPose, clipFor, gripOf, handsOf, mainGrip, variantIndex, type Act, type Grip, type Hand } from '../engine/body';
 import { tileDef } from '../engine/layout';
 import { lightSources } from '../engine/light';
 import { typeChain } from '../engine/objects';
 import { lifeStatId, perceptionOf, strangerLabel, visionOf } from '../engine/perception';
-import type { Character, Fixture, Location, ObjectType, WorldState } from '../engine/types';
+import type { Character, Fixture, Item, Location, ObjectType, WorldState } from '../engine/types';
 import { capitalize } from './format';
-import { characterModel, fixtureModel, seatOffset, type CharacterModel, type Clip } from './models';
+import {
+  characterModel,
+  fixtureModel,
+  groundModel,
+  heldModel,
+  loadAction,
+  loadUpperAction,
+  seatOffset,
+  type CharacterModel,
+  type Clip,
+  type ItemModel,
+} from './models';
 import {
   DIR_VEC,
   YAW,
@@ -36,10 +48,37 @@ interface Actor {
   seated: boolean;
   /** Personagem animado do catálogo, quando já carregou (antes disso, o boneco primitivo). */
   model?: CharacterModel;
+  /** Clipe pedido para o corpo inteiro (a pose, o andar ou um gesto) e a ação que está tocando. */
   clip?: Clip;
-  /** O clipe atual toca uma vez (fala, aceno) e depois volta ao estado do ator. */
-  once?: boolean;
+  current?: THREE.AnimationAction;
+  /** Clipes que não existem nesta máquina: a pose cai para o parado. */
+  missing: Set<Clip>;
+  /** Pose do corpo (body.ts) e o clipe dela, conforme o que a pessoa empunha. */
+  pose: string;
+  poseClip: Clip;
+  /** De pé; baixo (sentado, ajoelhado: gesto mexe só o tronco); no chão (deitado, caído: sem gestos). */
+  stance: 'pe' | 'baixo' | 'chao';
+  grip: Grip | null;
+  /** Gesto em curso: até quando manda no corpo, e se toca só no tronco por cima da pose. */
+  gesture?: { action: THREE.AnimationAction | null; start: number; until: number; upper: boolean; yaw: number | null };
+  /** O que está em cada mão. */
+  held: Map<Hand, Held>;
 }
+
+/** Um item na mão de alguém: segue os ossos da mão a cada quadro. */
+interface Held {
+  key: string;
+  grip: Grip;
+  model: ItemModel | null;
+}
+
+const TALK_POSES = new Set(['de_pe', 'sentado', 'bracos_cruzados', 'maos_na_cintura', 'pensativo', 'timido', 'abatido', 'bebado', 'encostado']);
+const LOW_POSES = new Set(['sentado', 'ajoelhado', 'agachado']);
+const FIREARMS = new Set<Grip>(['pistola', 'arma_longa']);
+const V1 = new THREE.Vector3();
+const V2 = new THREE.Vector3();
+const V3 = new THREE.Vector3();
+const BASIS = new THREE.Matrix4();
 
 interface WallPart {
   obj: THREE.Object3D;
@@ -58,6 +97,16 @@ function lerpAngle(a: number, b: number, t: number): number {
 
 function tagPick(obj: THREE.Object3D, pick: Pick): void {
   obj.traverse((o) => (o.userData.pick = pick));
+}
+
+/** Altura do nome sobre a pessoa: de pé, sentada ou ajoelhada, deitada. */
+function labelHeight(actor: Actor): number {
+  return actor.stance === 'chao' ? 0.75 : actor.stance === 'baixo' ? 1.62 : 2.0;
+}
+
+/** O que muda o item na mão no 3D: outro item, outro modelo, outro jeito de empunhar. */
+function heldKey(item: Item): string {
+  return `${item.id}|${item.model ?? ''}|${gripOf(item)}`;
 }
 
 /**
@@ -201,12 +250,13 @@ export class WorldView {
       balloon.element.firstElementChild!.innerHTML = line.html;
       if (line.age === 0 && this.lastTalk !== `${id}:${line.html}`) {
         this.lastTalk = `${id}:${line.html}`;
-        if (!actor.seated) this.play(actor, 'talk', true);
+        // Quem fala gesticula, se a pose deixa (mirando com a arma, não).
+        if (TALK_POSES.has(actor.pose) && !actor.gesture) void this.gesture(actor, 'talk', null);
       }
       balloon.element.dataset.age = String(age);
       balloon.element.dataset.mode = line.mode ?? 'fala';
       // Falas mais antigas sobem: vizinhos que falam em sequência não se sobrepõem.
-      balloon.position.set(0, (actor.seated ? 1.86 : 2.24) + age * 0.5, 0);
+      balloon.position.set(0, labelHeight(actor) + 0.24 + age * 0.5, 0);
     }
     return missing;
   }
@@ -357,20 +407,140 @@ export class WorldView {
     actor.obj.add(model.root);
     tagPick(actor.obj, { kind: 'character', id: c.id });
     actor.model = model;
-    this.play(actor, actor.seated ? 'sit' : 'idle');
+    void this.play(actor, actor.poseClip);
   }
 
-  /** Troca o clipe com uma transição curta; `once` toca uma vez e devolve ao estado do ator. */
-  private play(actor: Actor, clip: Clip, once = false): void {
-    const next = actor.model?.actions[clip];
-    if (!actor.model || !next || (actor.clip === clip && !once)) return;
-    const previous = actor.clip ? actor.model.actions[actor.clip] : undefined;
-    next.reset();
-    next.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, Infinity);
-    next.fadeIn(0.25).play();
-    if (previous && previous !== next) previous.fadeOut(0.25);
+  /**
+   * Troca o clipe do corpo inteiro com uma transição curta, carregando o clipe se preciso; `once`
+   * toca uma vez (e `clamp` para no último quadro, como quem cai). Se outro clipe for pedido
+   * enquanto este carrega, fica o outro.
+   */
+  private async play(actor: Actor, clip: Clip, opts: { once?: boolean; clamp?: boolean; fade?: number } = {}): Promise<THREE.AnimationAction | null> {
+    const model = actor.model;
+    if (!model) return null;
     actor.clip = clip;
-    actor.once = once;
+    const next = await loadAction(model, clip);
+    if (actor.model !== model || actor.clip !== clip) return null;
+    if (!next) {
+      actor.missing.add(clip);
+      if (clip !== 'idle') return this.play(actor, 'idle', opts);
+      return null;
+    }
+    const fade = opts.fade ?? 0.25;
+    const previous = actor.current;
+    next.reset();
+    next.setLoop(opts.once ? THREE.LoopOnce : THREE.LoopRepeat, Infinity);
+    next.clampWhenFinished = Boolean(opts.clamp);
+    next.setEffectiveWeight(1);
+    next.fadeIn(fade).play();
+    if (previous && previous !== next) previous.fadeOut(fade);
+    actor.current = next;
+    return next;
+  }
+
+  /**
+   * Um gesto de um instante. De pé, o corpo inteiro faz o gesto e volta à pose; sentado ou
+   * ajoelhado, só o tronco e os braços (por cima da pose); deitado ou caído, nada. `yaw` vira a
+   * pessoa para o alvo enquanto dura.
+   */
+  private async gesture(actor: Actor, clip: Clip, yaw: number | null): Promise<void> {
+    const model = actor.model;
+    if (!model || actor.stance === 'chao' || actor.obj.position.distanceTo(actor.target) > 0.06) return;
+    const upper = actor.stance === 'baixo';
+    if (actor.gesture?.upper) actor.gesture.action?.stop();
+    // O gesto vale desde já, enquanto o clipe carrega: a pose não volta por cima dele.
+    const pending = { action: null, start: this.clock.elapsedTime, until: this.clock.elapsedTime + 5, upper, yaw };
+    actor.gesture = pending;
+    const action = upper ? await loadUpperAction(model, clip) : await this.play(actor, clip, { once: true });
+    if (actor.gesture !== pending) return;
+    if (!action || actor.model !== model) {
+      actor.gesture = undefined;
+      return;
+    }
+    const now = this.clock.elapsedTime;
+    if (upper) {
+      action.reset();
+      action.setLoop(THREE.LoopOnce, 1);
+      action.clampWhenFinished = false;
+      action.setEffectiveWeight(0);
+      action.play();
+      actor.gesture = { action, start: now, until: now + action.getClip().duration, upper, yaw };
+      return;
+    }
+    // A transição de volta começa um pouco antes do fim, com o gesto ainda em movimento.
+    actor.gesture = { action, start: now, until: now + Math.max(0.3, action.getClip().duration - 0.25), upper, yaw };
+  }
+
+  /**
+   * Gestos marcados na narração (`{id:gesto>alvo}`), no passo do replay em que acontecem: o clipe
+   * vem da arma na mão (ataca com pistola atira, com espada golpeia) e do lado de onde está o alvo.
+   */
+  act(acts: Act[]): void {
+    if (!this.shown) return;
+    const { world, loc } = this.shown;
+    for (const act of acts) {
+      const actor = this.actors.get(act.actorId);
+      const def = GESTURES[act.gesture];
+      if (!actor || !def) continue;
+      const target = act.targetId ? this.pointOf(world, loc, act.targetId) : null;
+      const toward = target ? Math.atan2(target.x - actor.obj.position.x, target.z - actor.obj.position.z) : null;
+      let clip = clipFor(def.clip, actor.grip, `${act.actorId}:${act.gesture}:${act.targetId ?? ''}`);
+      if (def.sides && toward !== null) {
+        const rel = Math.atan2(Math.sin(toward - actor.obj.rotation.y), Math.cos(toward - actor.obj.rotation.y));
+        const side = Math.abs(rel) < Math.PI / 4 ? 'frente' : Math.abs(rel) > (3 * Math.PI) / 4 ? 'tras' : rel > 0 ? 'esquerda' : 'direita';
+        clip = def.sides[side];
+      }
+      void this.gesture(actor, clip, def.face ? toward : null);
+      if (def.attack && actor.grip && GRIPS[actor.grip].ranged) this.shot(actor, target);
+    }
+  }
+
+  /** Onde fica um personagem (à altura do peito) ou o centro de um móvel do local. */
+  private pointOf(world: WorldState, loc: Location, id: string): THREE.Vector3 | null {
+    const actor = this.actors.get(id);
+    if (actor) return actor.obj.position.clone().add(new THREE.Vector3(0, actor.stance === 'chao' ? 0.3 : 1.3, 0));
+    const f = loc.fixtures.find((x) => x.id === id || x.id.endsWith(`/${id}`));
+    if (f) return new THREE.Vector3(f.x + (f.w - 1) / 2, 0.9, f.y + (f.h - 1) / 2);
+    const c = world.characters[id];
+    return c?.pos && c.locationId === loc.id ? new THREE.Vector3(c.pos.x, 1.3, c.pos.y) : null;
+  }
+
+  /**
+   * O tiro: clarão no cano um instante depois do gatilho e o rastro até o alvo. Arco solta a
+   * flecha mais tarde, quando a corda volta.
+   */
+  private shot(actor: Actor, target: THREE.Vector3 | null): void {
+    const held = actor.held.get('direita') ?? actor.held.get('esquerda');
+    const bow = actor.grip === 'arco';
+    const firearm = actor.grip !== null && FIREARMS.has(actor.grip);
+    setTimeout(() => {
+      const obj = held?.model?.obj;
+      if (!obj?.parent) return;
+      const muzzle = held!.model!.tip.clone().applyMatrix4(obj.matrixWorld);
+      const parts: THREE.Object3D[] = [];
+      if (firearm) {
+        const flash = new THREE.PointLight('#ffb35a', 14, 5, 1.5);
+        flash.position.copy(muzzle);
+        const spark = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshBasicMaterial({ color: '#ffe08a' }));
+        spark.position.copy(muzzle);
+        parts.push(flash, spark);
+      }
+      if (target) {
+        const line = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([muzzle, target]),
+          new THREE.LineBasicMaterial({ color: bow ? '#c9b28a' : '#fff1b0', transparent: true, opacity: bow ? 0.7 : 0.9 }),
+        );
+        parts.push(line);
+      }
+      for (const p of parts) this.room.add(p);
+      setTimeout(() => {
+        for (const p of parts) {
+          p.removeFromParent();
+          if (p instanceof THREE.Mesh || p instanceof THREE.Line) p.geometry.dispose();
+          if (p instanceof THREE.PointLight) p.dispose();
+        }
+      }, bow ? 220 : 90);
+    }, bow ? 250 : 70);
   }
 
   /** Troca as primitivas do móvel pelo modelo do catálogo, quando ele carrega e se houver. */
@@ -451,7 +621,15 @@ export class WorldView {
     const seat = c.seatId ? loc.fixtures.find((f) => f.id === c.seatId) : undefined;
     if (!seat) return { pos, yaw: YAW[c.facing], seated: false };
     const yaw = YAW[seat.facing];
-    const kinds = typeChain(world, seat.kind).map((t) => t.id);
+    const chain = typeChain(world, seat.kind);
+    if (chain.some((t) => t.bed)) {
+      // Deitado na cama, ao comprido: a frente da cama é o pé, e a cabeça vai para o travesseiro, no
+      // lado oposto; o quadril desce um pouco do meio para ela caber nele.
+      const top = this.surfaces.get(seat.id) ?? chain.map((t) => t.surface).find((v) => v !== undefined) ?? 0.5;
+      const center = new THREE.Vector3(seat.x + (seat.w - 1) / 2, top, seat.y + (seat.h - 1) / 2);
+      return { pos: center.add(new THREE.Vector3(0.3 * Math.sin(yaw), 0, 0.3 * Math.cos(yaw))), yaw, seated: false };
+    }
+    const kinds = chain.map((t) => t.id);
     // Assento comprido com modelo mais curto que os tiles: quem senta fica dentro do modelo.
     const alongX = seat.facing === 'N' || seat.facing === 'S';
     const length = alongX ? seat.w : seat.h;
@@ -463,7 +641,124 @@ export class WorldView {
     }
     const back = kinds.map(seatOffset).find((v) => v !== null) ?? (kinds.includes('desk') ? -0.3 : kinds.includes('sofa') ? -0.1 : 0);
     pos.add(new THREE.Vector3(back * Math.sin(yaw), 0, back * Math.cos(yaw)));
-    return { pos, yaw, seated: !typeChain(world, seat.kind).some((t) => t.bed) };
+    return { pos, yaw, seated: true };
+  }
+
+  /**
+   * A pose do corpo, pelo motor (body.ts), e o clipe dela conforme a arma na mão. Quem cai agora
+   * (não quem já estava caído quando a cena abriu) passa pelo clipe da queda. Com alvo (mirando,
+   * apontando), o corpo se volta para ele em qualquer ângulo.
+   */
+  private pose(actor: Actor, world: WorldState, c: Character, loc: Location, yaw: number): void {
+    const pose = bodyPose(world, c);
+    const def = POSES[pose] ?? POSES.de_pe;
+    const grip = mainGrip(world, c.id)?.grip ?? null;
+    const previous = actor.pose;
+    actor.pose = pose;
+    actor.grip = grip;
+    actor.stance = def.ground ? 'chao' : actor.seated || LOW_POSES.has(pose) ? 'baixo' : 'pe';
+    actor.poseClip = actor.seated ? 'sit' : clipFor(def.clip, grip, c.id);
+    if (previous && pose !== previous && def.enter && actor.model) {
+      const enter = def.enter[variantIndex(def.enter.length, c.id)];
+      void this.fall(actor, enter);
+    }
+    const target = c.poseTarget ? this.pointOf(world, loc, c.poseTarget) : null;
+    actor.yaw = target ? Math.atan2(target.x - actor.target.x, target.z - actor.target.z) : yaw;
+  }
+
+  /** Clipe de entrada numa pose (a queda de quem morre), que para no último quadro até a pose assumir. */
+  private async fall(actor: Actor, clip: Clip): Promise<void> {
+    const now = this.clock.elapsedTime;
+    actor.gesture = { action: null, start: now, until: now + 5, upper: false, yaw: null };
+    const action = await this.play(actor, clip, { once: true, clamp: true });
+    if (actor.gesture?.start === now) {
+      if (action) actor.gesture = { action, start: now, until: now + action.getClip().duration, upper: false, yaw: null };
+      else actor.gesture = undefined;
+    }
+  }
+
+  /** O que a pessoa tem nas mãos, com o modelo de cada item (ou a primitiva, enquanto carrega ou sem modelo). */
+  private syncHeld(actor: Actor, world: WorldState, c: Character): void {
+    const hands = handsOf(world, c.id);
+    const wanted = new Map<Hand, Item>();
+    if (hands.direita) wanted.set('direita', hands.direita);
+    if (hands.esquerda && hands.esquerda !== hands.direita) wanted.set('esquerda', hands.esquerda);
+    for (const [hand, h] of actor.held) {
+      const item = wanted.get(hand);
+      if (item && h.key === heldKey(item)) continue;
+      h.model?.obj.removeFromParent();
+      actor.held.delete(hand);
+    }
+    for (const [hand, item] of wanted) {
+      if (actor.held.has(hand)) continue;
+      const h: Held = { key: heldKey(item), grip: gripOf(item), model: null };
+      actor.held.set(hand, h);
+      const room = this.room;
+      void heldModel(item, h.grip).then((model) => {
+        if (actor.held.get(hand) !== h || this.room !== room) return;
+        h.model = model;
+        room.add(model.obj);
+      });
+    }
+  }
+
+  /**
+   * Põe o item na mão a cada quadro, pela posição do pulso e das juntas dos dedos (não depende de
+   * como cada esqueleto orienta os ossos): o cano segue a mão, a lâmina sai do lado do polegar. O
+   * fuzil aponta do punho para a mão de apoio quando ela está à frente.
+   */
+  private placeHeld(a: Actor, hand: Hand, h: Held): void {
+    const obj = h.model?.obj;
+    if (!obj) return;
+    const bones = a.model?.hands[hand];
+    obj.visible = Boolean(bones);
+    if (!bones) return;
+    const wrist = bones.wrist.getWorldPosition(V1);
+    const index = bones.index.getWorldPosition(V2);
+    const finger = bones.finger.getWorldPosition(V3);
+    const knuckles = index.clone().add(finger).multiplyScalar(0.5);
+    const fwd = knuckles.clone().sub(wrist).normalize();
+    const thumb = index.clone().sub(finger);
+    thumb.addScaledVector(fwd, -thumb.dot(fwd)).normalize();
+    const palm = hand === 'direita' ? thumb.clone().cross(fwd) : fwd.clone().cross(thumb);
+    const grip = wrist.clone().lerp(knuckles, 0.6).addScaledVector(palm, 0.025);
+    let z = fwd;
+    let y = thumb;
+    const support = a.model?.hands.esquerda;
+    if (h.grip === 'arma_longa' && support) {
+      const other = support.wrist.getWorldPosition(new THREE.Vector3()).lerp(support.index.getWorldPosition(new THREE.Vector3()), 0.6);
+      const along = other.sub(grip);
+      const d = along.length();
+      const facing = new THREE.Vector3(Math.sin(a.obj.rotation.y), 0, Math.cos(a.obj.rotation.y));
+      if (d > 0.15 && d < 1 && along.dot(facing) > 0.3 * d) {
+        z = along.normalize();
+        y = thumb.clone().addScaledVector(z, -thumb.dot(z)).normalize();
+      }
+    } else if (h.grip === 'escudo') {
+      z = palm.clone().negate();
+      y = fwd.clone().cross(z).normalize();
+    }
+    const shaft = h.model?.shaft;
+    if (shaft && h.grip === 'duas_maos' && a.pose === 'de_pe' && !a.gesture) {
+      // Lança ou cajado em descanso: em pé ao lado do corpo, com a ponta de baixo no chão.
+      y = new THREE.Vector3(0, 1, 0);
+      z = new THREE.Vector3(Math.sin(a.obj.rotation.y), 0, Math.cos(a.obj.rotation.y));
+      shaft.inner.position.y = shaft.slide + a.obj.position.y + 0.02 - grip.y - shaft.low;
+    } else if (shaft) shaft.inner.position.y = shaft.slide;
+    BASIS.makeBasis(y.clone().cross(z), y, z);
+    obj.quaternion.setFromRotationMatrix(BASIS);
+    obj.position.copy(grip);
+    obj.scale.setScalar(a.obj.scale.x);
+  }
+
+  /** Item no chão ou num móvel com modelo do catálogo: troca a primitiva pelo modelo quando ele carrega. */
+  private async upgradeItem(obj: THREE.Object3D, item: Item): Promise<void> {
+    const room = this.room;
+    const model = await groundModel(item);
+    if (!model || this.room !== room || this.items.get(item.id) !== obj) return;
+    for (const child of [...obj.children]) obj.remove(child);
+    obj.add(model);
+    tagPick(obj, { kind: 'item', id: item.id });
   }
 
   private syncActors(world: WorldState, loc: Location): void {
@@ -488,7 +783,7 @@ export class WorldView {
         const label = new CSS2DObject(el);
         obj.add(label);
         this.room.add(obj);
-        actor = { obj, label, target: pos.clone(), yaw, seated: false };
+        actor = { obj, label, target: pos.clone(), yaw, seated: false, missing: new Set(), pose: '', poseClip: 'idle', stance: 'pe', grip: null, held: new Map() };
         this.actors.set(c.id, actor);
         void this.upgradeActor(actor, c);
       }
@@ -515,15 +810,17 @@ export class WorldView {
         label.append(bar);
       }
       actor.target.copy(pos);
-      actor.yaw = yaw;
       if (actor.seated !== seated) setSeated(actor.obj, seated);
       actor.seated = seated;
-      actor.label.position.set(0, seated ? 1.62 : 2.0, 0);
+      this.pose(actor, world, c, loc, yaw);
+      actor.label.position.set(0, labelHeight(actor), 0);
+      this.syncHeld(actor, world, c);
     }
     for (const [id, actor] of this.actors) {
       if (present.has(id)) continue;
       this.removeBalloon(id);
       actor.label.element.remove();
+      for (const h of actor.held.values()) h.model?.obj.removeFromParent();
       this.room.remove(actor.obj);
       this.actors.delete(id);
     }
@@ -559,6 +856,7 @@ export class WorldView {
         tagPick(obj, { kind: 'item', id: item.id });
         this.room.add(obj);
         this.items.set(item.id, obj);
+        if (item.model) void this.upgradeItem(obj, item);
       }
       obj.position.copy(pos);
     }
@@ -617,17 +915,34 @@ export class WorldView {
   private tick(): void {
     const dt = Math.min(this.clock.getDelta(), 0.1);
     this.controls.update();
+    const now = this.clock.elapsedTime;
     for (const a of this.actors.values()) {
+      const moving = a.obj.position.distanceTo(a.target) > 0.06;
       if (a.model) {
         a.model.mixer.update(dt);
-        // Sentado, andando ou parado; um gesto de fala termina antes de voltar ao estado.
-        const state: Clip = a.seated ? 'sit' : a.obj.position.distanceTo(a.target) > 0.06 ? 'walk' : 'idle';
-        const gesturing = a.once && a.clip && a.model.actions[a.clip]?.isRunning() && state === 'idle';
-        if (!gesturing && a.clip !== state) this.play(a, state);
+        // Gesto acaba no tempo dele, ou quando a pessoa sai andando.
+        const g = a.gesture;
+        if (g && (now >= g.until || moving)) {
+          if (g.upper) g.action?.stop();
+          a.gesture = undefined;
+        } else if (g?.upper && g.action) {
+          // Só no tronco, por cima da pose: o peso sobe e desce nas pontas (peso p dá p/(1+p) do gesto).
+          const t = now - g.start;
+          const b = Math.min(1, t / 0.25, (g.until - g.start - t) / 0.25);
+          g.action.setEffectiveWeight(b <= 0 ? 0 : b >= 0.98 ? 50 : b / (1 - b));
+        }
+        const want = moving ? 'walk' : a.missing.has(a.poseClip) ? 'idle' : a.poseClip;
+        if (!(a.gesture && !a.gesture.upper) && a.clip !== want) void this.play(a, want);
       }
       a.obj.position.lerp(a.target, 1 - Math.exp(-dt * 5));
-      a.obj.rotation.y = lerpAngle(a.obj.rotation.y, a.yaw, 1 - Math.exp(-dt * 8));
+      a.obj.rotation.y = lerpAngle(a.obj.rotation.y, a.gesture?.yaw ?? a.yaw, 1 - Math.exp(-dt * 8));
       if (a.obj.scale.x < 1) a.obj.scale.setScalar(Math.min(1, a.obj.scale.x + dt * 3));
+      for (const [hand, h] of a.held) this.placeHeld(a, hand, h);
+      // No chão, o corpo não fica onde a pessoa estava de pé (quem cai vai para trás): o nome segue a cabeça.
+      if (a.stance === 'chao' && a.model?.head) {
+        const head = a.obj.worldToLocal(a.model.head.getWorldPosition(V1));
+        a.label.position.set(head.x, head.y + 0.45, head.z);
+      }
     }
     if (this.selected?.kind === 'character') {
       const a = this.actors.get(this.selected.id);

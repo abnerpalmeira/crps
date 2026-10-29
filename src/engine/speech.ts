@@ -1,3 +1,4 @@
+import { actTags, filterActs, stripActs, type Act } from './body';
 import { parseSpeechLine } from './frames';
 import { distanceBetween, perceivesSpeech, perceptionOf, speechPerks, strangerLabel, voiceLabel } from './perception';
 import type { WorldState } from './types';
@@ -57,7 +58,7 @@ export function analyzeSpeech(world: WorldState, narration: string): { issues: s
       .filter((c) => (c.id === target?.id && targetInReach) || perceivesSpeech(world, c.id, speaker.id, mode))
       .map((c) => c.id);
     if (!hearers.includes(speaker.id)) hearers.unshift(speaker.id);
-    lines.push({ index, speakerId: speaker.id, mode: p.mode, targetId: target?.id ?? null, text: p.text, hearers, restricted: present.some((c) => !hearers.includes(c.id)) });
+    lines.push({ index, speakerId: speaker.id, mode: p.mode, targetId: target?.id ?? null, text: stripActs(p.text), hearers, restricted: present.some((c) => !hearers.includes(c.id)) });
   });
   return { issues, lines };
 }
@@ -77,20 +78,26 @@ const clean = (s: string) => s.replace(/[\]|]/g, ' ').trim();
  * A narração como o jogador a percebe. Falas que ele não ouviu viram só o gesto, e somem se ele
  * nem vê quem fala; as que ele só percebeu graças a um perk dizem qual. Quem ele não sabe quem é
  * (estranho, ou vulto que ele não reconhece) vem com o nome que ele daria: "o homem de terno",
- * "uma voz de mulher". Conhecido que ele ouve é reconhecido pela voz.
+ * "uma voz de mulher". Conhecido que ele ouve é reconhecido pela voz. Gestos (`{id:gesto}`) de
+ * quem ele não vê somem; os de uma fala que ele não ouviu ficam, porque o gesto ele vê.
  */
 export function playerNarration(world: WorldState, narration: string): string {
   const viewer = world.playerId;
   if (!viewer) return narration;
   const view = perceptionOf(world, viewer);
+  const seen = (act: Act) => act.actorId === viewer || !world.characters[act.actorId] || view.sight(act.actorId) !== 'nada';
   const lines = new Map(analyzeSpeech(world, narration).lines.map((l) => [l.index, l]));
   const out: string[] = [];
   narration.split('\n').forEach((raw, i) => {
     const line = lines.get(i);
-    if (!line) return void out.push(raw);
+    if (!line) return void out.push(filterActs(raw, seen));
     const heard = line.hearers.includes(viewer);
     const sight = view.sight(line.speakerId);
-    if (!heard && sight === 'nada') return;
+    const gestures = actTags(filterActs(parseSpeechLine(raw)?.text ?? '', seen));
+    if (!heard && sight === 'nada') {
+      if (gestures.length) out.push(gestures.join(' '));
+      return;
+    }
     const speaker = world.characters[line.speakerId];
     const notes = heard ? [] : ['oculto'];
     if (!view.recognize(speaker.id) && !(heard && view.knows(speaker.id))) {
@@ -103,10 +110,10 @@ export function playerNarration(world: WorldState, narration: string): string {
       const perks = speechPerks(world, viewer, line.speakerId, world.ruleset.speech[line.mode]);
       if (perks.length) notes.push(`via ${clean(perks.map((p) => p.name).join(', '))}`);
     }
-    if (!notes.length) return void out.push(raw);
+    if (!notes.length) return void out.push(filterActs(raw, seen));
     const label = world.ruleset.speech[line.mode]?.label ?? 'fala';
     const to = target ? (targetKnown ? target.name.split(' ')[0] : view.sight(target.id) === 'nitido' ? strangerLabel(target) : 'alguém') : null;
-    const text = heard ? line.text : `${label} algo${to ? ` para ${to}` : ''}`;
+    const text = [heard ? line.text : `${label} algo${to ? ` para ${to}` : ''}`, ...gestures].join(' ');
     out.push(`@${line.speakerId}[${line.mode}${line.targetId ? `>${line.targetId}` : ''}|${notes.join('|')}]: ${text}`);
   });
   return out.join('\n');

@@ -1,3 +1,4 @@
+import { stripActs } from '../engine/body';
 import { parseSpeechLine, type ParsedSpeech } from '../engine/frames';
 import { hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
 
@@ -12,9 +13,18 @@ export function inline(s: string): string {
     .replace(/(^|[\s(“"])[*_](\S(?:.*?\S)?)[*_](?=[\s.,;:!?)”"]|$)/g, '$1<em>$2</em>');
 }
 
+/**
+ * O texto como o jogador lê: sem as marcas de gesto (`{id:gesto}`), que o 3D anima, nem a marca
+ * que ainda está chegando no fim da linha enquanto a narração é escrita.
+ */
+export function readable(text: string): string {
+  return stripActs(text.replace(/\{[^{}]*$/, ''));
+}
+
 /** Conteúdo de uma fala; a que o jogador não ouviu aparece só como gesto. */
 export function speechHtml(speech: Pick<ParsedSpeech, 'text' | 'hidden'>): string {
-  return speech.hidden ? `<em class="hidden-speech">🤫 ${escapeHtml(speech.text)}</em>` : inline(speech.text);
+  const text = readable(speech.text);
+  return speech.hidden ? `<em class="hidden-speech">🤫 ${escapeHtml(text)}</em>` : inline(text);
 }
 
 export function capitalize(s: string): string {
@@ -47,8 +57,8 @@ export function formatNarration(text: string, speaker: (id: string) => Speaker |
       const tag = how && !speech.hidden ? ` <span class="speech-mode">${escapeHtml(how)}</span>` : '';
       const via = speech.via ? ` <span class="speech-via" title="você percebeu graças a este perk">✦ ${escapeHtml(speech.via)}</span>` : '';
       html.push(`<p class="speech"><b${style}>${escapeHtml(name)}</b>${tag}${via} ${speechHtml(speech)}</p>`);
-    } else if (line.trim()) paragraph.push(line);
-    else flush();
+    } else if (readable(line)) paragraph.push(readable(line));
+    else if (!line.trim()) flush();
   }
   flush();
   return html.join('');

@@ -1,3 +1,4 @@
+import { POSES, bodyPose, handsOf } from './body';
 import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { LEGEND } from './layout';
 import { lightAt, lightLabel, lightSources } from './light';
@@ -183,11 +184,18 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
         (sight === 'vulto' ? '; o jogador vê só um vulto' : sight === 'nada' ? '; o jogador NÃO vê' : '') +
         identity(view, c, Boolean(s.playerId)) +
         acquaintances(c, present);
-      const where = c.seatId ? `sentado(a) em ${shortId(loc, c.seatId)}` : 'em pé';
+      const pose = bodyPose(s, c);
+      const aim = c.poseTarget ? ` (${c.poseTarget.includes('/') ? shortId(loc, c.poseTarget) : c.poseTarget})` : '';
+      const where = c.seatId
+        ? `${pose === 'deitado' ? 'deitado(a)' : 'sentado(a)'} em ${shortId(loc, c.seatId)}`
+        : `${POSES[pose].label}${aim}`;
+      const hands = handsOf(s, c.id);
+      const held = [...new Set([hands.direita, hands.esquerda])].filter((i) => i !== null);
+      const holding = held.length ? `; na mão: ${held.map((i) => `${i.name} [${i.id}]`).join(', ')}` : '';
       const res = resourceLine(engine, c, !c.isPlayer);
       const perks = engine.perksOf(c).map((perk) => perk.name);
       return (
-        `- ${markers.get(c.id) ?? '?'} ${c.name} [${c.id}]${c.isPlayer ? ' (VOCÊ, jogador)' : ''}: ${c.role}; ${where} (${c.pos?.x},${c.pos?.y}), olhando ${c.facing}; ` +
+        `- ${markers.get(c.id) ?? '?'} ${c.name} [${c.id}]${c.isPlayer ? ' (VOCÊ, jogador)' : ''}: ${c.role}; ${where} (${c.pos?.x},${c.pos?.y}), olhando ${c.facing}${holding}; ` +
         `${c.detail === 'sketch' ? 'esboço' : 'completo'}; traços: ${c.traits.join(', ') || '—'}${res ? `; ${res}` : ''}` +
         `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${senses}${mind}`
       );
@@ -211,7 +219,7 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     out.push(`Atributos: ${statLine(p.attributes)}. Perícias: ${statLine(p.skills)}. Recursos: ${resourceLine(engine, p, false) || '—'}.`);
     const conjure = engine.conjurePerkOf(p);
     out.push(
-      `Inventário: ${inv.map((i) => `${i.name} [${i.id}]${i.quantity > 1 ? ` ×${i.quantity}` : ''}`).join(', ') || 'vazio'}. ` +
+      `Inventário: ${inv.map((i) => `${i.name} [${i.id}]${i.quantity > 1 ? ` ×${i.quantity}` : ''}${i.holder.kind === 'character' && i.holder.hand ? ` (na mão ${i.holder.hand})` : ''}`).join(', ') || 'vazio'}. ` +
         `É tudo o que ele tem: nada surge com ele${conjure ? `, salvo pelo perk ${conjure.name} (${describePerk(conjure)})` : ''}.`,
     );
     const perks = engine.perksOf(p);

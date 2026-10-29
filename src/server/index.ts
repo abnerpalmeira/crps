@@ -159,8 +159,9 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (pathname === '/api/models/meta' && req.method === 'GET') {
-      const id = new URL(req.url ?? '/', 'http://localhost').searchParams.get('id') ?? '';
-      const meta = await models.meta(id);
+      const params = new URL(req.url ?? '/', 'http://localhost').searchParams;
+      const id = params.get('id') ?? '';
+      const meta = await models.meta(id, params.get('as') === 'held');
       return meta ? json(res, 200, meta) : json(res, 404, { error: `Modelo ${id} indisponível.` });
     }
     if (pathname.startsWith('/api/models/file/') && req.method === 'GET') {

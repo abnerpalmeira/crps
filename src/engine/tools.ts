@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GRIP_IDS, POSES, POSE_IDS } from './body';
 import { modelCatalog } from './catalog';
 import { EngineError, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { legendSummary } from './layout';
@@ -7,7 +8,7 @@ import { TEMPLATES } from './templates';
 import { lightLabel } from './light';
 import { knowsName, perceptionOf, strangerLabel } from './perception';
 import { truncate } from './text';
-import type { Fact, ItemHolder } from './types';
+import type { Fact, Grip, ItemHolder } from './types';
 
 /**
  * A API que o modelo enxerga. Cada tool valida a entrada com zod, chama o
@@ -40,7 +41,8 @@ function shownName(engine: GameEngine, id: string, first = false): string {
 
 /** Onde está um item, como o jogador diria: com quem, em que móvel ou no chão. */
 function shownHolder(engine: GameEngine, h: ItemHolder): string {
-  return h.kind === 'character' ? `com ${shownName(engine, h.id)}` : engine.describeHolder(h);
+  if (h.kind !== 'character') return engine.describeHolder(h);
+  return `${h.hand ? `na mão ${h.hand} de` : 'com'} ${shownName(engine, h.id)}`;
 }
 
 const statMap = z.record(z.string(), z.number());
@@ -111,7 +113,7 @@ const resourceInput = z.object({
 });
 
 /** Campos de personagem que qualquer um percebe; o resto de um NPC só aparece nos bastidores. */
-const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'figure', 'look', 'seen_as', 'traits']);
+const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'figure', 'look', 'seen_as', 'traits', 'pose']);
 
 const placement = z
   .object({
@@ -125,6 +127,10 @@ const placement = z
 const holder = z
   .object({
     character_id: z.string().optional(),
+    hand: z
+      .enum(['direita', 'esquerda'])
+      .optional()
+      .describe('Com character_id: o item fica na mão, empunhado (aparece na mão no 3D). Sem hand, fica guardado com a pessoa.'),
     fixture_id: z.string().optional().describe('Em cima/dentro de um móvel, ex. "sala_1a/mesa-prof-1".'),
     location_id: z.string().optional(),
     x: z.number().int().optional(),
@@ -165,6 +171,15 @@ const characterInput = z.object({
   thoughts: z.string().optional().describe('O que pensa ou quer agora; oculto do jogador, salvo perk see_thoughts.'),
 });
 
+const itemModel = z.string().describe('Modelo do catálogo 3D (o id que search_models devolve): como o item aparece no chão, num móvel e na mão.');
+
+const itemGrip = z
+  .enum(GRIP_IDS as [Grip, ...Grip[]])
+  .describe(
+    'Como se empunha: pistola (arma de fogo curta), arma_longa (fuzil, espingarda, besta), arco, uma_mao (espada, faca, machado, porrete, tocha), ' +
+      'duas_maos (lança, montante, cajado), escudo, objeto (o resto). Decide a mão e as animações de quem o segura.',
+  );
+
 const itemInput = z.object({
   id: z.string().optional(),
   name: z.string(),
@@ -173,6 +188,8 @@ const itemInput = z.object({
   quantity: z.number().int().min(1).optional(),
   holder,
   light: lightInput.optional().describe('Para itens que iluminam (lanterna, vela, tocha).'),
+  model: itemModel.optional(),
+  grip: itemGrip.optional(),
 });
 
 const facingRule = z.enum(['interior', 'board', 'away_board', 'table', 'open_side', 'lengthwise', 'none']);
@@ -441,9 +458,10 @@ export const TOOLS = [
   tool({
     name: 'create_items',
     description:
-      'Cria itens em lote: no inventário de alguém, sobre um móvel ou no chão. Todo objeto que importe para a história e possa ' +
-      'mudar de mãos precisa existir aqui antes de ser usado ou narrado. No meio do jogo, nada é criado direto com o personagem ' +
-      'do jogador (salvo perk de conjurar): crie onde o objeto está e entregue com transfer_item.',
+      'Cria itens em lote: no inventário de alguém, na mão (holder com hand), sobre um móvel ou no chão. Todo objeto que importe ' +
+      'para a história e possa mudar de mãos precisa existir aqui antes de ser usado ou narrado. No meio do jogo, nada é criado ' +
+      'direto com o personagem do jogador (salvo perk de conjurar): crie onde o objeto está e entregue com transfer_item. Armas ' +
+      'e objetos que alguém vai segurar levam model (de search_models) e grip, para aparecerem na mão.',
     schema: z.object({ items: z.array(itemInput).min(1).max(30) }),
     mutates: true,
     run(engine, input) {
@@ -567,6 +585,11 @@ export const TOOLS = [
         .describe('Ex.: [{"id": "cego", "minutes": 30}].'),
       conditions_remove: z.array(z.string()).optional(),
       thoughts: z.string().optional().describe('O que pensa ou quer agora; string vazia apaga.'),
+      pose: z
+        .enum(POSE_IDS as [string, ...string[]])
+        .optional()
+        .describe('Pose do corpo, que fica até mudar (andar desfaz): ajoelhado, mirando, maos_ao_alto… de_pe volta ao normal. Lista em "Corpo e gestos".'),
+      pose_target: z.string().optional().describe('Para quem ou o quê a pose se volta (mirando, apontando): id de personagem ou de móvel; vazio tira.'),
     }),
     mutates: true,
     run(engine, input) {
@@ -582,7 +605,9 @@ export const TOOLS = [
             ? `perks: ${engine.perksOf(c).map((p) => p.name).join(', ') || 'nenhum'}`
             : field === 'conditions'
               ? `condições: ${engine.conditionLabels(c).join(', ') || 'nenhuma'}`
-              : field;
+              : field === 'pose'
+                ? (POSES[c.pose ?? 'de_pe']?.label ?? 'de pé')
+                : field;
         (OPEN_FIELDS.has(field) || (c.isPlayer && field !== 'thoughts') ? shown : hidden).push(text);
       }
       for (const id of r.attributes) (view.canSeeStat(id, c.id) ? shown : hidden).push(id);
@@ -620,7 +645,9 @@ export const TOOLS = [
     name: 'transfer_item',
     description:
       'Muda um item de lugar: pegar, entregar, largar, guardar. O motor exige que origem e destino estejam a até 2 tiles ' +
-      '(8 com thrown=true). Use quantity para entregar só parte de uma pilha.',
+      '(8 com thrown=true). Use quantity para entregar só parte de uma pilha. Empunhar (sacar a arma, erguer a tocha, pegar o copo ' +
+      'na mão) é mandar para a mão da pessoa: to {character_id, hand}; guardar de volta é to {character_id} sem hand. O que ocupava ' +
+      'a mão volta a ficar guardado.',
     schema: z.object({
       item_id: z.string(),
       to: holder,
@@ -632,7 +659,9 @@ export const TOOLS = [
       const before = { ...engine.findItem(input.item_id).holder };
       const r = engine.transferItem(input);
       const after = engine.findItem(r.item_id).holder;
-      return { content: r, summary: `📦 ${r.name}${r.quantity > 1 ? ` ×${r.quantity}` : ''}: ${shownHolder(engine, before)} → ${shownHolder(engine, after)}` };
+      const icon = after.kind === 'character' && after.hand ? '✋' : '📦';
+      const stowed = r.stowed ? ` (guardou ${r.stowed.join(', ')})` : '';
+      return { content: r, summary: `${icon} ${r.name}${r.quantity > 1 ? ` ×${r.quantity}` : ''}: ${shownHolder(engine, before)} → ${shownHolder(engine, after)}${stowed}` };
     },
   }),
 
@@ -650,6 +679,8 @@ export const TOOLS = [
       destroy: z.boolean().optional(),
       light_on: z.boolean().optional().describe('Acende (true) ou apaga (false) um item que ilumina.'),
       light: lightInput.nullable().optional().describe('Define a luz do item; null tira.'),
+      model: itemModel.optional(),
+      grip: itemGrip.optional(),
     }),
     mutates: true,
     run(engine, input) {

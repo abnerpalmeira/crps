@@ -1,3 +1,4 @@
+import { actTags, stripActs } from './body';
 import type { SceneFrame, WorldState } from './types';
 
 /** Um passo do replay de um turno: a ação do jogador, uma fala ou um trecho de narração. */
@@ -63,23 +64,38 @@ function captions(text: string): string[] {
   return out;
 }
 
-/** Narração do mestre → falas e trechos de narração, na ordem em que acontecem. */
+/**
+ * Narração do mestre → falas e trechos de narração, na ordem em que acontecem. As marcas de gesto
+ * (`{id:gesto}`) ficam no texto do passo em que acontecem; uma linha só de marcas vai para o passo
+ * seguinte (ou, no fim, para o anterior).
+ */
 export function parseBeats(narration: string): Beat[] {
   const beats: Beat[] = [];
   let paragraph: string[] = [];
+  let pending: string[] = [];
+  const push = (beat: Beat) => {
+    if (pending.length) beat = { ...beat, text: `${pending.join(' ')} ${beat.text}` };
+    pending = [];
+    beats.push(beat);
+  };
   const flush = () => {
-    if (paragraph.length) for (const text of captions(paragraph.join(' '))) beats.push({ kind: 'narration', text });
+    const text = paragraph.join(' ');
     paragraph = [];
+    if (!text) return;
+    if (!stripActs(text)) return void pending.push(...actTags(text));
+    for (const caption of captions(text)) push({ kind: 'narration', text: caption });
   };
   for (const line of narration.split('\n')) {
     const speech = parseSpeechLine(line);
     if (speech) {
       flush();
-      beats.push({ kind: 'speech', ...speech });
+      push({ kind: 'speech', ...speech });
     } else if (line.trim()) paragraph.push(line.trim());
     else flush();
   }
   flush();
+  const last = beats.at(-1);
+  if (pending.length && last) beats[beats.length - 1] = { ...last, text: `${last.text} ${pending.join(' ')}` };
   return beats;
 }
 
@@ -97,6 +113,8 @@ export function snapshotScene(world: WorldState): SceneFrame {
           facing: c.facing,
           resources: { ...c.resources },
           conditions: structuredClone(c.conditions),
+          pose: c.pose ?? null,
+          poseTarget: c.poseTarget ?? null,
         },
       ]),
     ),

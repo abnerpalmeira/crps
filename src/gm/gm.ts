@@ -1,6 +1,7 @@
 import { compileBrief } from '../engine/brief';
 import type { GameEngine } from '../engine/engine';
 import { describeInput, hasMarks, parsePlayerInput } from '../engine/input';
+import { analyzeActs } from '../engine/body';
 import { analyzeSpeech, playerNarration, type SpeechLine } from '../engine/speech';
 import { runTool, toolSpecs, type ToolResult } from '../engine/tools';
 import type { WorldState } from '../engine/types';
@@ -98,8 +99,8 @@ export class GameMaster {
     let result = await this.loop(engine, session, emit, changes);
 
     if (result.verifiable && result.text) {
-      // Alcance das falas é regra do motor: confere sem depender do verificador.
-      const speechIssues = analyzeSpeech(engine.state, result.text).issues;
+      // Alcance das falas e dos gestos é regra do motor: confere sem depender do verificador.
+      const speechIssues = [...analyzeSpeech(engine.state, result.text).issues, ...analyzeActs(engine.state, result.text)];
       const verdict = this.opts.verify !== false ? await this.check(engine, changes, input, result.text, emit) : null;
       if (verdict) emit({ type: 'verify', ...verdict });
       if (speechIssues.length) emit({ type: 'verify', consistent: false, issues: speechIssues });
@@ -114,7 +115,8 @@ export class GameMaster {
 
     const text = result.text || SILENCE;
     const speech = analyzeSpeech(engine.state, text);
-    if (speech.issues.length) emit({ type: 'status', text: `Falas ainda fora das regras: ${speech.issues.join(' ')}` });
+    const outside = [...speech.issues, ...analyzeActs(engine.state, text)];
+    if (outside.length) emit({ type: 'status', text: `Falas e gestos ainda fora das regras: ${outside.join(' ')}` });
     this.recordSpeech(engine, speech.lines);
     engine.hearVoices(speech.lines);
     const shown = playerNarration(engine.state, text);
