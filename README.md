@@ -458,7 +458,9 @@ O item na mão é a conversão `held` do mesmo modelo, com a origem no punho e o
 lâmina em +y, como as armas da Synty vêm. A cada quadro, o 3D o encaixa pela posição do pulso e
 das juntas do indicador e do médio, o que não depende de como cada esqueleto orienta os ossos.
 Haste com o punho no meio (lança, cajado, tocha) é segurada perto da ponta de baixo, e lança ou
-cajado em descanso fica em pé, apoiado no chão.
+cajado em descanso fica em pé, apoiado no chão. Objeto chato (pasta, livro, papel, celular) vai
+com a face na palma, e não atravessado nela: o pequeno deitado na mão, ao comprido dos dedos; o
+grande pendurado pela borda comprida, como quem carrega uma pasta do lado do corpo.
 
 ### Layout ASCII
 

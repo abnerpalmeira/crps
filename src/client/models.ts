@@ -504,8 +504,27 @@ export async function heldModel(item: Item, grip: Grip): Promise<ItemModel> {
   const holder = new THREE.Group();
   holder.add(model);
   if (grip === 'objeto' || grip === 'escudo') {
-    model.position.copy(lo.clone().add(hi).multiplyScalar(-0.5));
-    return { obj: holder, tip: new THREE.Vector3(0, size.y / 2, 0) };
+    const [thin, mid, wide] = (['x', 'y', 'z'] as const).slice().sort((a, b) => size[a] - size[b]);
+    if (grip === 'escudo' || size[thin] >= 0.35 * size[mid]) {
+      model.position.copy(lo.clone().add(hi).multiplyScalar(-0.5));
+      return { obj: holder, tip: new THREE.Vector3(0, size.y / 2, 0) };
+    }
+    // Coisa chata (pasta, livro, papel, celular) vai com a face na palma, não atravessada nela: a
+    // pequena deitada na palma, ao comprido dos dedos (+z); a grande pendurada pela borda comprida,
+    // como quem carrega uma pasta do lado do corpo.
+    const hang = size[wide] > 0.2;
+    const to = { x: new THREE.Vector3(), y: new THREE.Vector3(), z: new THREE.Vector3() };
+    to[thin].set(1, 0, 0);
+    to[wide].set(0, hang ? 1 : 0, hang ? 0 : 1);
+    to[mid].set(0, hang ? 0 : 1, hang ? 1 : 0);
+    const turn = new THREE.Matrix4().makeBasis(to.x, to.y, to.z);
+    if (turn.determinant() < 0) turn.makeBasis(to.x, to.y, to.z.negate());
+    model.quaternion.setFromRotationMatrix(turn);
+    const box = new THREE.Box3(lo.clone(), hi.clone()).applyMatrix4(turn);
+    model.position.copy(box.getCenter(new THREE.Vector3()).negate());
+    // Pendurada: a borda de cima fica entre os dedos, e o resto desce além deles.
+    if (hang) model.position.z += (box.max.z - box.min.z) / 2 - 0.04;
+    return { obj: holder, tip: new THREE.Vector3(0, 0, 0) };
   }
   if (long !== want) {
     const from = new THREE.Vector3(long === 'x' ? 1 : 0, long === 'y' ? 1 : 0, long === 'z' ? 1 : 0);
