@@ -1439,8 +1439,18 @@ export class GameEngine {
       c.thoughts = input.thoughts.trim() || null;
       changes.push('thoughts');
     }
+    let stoodUp: { from: string; label: string; x: number; y: number } | null = null;
     if (input.pose !== undefined) {
       if (!POSES[input.pose]) throw new EngineError(`A pose "${input.pose}" não existe. Poses: ${POSE_IDS.join(', ')}.`);
+      // Pose que não se faz num assento (de pé, ajoelhado, em guarda) levanta quem está nele: a
+      // pessoa sai para o lado do móvel, como quem se levanta da cama.
+      if (c.seatId && !POSES[input.pose].seated) {
+        const seat = this.findFixture(c.seatId);
+        const moved = this.moveCharacter({ character_id: c.id, to: { near: seat.id } });
+        const of = objectType(this.state, seat.kind).article === 'o' ? 'do' : 'da';
+        stoodUp = { from: seat.id, label: `${of} ${seat.label}`, x: moved.to.x, y: moved.to.y };
+        changes.push('pose');
+      }
       const pose = input.pose === 'de_pe' ? null : input.pose;
       // Pose nova sem alvo solta o alvo da anterior.
       const target = input.pose_target === undefined ? null : this.poseTarget(c, input.pose_target);
@@ -1468,6 +1478,7 @@ export class GameEngine {
       attributes: attributeChanges,
       resources: resourceChanges,
       detail: c.detail,
+      ...(stoodUp ? { stood_up: stoodUp } : {}),
     };
   }
 

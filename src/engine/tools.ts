@@ -613,7 +613,9 @@ export const TOOLS = [
       pose: z
         .enum(POSE_IDS as [string, ...string[]])
         .optional()
-        .describe('Pose do corpo, que fica até mudar (andar desfaz): ajoelhado, mirando, maos_ao_alto… de_pe volta ao normal. Lista em "Corpo e gestos".'),
+        .describe(
+          'Pose do corpo, que fica até mudar (andar desfaz): ajoelhado, mirando, maos_ao_alto… de_pe volta ao normal. Quem está num assento ou na cama e recebe uma pose que não se faz sentado (de_pe, ajoelhado, em_guarda) se levanta para o lado do móvel. Lista em "Corpo, armas e gestos".',
+        ),
       pose_target: z.string().optional().describe('Para quem ou o quê a pose se volta (mirando, apontando): id de personagem ou de móvel; vazio tira.'),
     }),
     mutates: true,
@@ -631,7 +633,7 @@ export const TOOLS = [
             : field === 'conditions'
               ? `condições: ${engine.conditionLabels(c).join(', ') || 'nenhuma'}`
               : field === 'pose'
-                ? (POSES[c.pose ?? 'de_pe']?.label ?? 'de pé')
+                ? `${POSES[c.pose ?? 'de_pe']?.label ?? 'de pé'}${r.stood_up ? ` (levantou ${r.stood_up.label})` : ''}`
                 : field;
         (OPEN_FIELDS.has(field) || (c.isPlayer && field !== 'thoughts') ? shown : hidden).push(text);
       }

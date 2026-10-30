@@ -47,27 +47,29 @@ export interface PoseDef {
   enter?: string[];
   /** Corpo no chão: o nome e o balão descem. */
   ground?: boolean;
+  /** Dá para fazer sem sair do assento ou da cama; as outras poses levantam quem está nele. */
+  seated?: boolean;
 }
 
 export const POSES: Record<string, PoseDef> = {
   de_pe: { label: 'de pé', clip: { padrao: 'idle', uma_mao: 'espada_parado', duas_maos: 'espada_parado', arco: 'arco_parado', arma_longa: 'fuzil_parado' } },
-  sentado: { label: 'sentado', clip: 'sentado_chao' },
-  deitado: { label: 'deitado', clip: 'deitado', ground: true },
+  sentado: { label: 'sentado', clip: 'sentado_chao', seated: true },
+  deitado: { label: 'deitado', clip: 'deitado', ground: true, seated: true },
   caido: { label: 'caído no chão', clip: ['caido_costas', 'caido_brucos'], enter: ['morte_costas', 'morte_brucos'], ground: true },
   ajoelhado: { label: 'ajoelhado, de mãos juntas', clip: 'ajoelhado' },
   agachado: { label: 'agachado, escondido', clip: 'agachado' },
-  bracos_cruzados: { label: 'de braços cruzados', clip: 'bracos_cruzados' },
+  bracos_cruzados: { label: 'de braços cruzados', clip: 'bracos_cruzados', seated: true },
   maos_na_cintura: { label: 'com as mãos na cintura', clip: 'maos_na_cintura' },
   maos_ao_alto: { label: 'de mãos ao alto, rendido', clip: 'maos_ao_alto' },
   encostado: { label: 'encostado na parede', clip: 'encostado' },
-  pensativo: { label: 'pensativo, mão no queixo', clip: 'pensativo' },
+  pensativo: { label: 'pensativo, mão no queixo', clip: 'pensativo', seated: true },
   rezando: { label: 'rezando de pé', clip: 'rezando' },
-  ao_telefone: { label: 'falando ao telefone', clip: 'ao_telefone' },
-  no_celular: { label: 'mexendo no celular', clip: 'no_celular' },
-  segurando_copo: { label: 'segurando um copo', clip: 'segurando_copo' },
+  ao_telefone: { label: 'falando ao telefone', clip: 'ao_telefone', seated: true },
+  no_celular: { label: 'mexendo no celular', clip: 'no_celular', seated: true },
+  segurando_copo: { label: 'segurando um copo', clip: 'segurando_copo', seated: true },
   bebado: { label: 'bêbado, cambaleando', clip: 'bebado' },
-  timido: { label: 'tímido, encolhido', clip: 'timido' },
-  abatido: { label: 'abatido, ombros caídos', clip: 'abatido' },
+  timido: { label: 'tímido, encolhido', clip: 'timido', seated: true },
+  abatido: { label: 'abatido, ombros caídos', clip: 'abatido', seated: true },
   ameacador: { label: 'em postura ameaçadora', clip: 'ameacador' },
   atordoado: { label: 'atordoado, zonzo', clip: 'atordoado' },
   em_guarda: {

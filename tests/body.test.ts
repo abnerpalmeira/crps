@@ -5,7 +5,8 @@ import { GameEngine } from '../src/engine/engine';
 import { parseBeats } from '../src/engine/frames';
 import { playerNarration } from '../src/engine/speech';
 import { runTool } from '../src/engine/tools';
-import { SYSTEM_PROMPT } from '../src/gm/prompts';
+import { SYSTEM_PROMPT, verifierPrompt } from '../src/gm/prompts';
+import { distanceToRect } from '../src/engine/text';
 
 /** Um galpão 10×7 com uma cama: o guarda (3,2) e o ladrão (6,2), a 3 tiles; a jogadora em (5,4). */
 function galpao(light = 1): GameEngine {
@@ -58,6 +59,28 @@ describe('poses', () => {
     // Deitado continua deitado: já está no chão.
     e.updateCharacter({ character_id: 'guarda', pose: 'deitado' });
     expect(bodyPose(e.state, e.state.characters.guarda)).toBe('deitado');
+  });
+
+  it('pose que não se faz sentado levanta quem está na cama; as de sentado, não', () => {
+    const e = galpao();
+    const bed = e.state.locations.galpao.fixtures.find((f) => f.kind === 'bed')!;
+    e.moveCharacter({ character_id: 'ladrao', to: { seat: bed.id } });
+    // Antes, deitado na cama, de_pe virava "sem mudanças": o assento mandava no corpo.
+    const r = runTool(e, 'update_character', { character_id: 'ladrao', pose: 'de_pe' });
+    expect(r.ok).toBe(true);
+    expect(r.summary).toContain('de pé (levantou da cama)');
+    const ladrao = e.state.characters.ladrao;
+    expect(ladrao.seatId).toBeNull();
+    expect(distanceToRect(ladrao.pos!, bed)).toBe(1);
+    expect(bodyPose(e.state, ladrao)).toBe('de_pe');
+    // Pensativo dá para ficar deitado; ajoelhar sai da cama e ajoelha ao lado dela.
+    e.moveCharacter({ character_id: 'guarda', to: { seat: bed.id } });
+    e.updateCharacter({ character_id: 'guarda', pose: 'pensativo' });
+    expect(bodyPose(e.state, e.state.characters.guarda)).toBe('deitado');
+    const r2 = e.updateCharacter({ character_id: 'guarda', pose: 'ajoelhado' });
+    expect(r2.stood_up?.from).toBe(bed.id);
+    expect(e.state.characters.guarda.seatId).toBeNull();
+    expect(bodyPose(e.state, e.state.characters.guarda)).toBe('ajoelhado');
   });
 
   it('o retrato do replay guarda a pose', () => {
@@ -175,5 +198,14 @@ describe('gestos na narração', () => {
     expect(SYSTEM_PROMPT).toContain('maos_ao_alto');
     expect(SYSTEM_PROMPT).toContain('ataca (soco, golpe, tiro ou flecha, pelo que empunha)');
     expect(SYSTEM_PROMPT).toContain('{id:gesto>alvo}');
+    expect(SYSTEM_PROMPT).toContain('levantar é update_character com pose de_pe');
+  });
+
+  it('o verificador cobra postura, passos e gestos da tabela sem marca', () => {
+    const prompt = verifierPrompt({ state: '', changes: [], input: '', narration: '' });
+    expect(prompt).toContain('recua, se afasta');
+    expect(prompt).toContain('se levanta, senta, deita, se ajoelha ou cai');
+    expect(prompt).toContain('gesto sem marca');
+    expect(prompt).toContain('encolhe_ombros');
   });
 });

@@ -431,8 +431,10 @@ O corpo de cada personagem no 3D segue o motor, em três camadas descritas como 
   cruzados, encostado, ao telefone, bêbado, em guarda, mirando… O mestre muda com
   `update_character` (`pose`, e `pose_target` para mirar ou apontar para alguém ou algo, em
   qualquer ângulo). Andar desfaz a pose. Sentar e deitar vêm do assento e da cama, e quem fica
-  com a vida em 0 cai sozinho (o 3D toca a queda). O retrato do turno guarda a pose, então o
-  replay mostra o corpo como estava.
+  com a vida em 0 cai sozinho (o 3D toca a queda). Pose que não se faz sentado (de pé,
+  ajoelhado, em guarda) levanta quem está num assento ou na cama para o lado do móvel; as que
+  se fazem sentado (pensativo, ao telefone, de braços cruzados) o deixam lá. O retrato do turno
+  guarda a pose, então o replay mostra o corpo como estava.
 - **Item na mão:** empunhar é `transfer_item` para `{character_id, hand}`, e guardar é mandar de
   volta sem `hand`. O item tem `model` (do catálogo) e `grip`, o jeito de empunhar: pistola,
   arma longa, arco, uma mão, duas mãos, escudo ou objeto. O arco e o escudo vão na esquerda,
@@ -449,6 +451,9 @@ O corpo de cada personagem no 3D segue o motor, em três camadas descritas como 
   - A interface tira as marcas do texto, e a versão do jogador some com os gestos de quem ele
     não vê.
   - Sentado ou ajoelhado, o gesto mexe só o tronco e os braços.
+  - O verificador cobra o corpo que a narração conta: quem se levanta, senta, deita, recua ou
+    vai até alguém sem a tool, e gesto da tabela narrado sem a marca. Sem isso, o 3D ficava
+    parado enquanto o texto contava que todo mundo se mexeu.
 
 A biblioteca da Synty não tem animação de arma de fogo. A pistola mira com o braço do clipe de
 apontar, o fuzil mira com a pose do arco (a coronha no ombro, a mão de apoio no guarda-mão) e
