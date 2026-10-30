@@ -1546,10 +1546,16 @@ export class GameEngine {
     light?: LightInput;
     model?: string;
     grip?: string;
+    text?: string;
+    written_by?: string;
   }): Item {
     const holder = this.resolveHolder(input.holder, this.currentLocation?.id ?? null);
     if (input.model) this.catalogModel(input.model, 'item');
     const grip = this.checkGrip(input.grip);
+    const author = input.written_by ? this.findCharacter(input.written_by).id : null;
+    // Sem modelo, o mais parecido do catálogo pelo nome e pela descrição: um item sem visual é uma
+    // caixinha no 3D. O mestre vê qual foi e troca se não combinar.
+    const model = input.model ?? modelCatalog()?.suggest(input.name, input.description, 1)[0]?.id;
     if (holder.kind === 'character' && holder.id === this.state.playerId && this.state.turn > 0) {
       this.conjureFor(this.state.characters[holder.id], `"${input.name}"`);
     }
@@ -1562,12 +1568,39 @@ export class GameEngine {
       quantity,
       holder,
       ...(input.light ? { light: { ...lightSpec(input.light), on: input.light.on ?? false } } : {}),
-      ...(input.model ? { model: input.model } : {}),
+      ...(model ? { model } : {}),
       ...(grip ? { grip } : {}),
     };
     this.wield(item, holder);
     this.state.items[item.id] = item;
+    if (input.text !== undefined) this.writeText(item, input.text, author);
     return item;
+  }
+
+  /**
+   * O que está escrito num item vira um fato com id, que quem escreveu sabe. Texto vazio marca um
+   * texto ainda não lido: a primeira leitura na narração define o conteúdo. Reescrever cria outro
+   * fato: quem leu a versão antiga continua sabendo só dela.
+   */
+  writeText(item: Item, text: string, authorId: string | null): Fact | null {
+    const content = text.trim();
+    if (!content) {
+      if (item.text === undefined) item.text = null;
+      return null;
+    }
+    if (content === item.text) return item.textFact ? (this.state.facts.find((f) => f.id === item.textFact) ?? null) : null;
+    const fact = this.addFact({ subject: item.id, text: `${item.name}: «${content}»`, known_by: authorId ? [authorId] : [] });
+    item.text = content;
+    item.textFact = fact.id;
+    return fact;
+  }
+
+  /** Alguém leu o texto do item: passa a saber o fato. Devolve se aprendeu agora. */
+  readText(item: Item, readerId: string): boolean {
+    const fact = item.textFact ? this.state.facts.find((f) => f.id === item.textFact) : undefined;
+    if (!fact || fact.knownBy === 'all' || fact.knownBy.includes(readerId)) return false;
+    fact.knownBy = [...fact.knownBy, readerId];
+    return true;
   }
 
   transferItem(input: { item_id: string; to: HolderRef; quantity?: number; thrown?: boolean }) {
@@ -1619,8 +1652,11 @@ export class GameEngine {
     light_on?: boolean;
     model?: string;
     grip?: string;
+    text?: string;
+    written_by?: string;
   }) {
     const item = this.findItem(input.item_id);
+    if (input.text !== undefined) this.writeText(item, input.text, input.written_by ? this.findCharacter(input.written_by).id : null);
     if (input.name) item.name = input.name;
     if (input.description) item.description = input.description;
     if (input.tags) item.tags = input.tags;

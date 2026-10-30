@@ -7,10 +7,12 @@ import { lightSources } from '../engine/light';
 import { typeChain } from '../engine/objects';
 import { lifeStatId, perceptionOf, strangerLabel, visionOf } from '../engine/perception';
 import type { Character, Fixture, Item, Location, ObjectType, WorldState } from '../engine/types';
+import { arrange, type Rect, type Spot } from './arrange';
 import { capitalize } from './format';
 import {
   characterModel,
   fixtureModel,
+  footprint,
   groundModel,
   heldModel,
   loadAction,
@@ -79,6 +81,12 @@ const V1 = new THREE.Vector3();
 const V2 = new THREE.Vector3();
 const V3 = new THREE.Vector3();
 const BASIS = new THREE.Matrix4();
+const UP = new THREE.Vector3(0, 1, 0);
+
+/** Quadrado de lado 2r em volta de um ponto do chão. */
+function around(x: number, z: number, r: number): Rect {
+  return { x0: x - r, z0: z - r, x1: x + r, z1: z + r };
+}
 
 interface WallPart {
   obj: THREE.Object3D;
@@ -144,6 +152,10 @@ export class WorldView {
   private surfaces = new Map<string, number>();
   /** Comprimento do modelo de cada móvel, que pode ser menor que os tiles dele (um sofá de 3 tiles). */
   private spans = new Map<string, number>();
+  /** O tampo de cada móvel com modelo, no espaço dele: onde os itens se apoiam. */
+  private areas = new Map<string, Rect>();
+  /** Largura e profundidade do modelo de cada item no chão ou num móvel, quando já carregou. */
+  private itemSizes = new Map<string, [number, number]>();
   private shown: { world: WorldState; loc: Location } | null = null;
   private selected: Pick | null = null;
   private selectionRing = playerRing('#ffffff');
@@ -315,6 +327,7 @@ export class WorldView {
   private clearRoom(): void {
     this.surfaces.clear();
     this.spans.clear();
+    this.areas.clear();
     for (const lamp of this.lamps.values()) lamp.dispose();
     this.lamps.clear();
     for (const id of [...this.balloons.keys()]) this.removeBalloon(id);
@@ -564,6 +577,7 @@ export class WorldView {
     tagPick(obj, { kind: 'fixture', id: f.id });
     this.surfaces.set(f.id, model.top);
     this.spans.set(f.id, model.span);
+    this.areas.set(f.id, model.area);
     // Com o modelo, quem está sentado nele e o que está em cima mudam de lugar.
     if (this.shown) {
       this.syncActors(this.shown.world, this.shown.loc);
@@ -624,10 +638,13 @@ export class WorldView {
     const chain = typeChain(world, seat.kind);
     if (chain.some((t) => t.bed)) {
       // Deitado na cama, ao comprido: a frente da cama é o pé, e a cabeça vai para o travesseiro, no
-      // lado oposto; o quadril desce um pouco do meio para ela caber nele.
+      // lado oposto. O quadril fica a meio corpo (0,95 m) da cabeceira do modelo; antes de ele
+      // carregar, um pouco abaixo do meio do espaço da cama (que cresce para o pé no layout antigo).
       const top = this.surfaces.get(seat.id) ?? chain.map((t) => t.surface).find((v) => v !== undefined) ?? 0.5;
       const center = new THREE.Vector3(seat.x + (seat.w - 1) / 2, top, seat.y + (seat.h - 1) / 2);
-      return { pos: center.add(new THREE.Vector3(0.3 * Math.sin(yaw), 0, 0.3 * Math.cos(yaw))), yaw, seated: false };
+      const head = this.areas.get(seat.id)?.z0;
+      const ahead = head !== undefined ? head + 0.95 : 0.3 + footprint(seat, chain).shift;
+      return { pos: center.add(new THREE.Vector3(ahead * Math.sin(yaw), 0, ahead * Math.cos(yaw))), yaw, seated: false };
     }
     const kinds = chain.map((t) => t.id);
     // Assento comprido com modelo mais curto que os tiles: quem senta fica dentro do modelo.
@@ -756,9 +773,13 @@ export class WorldView {
     const room = this.room;
     const model = await groundModel(item);
     if (!model || this.room !== room || this.items.get(item.id) !== obj) return;
+    const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
     for (const child of [...obj.children]) obj.remove(child);
     obj.add(model);
     tagPick(obj, { kind: 'item', id: item.id });
+    // Com o tamanho de verdade, os itens se rearranjam para não ficar um dentro do outro.
+    this.itemSizes.set(item.id, [size.x, size.z]);
+    if (this.shown) this.syncItems(this.shown.world, this.shown.loc);
   }
 
   private syncActors(world: WorldState, loc: Location): void {
@@ -827,44 +848,105 @@ export class WorldView {
   }
 
   private syncItems(world: WorldState, loc: Location): void {
-    const present = new Set<string>();
+    const spots = this.itemSpots(world, loc);
     for (const item of Object.values(world.items)) {
-      const h = item.holder;
-      let pos: THREE.Vector3 | null = null;
-      if (h.kind === 'ground' && h.locationId === loc.id) pos = new THREE.Vector3(h.x, 0.01, h.y);
-      if (h.kind === 'fixture') {
-        const f = loc.fixtures.find((fx) => fx.id === h.id);
-        if (f) {
-          const s = hash(item.id);
-          const surface = typeChain(world, f.kind).map((t) => t.surface).find((v) => v !== undefined);
-          pos = new THREE.Vector3(f.x + (f.w - 1) / 2 + ((s % 40) - 20) / 100, this.surfaces.get(f.id) ?? surface ?? 0.8, f.y + (f.h - 1) / 2 + (((s >>> 8) % 30) - 15) / 100);
-          if (f.kind === 'desk') {
-            const yaw = YAW[f.facing];
-            pos.add(new THREE.Vector3(0.16 * Math.sin(yaw), 0, 0.16 * Math.cos(yaw)));
-          }
-          if (f.kind === 'board') {
-            const [dx, dz] = DIR_VEC[f.facing];
-            pos.set(f.x + (f.w - 1) / 2 + ((s % 60) - 30) / 100, surface ?? 0.97, f.y + (f.h - 1) / 2).add(new THREE.Vector3(dx * 0.58, 0, dz * 0.58));
-          }
-        }
-      }
-      if (!pos) continue;
-      present.add(item.id);
+      const spot = spots.get(item.id);
+      if (!spot) continue;
       let obj = this.items.get(item.id);
       if (!obj) {
         obj = buildItem(item);
         tagPick(obj, { kind: 'item', id: item.id });
         this.room.add(obj);
         this.items.set(item.id, obj);
-        if (item.model) void this.upgradeItem(obj, item);
+        void this.upgradeItem(obj, item);
       }
-      obj.position.copy(pos);
+      obj.position.copy(spot.pos);
+      obj.rotation.y = spot.yaw;
     }
     for (const [id, obj] of this.items) {
-      if (present.has(id)) continue;
+      if (spots.has(id)) continue;
       this.room.remove(obj);
       this.items.delete(id);
     }
+  }
+
+  /**
+   * Onde fica cada item em cena: no chão, no tile dele; num móvel, no tampo do modelo, alinhado
+   * com ele. Dois corpos não ocupam o mesmo lugar: o item desvia de quem está ali (deitado na cama
+   * de ponta a ponta, sentado no assento, de pé no tile) e dos outros itens.
+   */
+  private itemSpots(world: WorldState, loc: Location): Map<string, { pos: THREE.Vector3; yaw: number }> {
+    const spots = new Map<string, { pos: THREE.Vector3; yaw: number }>();
+    const ground = new Map<string, { x: number; y: number; items: Item[] }>();
+    const onFixture = new Map<string, Item[]>();
+    for (const item of Object.values(world.items)) {
+      const h = item.holder;
+      if (h.kind === 'ground' && h.locationId === loc.id) {
+        const tile = ground.get(`${h.x},${h.y}`) ?? { x: h.x, y: h.y, items: [] };
+        tile.items.push(item);
+        ground.set(`${h.x},${h.y}`, tile);
+      }
+      if (h.kind === 'fixture') onFixture.set(h.id, [...(onFixture.get(h.id) ?? []), item]);
+    }
+    const people = Object.values(world.characters).filter((c) => c.locationId === loc.id && c.pos);
+    const spot = (item: Item, x: number, z: number): Spot => {
+      const [w, d] = this.itemSizes.get(item.id) ?? [0.2, 0.14];
+      return { id: item.id, w, d, x, z };
+    };
+    for (const { x, y, items } of ground.values()) {
+      const standing = people.filter((c) => !c.seatId && c.pos!.x === x && c.pos!.y === y).map(() => around(x, y, 0.25));
+      const placed = arrange(
+        around(x, y, 0.45),
+        standing,
+        items.map((item) => {
+          const s = hash(item.id);
+          return spot(item, x + ((s % 30) - 15) / 100, y + (((s >>> 8) % 30) - 15) / 100);
+        }),
+      );
+      for (const [id, p] of placed) spots.set(id, { pos: new THREE.Vector3(p.x, 0.01, p.z), yaw: p.turned ? Math.PI / 2 : 0 });
+    }
+    for (const [id, items] of onFixture) {
+      const f = loc.fixtures.find((fx) => fx.id === id);
+      if (!f) continue;
+      const chain = typeChain(world, f.kind);
+      const surface = chain.map((t) => t.surface).find((v) => v !== undefined);
+      const center = new THREE.Vector3(f.x + (f.w - 1) / 2, 0, f.y + (f.h - 1) / 2);
+      if (f.kind === 'board') {
+        const [dx, dz] = DIR_VEC[f.facing];
+        for (const item of items) {
+          const s = hash(item.id);
+          spots.set(item.id, { pos: new THREE.Vector3(center.x + ((s % 60) - 30) / 100 + dx * 0.58, surface ?? 0.97, center.z + dz * 0.58), yaw: 0 });
+        }
+        continue;
+      }
+      const yaw = YAW[f.facing];
+      const room = footprint(f, chain);
+      // Antes de o modelo carregar, o miolo do espaço do móvel.
+      const area = this.areas.get(f.id) ?? { x0: -room.w * 0.35, z0: room.shift - room.d * 0.35, x1: room.w * 0.35, z1: room.shift + room.d * 0.35 };
+      const bed = chain.some((t) => t.bed);
+      const blocked = people
+        .filter((c) => c.seatId === f.id)
+        .map((c) => {
+          const p = this.placement(world, c, loc).pos.sub(center).applyAxisAngle(UP, -yaw);
+          // Deitado, o corpo ocupa a cama de ponta a ponta numa faixa no meio; sentado, o assento.
+          return bed ? { x0: p.x - 0.28, z0: area.z0, x1: p.x + 0.28, z1: area.z1 } : around(p.x, p.z, 0.3);
+        });
+      // A carteira tem o tampo na frente de quem senta.
+      const mid = { x: (area.x0 + area.x1) / 2, z: (area.z0 + area.z1) / 2 + (f.kind === 'desk' ? 0.16 : 0) };
+      const placed = arrange(
+        area,
+        blocked,
+        items.map((item) => {
+          const s = hash(item.id);
+          return spot(item, mid.x + ((s % 40) - 20) / 100, mid.z + (((s >>> 8) % 30) - 15) / 100);
+        }),
+      );
+      const top = this.surfaces.get(f.id) ?? surface ?? 0.8;
+      for (const [itemId, p] of placed) {
+        spots.set(itemId, { pos: new THREE.Vector3(p.x, top, p.z).applyAxisAngle(UP, yaw).add(center), yaw: yaw + (p.turned ? Math.PI / 2 : 0) });
+      }
+    }
+    return spots;
   }
 
   /**

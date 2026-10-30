@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import type { Character, Figure, Fixture, Grip, Item, ObjectType } from '../engine/types';
+import type { Rect } from './arrange';
 
 /**
  * Modelos 3D comprados (Synty), convertidos por `npm run assets` para public/models, fora do git,
@@ -93,6 +94,25 @@ const sources = new Map<string, Promise<THREE.Object3D>>();
 const clipFiles = new Map<string, Promise<THREE.AnimationClip | null>>();
 const atlases = new Map<string, THREE.Material>();
 const metas = new Map<string, Promise<ModelMeta | null>>();
+const guesses = new Map<string, Promise<string | null>>();
+
+/**
+ * O modelo de um item: o que o mestre (ou o motor) escolheu; sem nenhum, o servidor dá o mais
+ * parecido pelo nome e pela descrição (itens de campanhas antigas), só para o visual.
+ */
+function itemModelId(item: Item): Promise<string | null> {
+  if (item.model) return Promise.resolve(item.model);
+  const key = `${item.name}|${item.description}`;
+  let promise = guesses.get(key);
+  if (!promise) {
+    promise = fetch(`/api/models/guess?name=${encodeURIComponent(item.name)}&desc=${encodeURIComponent(item.description)}`)
+      .then((res) => (res.ok ? (res.json() as Promise<{ id: string }>) : null))
+      .then((r) => r?.id ?? null)
+      .catch(() => null);
+    guesses.set(key, promise);
+  }
+  return promise;
+}
 const textured = new Map<string, THREE.Material>();
 
 function loadCatalog(): Promise<Catalog | null> {
@@ -202,9 +222,38 @@ function paint(root: THREE.Object3D, material: THREE.Material): void {
  * para caber; com stretch, a peça mais curta estica no comprimento. `span` é o comprimento da peça
  * principal. null = sem modelo.
  */
-export async function fixtureModel(f: Fixture, chain: ObjectType[]): Promise<{ group: THREE.Group; top: number; span: number } | null> {
+/**
+ * O espaço em que o modelo de um móvel cabe, no espaço dele (largura × profundidade, frente = +z).
+ * Objeto comprido (cama, carro) que um layout antigo desenhou menor que o tamanho típico ocupa o
+ * tamanho típico, crescendo para a frente, que é a ponta livre (o pé da cama), em vez de virar
+ * miniatura; `shift` é quanto o centro dele anda para a frente.
+ */
+export function footprint(f: Fixture, chain: ObjectType[]): { w: number; d: number; shift: number } {
+  const alongX = f.facing === 'N' || f.facing === 'S';
+  const w = alongX ? f.w : f.h;
+  const d = alongX ? f.h : f.w;
+  const size = chain.find((t) => t.size)?.size;
+  const m = chain.some((t) => t.facing === 'lengthwise') ? /^(\d+)\s*[×x]\s*(\d+)$/.exec(size ?? '') : null;
+  if (!m) return { w, d, shift: 0 };
+  const [short, long] = [Number(m[1]), Number(m[2])].sort((a, b) => a - b);
+  const full = Math.max(d, long);
+  return { w: Math.max(w, short), d: full, shift: (full - d) / 2 };
+}
+
+/** Um móvel montado, com o que a cena precisa saber dele para pôr gente e coisas em cima. */
+export interface FixtureModel {
+  group: THREE.Group;
+  /** Altura do tampo (ou do assento). */
+  top: number;
+  /** Comprimento do assento, de lado. */
+  span: number;
+  /** O tampo da peça principal no chão, no espaço do móvel (frente = +z): onde os itens se apoiam. */
+  area: Rect;
+}
+
+export async function fixtureModel(f: Fixture, chain: ObjectType[]): Promise<FixtureModel | null> {
   const chosen = chain.find((t) => t.model)?.model;
-  const picked = chosen ? await catalogFixture(f, chosen) : null;
+  const picked = chosen ? await catalogFixture(f, chain, chosen) : null;
   if (picked) return picked;
   const kinds = chain.length ? chain.map((t) => t.id) : [f.kind];
   const cat = await loadCatalog();
@@ -212,11 +261,13 @@ export async function fixtureModel(f: Fixture, chain: ObjectType[]): Promise<{ g
   if (!cat || !entry?.length) return null;
   const variants = (Array.isArray(entry[0]) ? entry : [entry]) as Part[][];
   const parts = variants[hash(f.id) % variants.length];
-  const alongX = f.facing === 'N' || f.facing === 'S';
-  const room = { w: alongX ? f.w : f.h, d: alongX ? f.h : f.w };
+  const room = footprint(f, chain);
+  const lengthwise = chain.some((t) => t.facing === 'lengthwise');
   const group = new THREE.Group();
+  group.position.z = room.shift;
   let top = 0;
   let span = room.w;
+  let area: Rect = { x0: -room.w / 2, z0: room.shift - room.d / 2, x1: room.w / 2, z1: room.shift + room.d / 2 };
   for (const part of parts) {
     const entry = cat.props[part.model];
     const obj = (await source(BASE + entry.file)).clone();
@@ -226,19 +277,27 @@ export async function fixtureModel(f: Fixture, chain: ObjectType[]): Promise<{ g
     const turned = Math.round((part.yaw ?? 0) / 90) % 2 !== 0;
     const scale = part.fit === false ? grow : grow * Math.min(1, (room.w * 0.98) / (turned ? md : mw), (room.d * 0.98) / (turned ? mw : md));
     obj.scale.setScalar(scale);
-    const length = (turned ? entry.size[2] : entry.size[0]) * scale;
-    const stretch = part.stretch && !turned ? Math.max(1, (room.w * 0.95) / length) : 1;
-    obj.scale.x *= stretch;
+    // De lado e de frente no espaço do móvel (a peça virada troca os dois).
+    const across = (turned ? entry.size[2] : entry.size[0]) * scale;
+    const along = (turned ? entry.size[0] : entry.size[2]) * scale;
+    // Esticar vai no comprido do móvel: a largura do sofá, o comprimento da cama.
+    const stretch = part.stretch ? Math.max(1, lengthwise ? (room.d * 0.95) / along : (room.w * 0.95) / across) : 1;
+    if (lengthwise !== turned) obj.scale.z *= stretch;
+    else obj.scale.x *= stretch;
     obj.position.set(part.x ?? 0, part.y ?? 0, part.z ?? 0);
     obj.rotation.y = THREE.MathUtils.degToRad(part.yaw ?? 0);
     group.add(obj);
     // A primeira peça é a principal (a mesa da carteira): é nela que os itens ficam apoiados.
     if (part === parts[0]) {
       top = (part.y ?? 0) + entry.size[1] * scale;
-      span = length * stretch;
+      const w = lengthwise ? across : across * stretch;
+      const d = lengthwise ? along * stretch : along;
+      span = w;
+      const [x, z] = [part.x ?? 0, room.shift + (part.z ?? 0)];
+      area = { x0: x - w / 2, z0: z - d / 2, x1: x + w / 2, z1: z + d / 2 };
     }
   }
-  return { group, top, span };
+  return { group, top, span, area };
 }
 
 /**
@@ -247,13 +306,12 @@ export async function fixtureModel(f: Fixture, chain: ObjectType[]): Promise<{ g
  * bem menor que o espaço cresce até ocupá-lo: os pacotes "simple" vêm em miniatura (o cavalo tem
  * 43 cm).
  */
-async function catalogFixture(f: Fixture, id: string): Promise<{ group: THREE.Group; top: number; span: number } | null> {
+async function catalogFixture(f: Fixture, chain: ObjectType[], id: string): Promise<FixtureModel | null> {
   const meta = await modelMeta(id);
   if (!meta || meta.kind !== 'prop') return null;
   const obj = (await source(FILES + meta.file)).clone();
   paintCatalog(obj, meta);
-  const alongX = f.facing === 'N' || f.facing === 'S';
-  const room = { w: alongX ? f.w : f.h, d: alongX ? f.h : f.w };
+  const room = footprint(f, chain);
   // O lado comprido do modelo vai no lado comprido do espaço (o cavalo deitado num 2×1).
   const turned = room.w !== room.d && room.w > room.d !== meta.size[0] > meta.size[2];
   const [w, h, d] = turned ? [meta.size[2], meta.size[1], meta.size[0]] : meta.size;
@@ -263,8 +321,10 @@ async function catalogFixture(f: Fixture, id: string): Promise<{ group: THREE.Gr
   obj.scale.setScalar(scale);
   if (turned) obj.rotation.y = Math.PI / 2;
   const group = new THREE.Group();
+  group.position.z = room.shift;
   group.add(obj);
-  return { group, top: h * scale, span: w * scale };
+  const [sw, sd] = [w * scale, d * scale];
+  return { group, top: h * scale, span: sw, area: { x0: -sw / 2, z0: room.shift - sd / 2, x1: sw / 2, z1: room.shift + sd / 2 } };
 }
 
 const FEMN = /\b(aluna|professora|diretora|menina|garota|filha|m[ãa]e|senhora|esposa|enfermeira|m[ée]dica|secret[áa]ria|cozinheira|dona|mulher|moça|moca|jovem mulher|ela)\b/;
@@ -430,7 +490,8 @@ function heldPrimitive(grip: Grip): ItemModel {
  * Objeto comum fica com o meio na mão. Sem modelo, uma primitiva do jeito de empunhar.
  */
 export async function heldModel(item: Item, grip: Grip): Promise<ItemModel> {
-  const meta = item.model ? await modelMeta(item.model, true) : null;
+  const id = await itemModelId(item);
+  const meta = id ? await modelMeta(id, true) : null;
   if (!meta || meta.kind !== 'held' || !meta.bbox) return heldPrimitive(grip);
   const model = (await source(FILES + meta.file)).clone();
   paintCatalog(model, meta);
@@ -471,7 +532,8 @@ export async function heldModel(item: Item, grip: Grip): Promise<ItemModel> {
  * null sem modelo (o 3D segue com a primitiva).
  */
 export async function groundModel(item: Item): Promise<THREE.Object3D | null> {
-  const meta = item.model ? await modelMeta(item.model) : null;
+  const id = await itemModelId(item);
+  const meta = id ? await modelMeta(id) : null;
   if (!meta || meta.kind !== 'prop') return null;
   const model = (await source(FILES + meta.file)).clone();
   paintCatalog(model, meta);
@@ -482,6 +544,13 @@ export async function groundModel(item: Item): Promise<THREE.Object3D | null> {
   if (h > 1.8 * Math.max(w, d) && h > 0.25) {
     model.rotation.z = Math.PI / 2;
     model.position.set(h / 2, Math.max(w, d) / 2, 0);
+  } else if (d < 0.2 * Math.min(w, h)) {
+    // Folha em pé (bilhete, carta, placa): deita com a face para cima.
+    model.rotation.x = -Math.PI / 2;
+    model.position.set(0, d / 2, h / 2);
+  } else if (w < 0.2 * Math.min(d, h)) {
+    model.rotation.z = Math.PI / 2;
+    model.position.set(h / 2, w / 2, 0);
   }
   // Coisa grande demais para um item (um erro do modelo) encolhe para caber num tile.
   const big = Math.max(w, h, d);

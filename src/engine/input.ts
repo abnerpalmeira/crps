@@ -1,3 +1,4 @@
+import { parseMenuActs, type MenuAct } from './actions';
 import { strangerLabel } from './perception';
 import { fold } from './text';
 import type { Character, WorldState } from './types';
@@ -5,9 +6,10 @@ import type { Character, WorldState } from './types';
 /**
  * Marcas na ação do jogador, com convenções de livro e de chat: "fala" entre aspas (ou — fala
  * no começo da linha), *ação* entre asteriscos, (pensamento) entre parênteses e @Nome "sussurro".
- * Texto sem marca é ação ou intenção, como sempre foi.
+ * Ações escolhidas no menu do 3D vêm como `{verbo>alvo}`, com os ids (actions.ts). Texto sem
+ * marca é ação ou intenção, como sempre foi.
  */
-export type InputKind = 'fala' | 'sussurro' | 'pensamento' | 'acao';
+export type InputKind = 'fala' | 'sussurro' | 'pensamento' | 'acao' | 'menu';
 
 export interface InputSegment {
   kind: InputKind;
@@ -16,6 +18,8 @@ export interface InputSegment {
   target?: string;
   /** Texto sem marca (ação ou intenção livre). */
   free?: boolean;
+  /** Ação do menu: o verbo e os ids. */
+  act?: MenuAct;
 }
 
 const PAIRS: Record<string, [close: string, kind: InputKind]> = {
@@ -27,6 +31,9 @@ const PAIRS: Record<string, [close: string, kind: InputKind]> = {
 
 /** Palavras que só ligam as partes ("digo", "e então") e não são uma ação. */
 const GLUE = new Set(['e', 'entao', 'ai', 'depois', 'mas', 'enquanto', 'logo', 'eu', 'digo', 'falo', 'pergunto', 'respondo', 'penso', 'sussurro', 'cochicho']);
+
+/** Marca de ação do menu no começo do trecho: `{sentar>sala/cadeira-3}`. */
+const MENU = /^\{\s*[a-z_]+\s*(?:>\s*[^\s{}>]+\s*){0,2}\}/i;
 
 /** @Nome "…", ou @[o homem de terno] "…" para quem o jogador não sabe o nome. */
 const WHISPER = /^@(?:\[([^\]]+)\]|([\p{L}\p{N}_-]+))\s*[:,]?\s*(["“])/u;
@@ -51,6 +58,14 @@ export function parsePlayerInput(input: string): InputSegment[] {
     let pending = '';
     let i = 0;
     while (i < line.length) {
+      const menu = line[i] === '{' ? MENU.exec(line.slice(i)) : null;
+      if (menu) {
+        free(pending);
+        pending = '';
+        push({ kind: 'menu', text: menu[0], act: parseMenuActs(menu[0])[0] });
+        i += menu[0].length;
+        continue;
+      }
       const whisper = line[i] === '@' ? WHISPER.exec(line.slice(i)) : null;
       const pair = PAIRS[line[i]];
       if (!whisper && !pair) {
@@ -87,9 +102,15 @@ export function findByName(world: WorldState, ref: string): Character | null {
   return matches.find((c) => c.locationId === here) ?? matches[0] ?? null;
 }
 
-/** As partes marcadas, uma por linha, para o mestre não confundir fala, pensamento e ação. */
-export function describeInput(world: WorldState, segments: InputSegment[]): string[] {
+/**
+ * As partes marcadas, uma por linha, para o mestre não confundir fala, pensamento e ação. As ações
+ * do menu chegam já resolvidas (`menu`, na ordem em que aparecem): feitas pelo motor, recusadas
+ * por ele ou passadas ao mestre com os ids.
+ */
+export function describeInput(world: WorldState, segments: InputSegment[], menu: string[] = []): string[] {
+  let next = 0;
   return segments.map((s) => {
+    if (s.kind === 'menu') return menu[next++] ?? `- ação do menu: ${s.text}`;
     if (s.kind === 'fala') return `- fala (em voz alta): "${s.text}"`;
     if (s.kind === 'pensamento') return `- pensamento (só na cabeça dele): ${s.text}`;
     if (s.kind === 'acao') return `- ação: ${s.text}`;

@@ -1,5 +1,6 @@
 import { actTags, filterActs, stripActs, type Act } from './body';
 import { parseSpeechLine } from './frames';
+import { analyzeReading } from './reading';
 import { distanceBetween, perceivesSpeech, perceptionOf, speechPerks, strangerLabel, voiceLabel } from './perception';
 import type { WorldState } from './types';
 
@@ -26,7 +27,8 @@ export function analyzeSpeech(world: WorldState, narration: string): { issues: s
   const lines: SpeechLine[] = [];
   narration.split('\n').forEach((raw, index) => {
     const p = parseSpeechLine(raw);
-    if (!p || p.hidden) return;
+    // Linha com id de item é leitura (reading.ts), não fala.
+    if (!p || p.hidden || world.items[p.speakerId]) return;
     const speaker = world.characters[p.speakerId];
     if (!speaker) {
       issues.push(`A fala "@${p.speakerId}" usa um id que não existe; use o id do personagem que fala.`);
@@ -79,7 +81,8 @@ const clean = (s: string) => s.replace(/[\]|]/g, ' ').trim();
  * nem vê quem fala; as que ele só percebeu graças a um perk dizem qual. Quem ele não sabe quem é
  * (estranho, ou vulto que ele não reconhece) vem com o nome que ele daria: "o homem de terno",
  * "uma voz de mulher". Conhecido que ele ouve é reconhecido pela voz. Gestos (`{id:gesto}`) de
- * quem ele não vê somem; os de uma fala que ele não ouviu ficam, porque o gesto ele vê.
+ * quem ele não vê somem; os de uma fala que ele não ouviu ficam, porque o gesto ele vê. Leitura
+ * (`@item[>leitor]: texto`) mostra o texto só quando quem lê é ele; de outro, só que a pessoa lê.
  */
 export function playerNarration(world: WorldState, narration: string): string {
   const viewer = world.playerId;
@@ -87,8 +90,21 @@ export function playerNarration(world: WorldState, narration: string): string {
   const view = perceptionOf(world, viewer);
   const seen = (act: Act) => act.actorId === viewer || !world.characters[act.actorId] || view.sight(act.actorId) !== 'nada';
   const lines = new Map(analyzeSpeech(world, narration).lines.map((l) => [l.index, l]));
+  const readings = new Map(analyzeReading(world, narration).lines.map((l) => [l.index, l]));
   const out: string[] = [];
   narration.split('\n').forEach((raw, i) => {
+    const reading = readings.get(i);
+    if (reading) {
+      const gestures = actTags(filterActs(parseSpeechLine(raw)?.text ?? '', seen));
+      const item = world.items[reading.itemId];
+      if (reading.readerId === viewer) return void out.push(`@${item.id}[leitura>${viewer}]: ${[reading.text, ...gestures].join(' ')}`);
+      if (view.sight(reading.readerId) === 'nada') return void (gestures.length && out.push(gestures.join(' ')));
+      const reader = world.characters[reading.readerId];
+      const who = view.recognize(reader.id) ? reader.name.split(' ')[0] : clean(strangerLabel(reader));
+      return void out.push(`@${item.id}[leitura>${reader.id}|oculto]: ${[`${who} lê ${item.name.toLowerCase()}`, ...gestures].join(' ')}`);
+    }
+    // Leitura que o motor não aceitou (longe, no escuro, texto trocado) não mostra o texto a ninguém.
+    if (world.items[parseSpeechLine(raw)?.speakerId ?? '']) return;
     const line = lines.get(i);
     if (!line) return void out.push(filterActs(raw, seen));
     const heard = line.hearers.includes(viewer);

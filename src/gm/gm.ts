@@ -2,6 +2,8 @@ import { compileBrief } from '../engine/brief';
 import type { GameEngine } from '../engine/engine';
 import { describeInput, hasMarks, parsePlayerInput } from '../engine/input';
 import { analyzeActs } from '../engine/body';
+import { performMenuAct } from '../engine/perform';
+import { analyzeReading } from '../engine/reading';
 import { analyzeSpeech, playerNarration, type SpeechLine } from '../engine/speech';
 import { runTool, toolSpecs, type ToolResult } from '../engine/tools';
 import type { WorldState } from '../engine/types';
@@ -73,11 +75,25 @@ export class GameMaster {
         const thought = segments.filter((s) => s.kind === 'pensamento').map((s) => s.text).join(' ');
         engine.updateCharacter({ character_id: player.id, thoughts: thought });
       }
-      const marked = hasMarks(segments) ? describeInput(engine.state, segments) : [];
+      // Ações do menu: o motor faz agora as físicas (sentar, pegar, empunhar…), com as mesmas tools;
+      // o mestre recebe o resultado e resolve o resto com os ids.
+      const menu = segments.filter((s) => s.kind === 'menu').map((s) => performMenuAct(engine, s.act!));
+      const changes: string[] = [];
+      for (const { name, input: args, result } of menu.flatMap((o) => o.tools)) {
+        emit({ type: 'tool', name, ok: result.ok, summary: result.summary, input: args, result: result.content });
+        if (result.ok && result.mutated) changes.push(result.summary);
+      }
+      if (changes.length) emit({ type: 'state', world: engine.snapshot() });
+      const marked = hasMarks(segments) ? describeInput(engine.state, segments, menu.map((o) => o.line)) : [];
       const brief = compileBrief(engine);
       engine.log('player', input);
+      for (const summary of changes) engine.log('tool', summary);
       const verified = marked.length ? `${input}\n\nComo o jogador marcou:\n${marked.join('\n')}` : input;
-      await this.runTurn(engine, turnMessage(brief, input, marked), this.opts.effortTurn ?? 'low', verified, emit);
+      // O gesto escolhido no menu acontece no 3D mesmo que a narração esqueça a marca.
+      const gestures = menu
+        .filter((o) => o.act.verb === 'gesto' && o.act.target && player)
+        .map((o) => `{${player!.id}:${o.act.target}${o.act.other ? `>${o.act.other}` : ''}}`);
+      await this.runTurn(engine, turnMessage(brief, input, marked), this.opts.effortTurn ?? 'low', verified, emit, changes, gestures);
     });
   }
 
@@ -93,14 +109,27 @@ export class GameMaster {
     }
   }
 
-  private async runTurn(engine: GameEngine, userMessage: string, effort: Effort, input: string, emit: Emit): Promise<void> {
+  /** `changes` traz o que o motor já fez antes do mestre (ações do menu); `gestures`, marcas que a narração precisa ter. */
+  private async runTurn(
+    engine: GameEngine,
+    userMessage: string,
+    effort: Effort,
+    input: string,
+    emit: Emit,
+    done: string[] = [],
+    gestures: string[] = [],
+  ): Promise<void> {
     const session = this.opts.provider.startSession({ system: this.opts.system ?? SYSTEM_PROMPT, tools: toolSpecs(), userMessage, effort });
-    const changes: string[] = [];
+    const changes = [...done];
     let result = await this.loop(engine, session, emit, changes);
 
     if (result.verifiable && result.text) {
-      // Alcance das falas e dos gestos é regra do motor: confere sem depender do verificador.
-      const speechIssues = [...analyzeSpeech(engine.state, result.text).issues, ...analyzeActs(engine.state, result.text)];
+      // Alcance das falas, dos gestos e das leituras é regra do motor: confere sem depender do verificador.
+      const speechIssues = [
+        ...analyzeSpeech(engine.state, result.text).issues,
+        ...analyzeActs(engine.state, result.text),
+        ...analyzeReading(engine.state, result.text).issues,
+      ];
       const verdict = this.opts.verify !== false ? await this.check(engine, changes, input, result.text, emit) : null;
       if (verdict) emit({ type: 'verify', ...verdict });
       if (speechIssues.length) emit({ type: 'verify', consistent: false, issues: speechIssues });
@@ -113,12 +142,21 @@ export class GameMaster {
       }
     }
 
-    const text = result.text || SILENCE;
+    const told = result.text || SILENCE;
+    const missing = gestures.filter((g) => !told.includes(g));
+    const text = missing.length ? `${missing.join(' ')}\n${told}` : told;
     const speech = analyzeSpeech(engine.state, text);
-    const outside = [...speech.issues, ...analyzeActs(engine.state, text)];
-    if (outside.length) emit({ type: 'status', text: `Falas e gestos ainda fora das regras: ${outside.join(' ')}` });
+    const reading = analyzeReading(engine.state, text);
+    const outside = [...speech.issues, ...analyzeActs(engine.state, text), ...reading.issues];
+    if (outside.length) emit({ type: 'status', text: `Falas, gestos e leituras ainda fora das regras: ${outside.join(' ')}` });
     this.recordSpeech(engine, speech.lines);
     engine.hearVoices(speech.lines);
+    // Quem leu passa a saber o texto; a primeira leitura de um texto ainda não escrito o define.
+    for (const line of reading.lines) {
+      const item = engine.state.items[line.itemId];
+      if (typeof item.text !== 'string') engine.writeText(item, line.text, null);
+      engine.readText(item, line.readerId);
+    }
     const shown = playerNarration(engine.state, text);
     engine.log('narration', text, shown !== text ? shown : undefined);
     engine.recordFrame();

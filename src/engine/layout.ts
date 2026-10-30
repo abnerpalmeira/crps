@@ -18,6 +18,7 @@ export function tileOf(t: ObjectType, char: string): TileDef {
     facing: t.facing ?? 'none',
     ...(t.table ? { table: true } : {}),
     ...(t.exit ? { exit: t.exit } : {}),
+    ...(t.size ? { size: t.size } : {}),
   };
 }
 
@@ -43,8 +44,28 @@ export function defaultExits(fixtures: Fixture[]): Record<string, Exit> {
 
 export function legendSummary(): string {
   return Object.values(LEGEND)
-    .map((d) => `'${d.char}' ${d.label}${d.seat ? ' (assento)' : ''}`)
+    .map((d) => {
+      const notes = [d.seat && 'assento', d.size].filter(Boolean).join(', ');
+      return `'${d.char}' ${d.label}${notes ? ` (${notes})` : ''}`;
+    })
     .join(', ');
+}
+
+/**
+ * Objeto comprido (cama, carro, cápsula) num espaço menor que o tamanho típico: o modelo do 3D
+ * encolheria até virar miniatura. Devolve o erro com o desenho certo, ou null se cabe.
+ */
+function tooSmall(r: { x: number; y: number; w: number; h: number; def: TileDef }): string | null {
+  const m = r.def.facing === 'lengthwise' ? /^(\d+)\s*[×x]\s*(\d+)$/.exec(r.def.size ?? '') : null;
+  if (!m) return null;
+  const [short, long] = [Number(m[1]), Number(m[2])].sort((a, b) => a - b);
+  if (Math.min(r.w, r.h) >= short && Math.max(r.w, r.h) >= long) return null;
+  const c = r.def.char;
+  const draw =
+    short === 1
+      ? `desenhe ${c.repeat(long)} numa linha ou '${c}' em ${long} linhas seguidas`
+      : `desenhe um bloco de ${short} linhas de ${c.repeat(long)} (ou ${long} linhas de ${c.repeat(short)})`;
+  return `${r.def.label} ('${c}') em (${r.x},${r.y}) ocupa ${r.w}×${r.h} tiles e precisa de ${short}×${long}, senão vira miniatura: ${draw}.`;
 }
 
 export function isFixtureDef(d: TileDef): boolean {
@@ -325,6 +346,8 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
     if (r.def.exit && !SIDES.some((s) => sideTiles(r, s).some((p) => def(p.x, p.y).passable))) {
       errors.push(`${at} não dá para nenhum chão.`);
     }
+    const small = tooSmall(r);
+    if (small) errors.push(small);
     counters[r.def.slug] = (counters[r.def.slug] ?? 0) + 1;
     fixtures.push({
       id: `${spec.id}/${r.def.slug}-${counters[r.def.slug]}`,

@@ -180,6 +180,12 @@ const itemGrip = z
       'duas_maos (lança, montante, cajado), escudo, objeto (o resto). Decide a mão e as animações de quem o segura.',
   );
 
+const itemText = z
+  .string()
+  .describe(
+    'O que está escrito (bilhete, carta, livro, placa), fixo depois de escrito. "" marca um texto que ninguém leu ainda: a primeira leitura na narração define o conteúdo.',
+  );
+
 const itemInput = z.object({
   id: z.string().optional(),
   name: z.string(),
@@ -190,6 +196,8 @@ const itemInput = z.object({
   light: lightInput.optional().describe('Para itens que iluminam (lanterna, vela, tocha).'),
   model: itemModel.optional(),
   grip: itemGrip.optional(),
+  text: itemText.optional(),
+  written_by: z.string().optional().describe('Quem escreveu o texto: sabe o que está escrito.'),
 });
 
 const facingRule = z.enum(['interior', 'board', 'away_board', 'table', 'open_side', 'lengthwise', 'none']);
@@ -210,6 +218,11 @@ const objectTypeInput = z.object({
     .optional()
     .describe('interior (na parede, de frente para a sala), open_side (de frente para o lado livre), table (para a mesa vizinha), lengthwise (no comprimento: cama, carro).'),
   model: z.string().optional().describe('Modelo do catálogo 3D para o visual: o id que search_models devolve.'),
+  actions: z
+    .array(z.string())
+    .max(6)
+    .optional()
+    .describe('O que o jogador pode fazer com ele pelo menu, no infinitivo ("tocar", "jogar sinuca", "abrir"). Sentar, deitar e passar vêm das outras propriedades.'),
 });
 
 const MODEL_CATEGORIES = ['objeto', 'construcao', 'ambiente', 'veiculo', 'arma', 'acessorio', 'efeito', 'personagem', 'animal', 'outro'] as const;
@@ -460,13 +473,24 @@ export const TOOLS = [
     description:
       'Cria itens em lote: no inventário de alguém, na mão (holder com hand), sobre um móvel ou no chão. Todo objeto que importe ' +
       'para a história e possa mudar de mãos precisa existir aqui antes de ser usado ou narrado. No meio do jogo, nada é criado ' +
-      'direto com o personagem do jogador (salvo perk de conjurar): crie onde o objeto está e entregue com transfer_item. Armas ' +
-      'e objetos que alguém vai segurar levam model (de search_models) e grip, para aparecerem na mão.',
+      'direto com o personagem do jogador (salvo perk de conjurar): crie onde o objeto está e entregue com transfer_item. Sem model, ' +
+      'o motor escolhe o modelo 3D mais parecido pelo nome e pela descrição e diz qual foi: se não combinar, troque com update_item ' +
+      'model. Armas e objetos que alguém vai segurar levam grip, para aparecerem na mão do jeito certo.',
     schema: z.object({ items: z.array(itemInput).min(1).max(30) }),
     mutates: true,
     run(engine, input) {
       const created = input.items.map((spec) => engine.createItem(spec));
       const conjured = created.map((i) => engine.conjuredBy(i));
+      const catalog = modelCatalog();
+      // Modelo que o motor escolheu (o mestre não informou): diz qual foi e o que mais serviria.
+      const picked = (i: (typeof created)[number], k: number) => {
+        if (input.items[k].model || !i.model || !catalog) return {};
+        const options = catalog.suggest(i.name, i.description, 4);
+        return {
+          model: `${i.model} (${catalog.get(i.model)?.desc ?? ''}), escolhido pelo nome`,
+          other_models: options.slice(1).map((m) => `${m.id} (${m.desc ?? ''})`),
+        };
+      };
       return {
         content: {
           created: created.map((i, k) => ({
@@ -475,6 +499,7 @@ export const TOOLS = [
             quantity: i.quantity,
             where: engine.describeHolder(i.holder),
             ...(conjured[k] ? { conjured_by: conjured[k]!.name } : {}),
+            ...picked(i, k),
           })),
         },
         summary: `${conjured.some(Boolean) ? '✨' : '📦'} ${created
@@ -681,6 +706,8 @@ export const TOOLS = [
       light: lightInput.nullable().optional().describe('Define a luz do item; null tira.'),
       model: itemModel.optional(),
       grip: itemGrip.optional(),
+      text: itemText.optional().describe('Escreve ou reescreve o texto do item (com written_by, quem escreveu fica sabendo).'),
+      written_by: z.string().optional(),
     }),
     mutates: true,
     run(engine, input) {

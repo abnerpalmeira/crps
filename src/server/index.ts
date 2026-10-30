@@ -164,6 +164,12 @@ const server = createServer(async (req, res) => {
       const meta = await models.meta(id, params.get('as') === 'held');
       return meta ? json(res, 200, meta) : json(res, 404, { error: `Modelo ${id} indisponível.` });
     }
+    if (pathname === '/api/models/guess' && req.method === 'GET') {
+      // Item sem modelo (de campanhas antigas): o mais parecido pelo nome e pela descrição, só para o visual.
+      const params = new URL(req.url ?? '/', 'http://localhost').searchParams;
+      const id = catalog?.suggest(params.get('name') ?? '', params.get('desc') ?? '', 1)[0]?.id;
+      return id ? json(res, 200, { id }) : json(res, 404, { error: 'Nenhum modelo parecido.' });
+    }
     if (pathname.startsWith('/api/models/file/') && req.method === 'GET') {
       const file = models.file(pathname.slice('/api/models/file/'.length));
       if (!file) return json(res, 404, { error: 'Arquivo de modelo inexistente.' });

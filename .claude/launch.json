@@ -18,6 +18,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 5173
+    },
+    {
+      "name": "crps-teste",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["CRPS_SAVES=saves/teste", "CRPS_API_PORT=8790", "npx", "concurrently", "-k", "-n", "server,web", "tsx watch src/server/index.ts", "vite --port 5175 --strictPort"],
+      "port": 5175
     }
   ]
 }

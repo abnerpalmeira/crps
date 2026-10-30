@@ -1,6 +1,8 @@
+import { actLabel } from '../engine/actions';
 import { stripActs } from '../engine/body';
 import { parseSpeechLine, type ParsedSpeech } from '../engine/frames';
 import { hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
+import type { WorldState } from '../engine/types';
 
 export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -34,6 +36,8 @@ export function capitalize(s: string): string {
 export interface Speaker {
   name: string;
   color: string;
+  /** Um item: a linha é a leitura do que está escrito nele, não uma fala. */
+  document?: boolean;
 }
 
 /** Narração em parágrafos e falas (`@id[modo>alvo]: texto`) com o nome de quem fala. */
@@ -46,7 +50,15 @@ export function formatNarration(text: string, speaker: (id: string) => Speaker |
   };
   for (const line of text.trim().split('\n')) {
     const speech = parseSpeechLine(line);
-    if (speech) {
+    const doc = speech ? speaker(speech.speakerId) : null;
+    if (speech && doc?.document) {
+      flush();
+      // Leitura: o papel com o texto, para quem leu; de outro leitor, só que ele lê.
+      const reader = speech.targetId ? speaker(speech.targetId) : null;
+      const by = reader && !speech.hidden ? ` <span class="speech-mode">lido por ${escapeHtml(reader.name.split(' ')[0])}</span>` : '';
+      const body = speech.hidden ? `<em class="hidden-speech">${escapeHtml(readable(speech.text))}</em>` : `<span class="paper">${inline(readable(speech.text))}</span>`;
+      html.push(`<p class="reading"><b>📜 ${escapeHtml(doc.name)}</b>${by} ${body}</p>`);
+    } else if (speech) {
       flush();
       // Quem o jogador não sabe quem é vem sem nome e sem a cor do personagem, que o entregaria.
       const who = speech.alias ? null : speaker(speech.speakerId);
@@ -64,14 +76,15 @@ export function formatNarration(text: string, speaker: (id: string) => Speaker |
   return html.join('');
 }
 
-export const INPUT_ICON: Record<InputSegment['kind'], string> = { fala: '💬', sussurro: '🤫', pensamento: '💭', acao: '✋' };
+export const INPUT_ICON: Record<InputSegment['kind'], string> = { fala: '💬', sussurro: '🤫', pensamento: '💭', acao: '✋', menu: '🎯' };
 
 /** A ação do jogador com as marcas destacadas; sem marcas, o texto como ele escreveu. */
-export function formatPlayerInput(text: string): string {
+export function formatPlayerInput(text: string, world: WorldState | null = null): string {
   const segments = parsePlayerInput(text);
   if (!hasMarks(segments)) return escapeHtml(text);
   return segments
     .map((s) => {
+      if (s.kind === 'menu') return `<span class="in-menu">${escapeHtml(actLabel(world, s.act!))}</span>`;
       const t = escapeHtml(s.text);
       if (s.kind === 'fala') return `<span class="in-say">“${t}”</span>`;
       if (s.kind === 'sussurro') return `<span class="in-whisper">🤫 ${escapeHtml(s.target ?? '')}: “${t}”</span>`;

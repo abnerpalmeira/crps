@@ -186,6 +186,13 @@ export interface Item {
   model?: string;
   /** Como se empunha; sem ela, objeto. */
   grip?: Grip;
+  /**
+   * O que está escrito (bilhete, carta, livro, placa): fixo depois de escrito. null é um texto
+   * que ainda não foi lido por ninguém: a primeira leitura na narração define o que ele diz.
+   */
+  text?: string | null;
+  /** O fato com o conteúdo do texto: quem lê passa a saber dele, como quem ouve uma fala. */
+  textFact?: string;
 }
 
 /** Id de um tipo de objeto: da biblioteca (door, desk, vitrine…) ou criado pelo mestre. */
@@ -232,6 +239,8 @@ export interface ObjectType {
   like?: string;
   /** Modelo do catálogo 3D (`pacote:Arquivo`) que o mestre escolheu para o visual. */
   model?: string;
+  /** O que dá para fazer com ele além do que vem das propriedades (sentar, deitar): "tocar", "abrir". */
+  actions?: string[];
 }
 
 /** Um caractere da legenda do layout e o que ele é. */
@@ -253,6 +262,8 @@ export interface TileDef {
   table?: boolean;
   /** Leva a outro local: a um só (porta) ou a qualquer andar (elevador, escada). */
   exit?: 'door' | 'floors';
+  /** Tamanho típico em tiles ("1×2"), em que o modelo do 3D cabe sem encolher. */
+  size?: string;
 }
 
 /** Móvel ou elemento fixo gerado a partir do layout ASCII. */

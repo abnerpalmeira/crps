@@ -39,7 +39,8 @@ O jogador pode marcar partes da ação, e o motor separa em "Como o jogador marc
 - fala: dita em voz alta; entra na narração como fala dele (@id: ...), com as palavras dele;
 - sussurro: só para a pessoa marcada (@id[cochicho>alvo]: ...); se ela estiver longe, aproxime o jogador antes com move_character;
 - pensamento: fica só na cabeça dele; ninguém reage, salvo quem percebe mentes (a ficha do jogador diz quem);
-- ação: o que ele tenta fazer.
+- ação: o que ele tenta fazer;
+- ação do menu: o que ele escolheu clicando no 3D, já com os ids. As físicas (ir, sentar, deitar, levantar, postura, pegar, largar, empunhar, guardar, acender, apagar, pôr, mirar, passar por uma porta) o motor já fez antes do seu turno: narre-as, sem refazer; se o motor recusou, narre a tentativa. As outras (entregar, ler, gesto, atacar, os verbos dos objetos, como tocar o piano) vêm com a tool que resolve.
 Texto sem marca é ação ou intenção, como sempre.
 
 # Memória
@@ -100,7 +101,14 @@ O 3D mostra o corpo de cada personagem: mantenha-o igual ao que a narração con
   Exemplo, depois de transfer_item (a pistola na mão do guarda) e update_character (guarda mirando no jogador):
   O guarda saca a pistola e mira em você. {guarda:saca}
   @guarda[grito>heroi]: Mãos para cima!
-  Você mergulha atrás do balcão quando ele dispara. {guarda:ataca>heroi} {heroi:esquiva>guarda}`;
+  Você mergulha atrás do balcão quando ele dispara. {guarda:ataca>heroi} {heroi:esquiva>guarda}
+
+# Textos escritos
+Bilhetes, cartas, livros, diários e placas têm texto fixo, guardado no item como conhecimento com id. Quem lê aprende o texto, como quem ouve uma fala.
+- A leitura vai numa linha própria, como a fala do item: \`@id_do_item[>leitor]: texto\`. Sem leitor, lê quem está com o item, ou o jogador. O jogador vê o texto só quando é ele quem lê; de outro, vê só que a pessoa lê.
+- Na primeira leitura, o que a linha diz fica escrito no item, para sempre. Depois, toda leitura repete esse texto (o resumo mostra em "Textos aqui"), inteiro ou um trecho.
+- Para ler é preciso estar com o item ou colado nele, e enxergar: no escuro, ninguém lê.
+- Texto que já nasce escrito: create_items com text (e written_by, que sabe o que escreveu). Um texto que ninguém leu ainda leva text "", e a primeira leitura o define. Escrever ou reescrever depois é update_item com text e written_by.`;
 
 /** Um visual do catálogo 3D, para o mestre escolher e descrever o personagem a partir dele. */
 export interface LookOption {
@@ -162,7 +170,7 @@ export function verifierPrompt(args: { state: string; changes: string[]; input: 
 - alguém saca, empunha ou guarda uma arma na narração sem a mudança de mão correspondente (transfer_item com hand para empunhar, sem hand para guardar), ou ataca com uma arma que não está na mão dele;
 - fala ou contato à distância: a prosa da narração revela o conteúdo de um cochicho que o personagem do jogador não ouviria, ou mostra alguém cochichando, tocando ou agredindo quem está longe (veja as posições no mapa);
 - visão: a narração descreve detalhes visuais (rosto, expressão, roupa, o que alguém faz em silêncio) de quem o estado marca como não visto pelo jogador, ou descreve a cena com nitidez quando ele está cego; ou a luz ou a visão mudam na narração (luzes apagam, lanterna acende, alguém fica cego) sem a mudança correspondente.
-Linhas no formato \`@id: texto\` ou \`@id[modo>alvo]: texto\` são falas do personagem com aquele id; o motor já confere o alcance delas e esconde do jogador o conteúdo que ele não ouve, então não aponte essas linhas por isso. Marcas \`{id:gesto}\` e \`{id:gesto>alvo}\` são gestos que o 3D anima, já conferidos pelo motor. Personagens podem saber o que estão vendo e ouvindo agora e o que é óbvio pelo papel deles; só aponte vazamento de fatos registrados. Ignore ambientação, gestos, emoções e pequenas ações sem efeito no estado. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português, citando o personagem e o id do fato quando houver.
+Linhas no formato \`@id: texto\` ou \`@id[modo>alvo]: texto\` são falas do personagem com aquele id; o motor já confere o alcance delas e esconde do jogador o conteúdo que ele não ouve, então não aponte essas linhas por isso. Marcas \`{id:gesto}\` e \`{id:gesto>alvo}\` são gestos que o 3D anima, já conferidos pelo motor. Linhas \`@id_de_item[>leitor]: texto\` são leituras do que está escrito no item, também conferidas pelo motor. Personagens podem saber o que estão vendo e ouvindo agora e o que é óbvio pelo papel deles; só aponte vazamento de fatos registrados. Ignore ambientação, gestos, emoções e pequenas ações sem efeito no estado. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português, citando o personagem e o id do fato quando houver.
 
 <estado>
 ${args.state}

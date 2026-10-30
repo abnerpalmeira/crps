@@ -186,11 +186,50 @@ como o mestre vai entender cada parte.
 | `@Mei "me encontra no intervalo"` | sussurro | só a Mei ouve (alcance do cochicho; se ela está longe, o mestre leva o personagem até ela) |
 | `(será que ela sabe?)` | pensamento | vira o pensamento atual do personagem; só quem percebe mentes fica sabendo |
 | `*abro a janela*` | ação | o que ele tenta fazer |
+| `{sentar>sala/cadeira-3}` | ação do menu | escolhida clicando no 3D, com os ids (abaixo) |
 
 Texto sem marca continua valendo como ação ou intenção. O botão de sussurro lista quem está no
 local, do mais perto ao mais longe, e o inspetor de um personagem tem "Sussurrar para…". O mestre
 recebe a ação como o jogador escreveu e, logo abaixo, as partes separadas; o verificador aponta
 NPC que reage a um pensamento que não poderia perceber.
+
+### Ações pelo menu
+
+Clicar numa pessoa, num móvel, num item (no 3D ou no inventário da ficha) ou no próprio personagem
+abre o inspetor com o que combina com aquilo. As ações saem dos dados, em
+[src/engine/actions.ts](src/engine/actions.ts):
+
+- **De onde vêm:** das propriedades do que foi clicado. Assento dá sentar, cama dá deitar, saída dá
+  passar, superfície dá pôr um item, luz dá acender, texto dá ler, e a arma na mão dá mirar e
+  atacar. Também vêm dos verbos do tipo de objeto: o piano tem "tocar", o armário "abrir" e
+  "procurar algo", e o mestre dá verbos aos tipos que cria (`actions`).
+- **O próprio corpo:** postura (ajoelhar, agachar, mãos ao alto…), gestos e guardar o que está na
+  mão.
+- **Com os ids:** cada ação entra na caixa como uma marca com os ids (`{pegar>pedra}`,
+  `{entregar>caneta>mei}`, `{gesto>acena>mei}`), ao lado da fala e do resto. A prévia mostra
+  "🪑 sentar em cadeira". Dá para juntar várias ações e uma fala num turno só.
+- **Ações físicas:** ir, sentar, deitar, levantar, postura, pegar, largar, empunhar, guardar,
+  acender, apagar, pôr e mirar, e passar por uma porta que já leva a um lugar. O motor as faz na
+  hora, antes do mestre, com as mesmas tools e regras, e leva o personagem até lá se o alvo
+  estiver longe. O mestre recebe o que foi feito ou recusado e narra.
+- **O resto vai ao mestre** com os ids e a tool que resolve: entregar (a pessoa aceita ou não),
+  ler, atacar e os verbos dos objetos. Quando a ação pede estar perto, o motor já leva o jogador
+  até lá. O gesto escolhido acontece no 3D mesmo que a narração esqueça a marca.
+
+### Textos escritos
+
+Bilhetes, cartas, livros, diários e placas guardam o que está escrito no item (`text`), e o
+conteúdo é conhecimento com id, como uma fala ([src/engine/reading.ts](src/engine/reading.ts)):
+
+- **A leitura é a fala do item:** vai numa linha própria da narração, `@id_do_item[>leitor]: texto`.
+  O motor confere que quem lê está com o item ou colado nele e enxerga (no escuro ninguém lê).
+- **Primeira leitura:** o texto de um item criado com `text: ""` ainda não existe, e a primeira
+  leitura o define e o grava no item. A partir daí, toda leitura precisa repetir esse texto (ou um
+  trecho), e o resumo do turno mostra o que cada texto diz e quem já sabe.
+- **Quem leu aprende:** o texto vira um fato (`fato_N`), conhecido de quem escreveu (`written_by`)
+  e de quem leu, com o mesmo controle de conhecimento das falas.
+- **O que o jogador vê:** o texto só quando é ele quem lê, num cartão de papel no chat e no
+  inspetor do item. De outro leitor, vê só que a pessoa lê.
 
 ### Replay com balões de fala
 
@@ -363,6 +402,19 @@ tudo no repertório.
     que o catálogo descreve: textura por material, recorte nas folhas e grades, tom nas folhas
     cinzentas e tronco separado da folha.
   - Sem Blender ou sem o repertório, o 3D usa o parecido do tipo ou o corpo do personagem.
+- **Itens:** sem `model`, o motor escolhe o mais parecido pelo nome e pela descrição
+  (`ModelCatalog.suggest`). A descrição desempata o sentido: "Carta, envelope amarelado" vira o
+  envelope, não a carta de baralho. O resultado de `create_items` diz ao mestre qual foi, com
+  alternativas, para ele trocar com `update_item` se não combinar. Itens de campanhas antigas sem
+  modelo ganham o mesmo palpite só no visual (`/api/models/guess`). O pacote de rascunho da Synty
+  (`prototype`: blocos laranja, bilhetes de 50 cm escritos BUG e WIP) só entra no palpite quando
+  nenhum outro pacote tem algo parecido; na busca do mestre, aparece como os outros.
+- **Dois corpos não ocupam o mesmo lugar:** cada item no chão ou num móvel procura o ponto livre
+  mais perto do seu no tampo do modelo ([src/client/arrange.ts](src/client/arrange.ts)), desviando
+  de quem está ali (deitado na cama de ponta a ponta, sentado no assento, de pé no tile) e dos
+  outros itens. Ele pode girar um quarto de volta para caber. Folha em pé (bilhete, carta, placa)
+  deita com a face para cima. Quem deita fica com a cabeça no travesseiro, e a cama estica no
+  comprimento (`stretch`) até caber uma pessoa.
 - **Limites:**
   - Personagens exportados para o Unreal (pastas `Unreal_Characters`) usam outro esqueleto e ficam
     fora: a versão padrão do mesmo personagem costuma existir.
@@ -426,7 +478,9 @@ W.d.d.d.d.d..#
 
 Se o layout tiver erro (caractere desconhecido, chão encostando no exterior, regiões
 desconectadas, móvel sem corredor), a tool devolve os erros com coordenadas e o modelo
-corrige.
+corrige. Objeto comprido num espaço menor que o tamanho típico também é erro: uma cama de um
+tile só (`b`) viraria miniatura no 3D, e a mensagem diz o desenho certo (`bb`, ou `b` em duas
+linhas). O mesmo vale para o carro (2×4) e a cápsula (2×3).
 
 ### Objetos como dado
 

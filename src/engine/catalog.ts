@@ -111,7 +111,53 @@ export class ModelCatalog {
     scored.sort((a, b) => b.score - a.score || (a.item.desc ?? '').length - (b.item.desc ?? '').length);
     return scored.slice(0, limit).map((s) => s.item);
   }
+
+  /**
+   * Modelos para um item pelo nome e pela descrição que o mestre deu ("Carta", "envelope
+   * amarelado"): busca pelos dois e prefere o que bate com mais palavras deles, com peso no
+   * substantivo de cada um, a primeira palavra (o envelope, não a carta de baralho). Só objetos,
+   * armas e acessórios; os dos pacotes de rascunho só quando nenhum outro serve.
+   */
+  suggest(name: string, description = '', limit = 4): CatalogItem[] {
+    const terms = (text: string) => [...new Set(words(text).filter((w) => !STOP.has(w)))];
+    const named = terms(name);
+    const described = terms(description);
+    const pool = new Map<string, Indexed>();
+    // Descrição longa ("pasta de papelão com o nome dele na capa…") não passa na busca inteira:
+    // o começo dela, que diz o que a coisa é, também entra.
+    const queries = [name, description, described.slice(0, 3).join(' '), described.slice(0, 2).join(' ')];
+    for (const q of new Set(queries.filter((x) => x.trim()))) {
+      for (const item of this.search(q, { limit: 20 })) {
+        if (ITEM_CATEGORIES.has(item.category)) pool.set(item.id, this.byId.get(item.id)!);
+      }
+    }
+    const hit = (entry: Indexed, q: string) => Math.max(0, ...entry.seen.map((w) => match(q, w)));
+    return [...pool.values()]
+      .map((entry) => ({
+        item: entry.item,
+        score:
+          (named.reduce((sum, q, k) => sum + hit(entry, q) * (k === 0 ? 2 : 1), 0) +
+            described.reduce((sum, q, k) => sum + hit(entry, q) * (k === 0 ? 2 : 0.5), 0)) *
+          (DRAFT_PACKS.has(entry.item.pack) ? 0.5 : 1),
+      }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score || (a.item.desc ?? '').length - (b.item.desc ?? '').length)
+      .slice(0, limit)
+      .map((x) => x.item);
+  }
 }
+
+/** Palavras que só ligam as outras e não dizem o que a coisa é. */
+const STOP = new Set(['de', 'da', 'do', 'das', 'dos', 'com', 'sem', 'um', 'uma', 'uns', 'umas', 'em', 'no', 'na', 'nos', 'nas', 'para', 'por', 'os', 'as', 'ao', 'que']);
+
+/**
+ * Pacotes de rascunho, para montar fases antes da arte: blocos laranja, armas "de protótipo" e
+ * bilhetes de 50 cm escritos BUG e WIP. Para o mestre escolher, aparecem na busca como os outros.
+ */
+const DRAFT_PACKS = new Set(['prototype']);
+
+/** O que pode ser item: o resto (construção, ambiente, veículo, personagem, animal) não cabe na mão. */
+const ITEM_CATEGORIES = new Set(['objeto', 'arma', 'acessorio']);
 
 let current: ModelCatalog | null = null;
 

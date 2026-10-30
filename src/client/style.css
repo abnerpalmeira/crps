@@ -267,6 +267,72 @@ button {
   border-color: var(--accent);
 }
 
+.action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* A distância ou quem ocupa, embaixo do nome da ação. */
+.action .note {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.actions.sub {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.action.back {
+  border-style: dashed;
+}
+
+/* Item do inventário e item do próprio personagem: clicar abre o inspetor do item. */
+.item.clickable {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.item.clickable:hover strong,
+button.link:hover {
+  color: var(--accent);
+}
+
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+
+/* Texto escrito num item: o papel que o jogador leu. */
+.paper {
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: #efe6cf;
+  color: #3a3226;
+  font-family: Georgia, 'Times New Roman', serif;
+  white-space: pre-wrap;
+}
+
+p.paper {
+  display: block;
+}
+
+.reading {
+  margin: 6px 0;
+}
+
 #hud-replay {
   display: none;
   margin-top: 4px;
@@ -945,6 +1011,11 @@ body.release .toggle {
 
 .in-chip.warn {
   outline: 1px dashed var(--danger);
+}
+
+.in-chip.menu,
+.in-menu {
+  color: var(--accent);
 }
 
 /* No balão do jogador: fala em destaque, sussurro e pensamento mais apagados. */

@@ -1,4 +1,5 @@
 import { POSES, bodyPose, handsOf } from './body';
+import { itemPlace } from './reading';
 import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { LEGEND } from './layout';
 import { lightAt, lightLabel, lightSources } from './light';
@@ -206,6 +207,23 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     if (ground.length) {
       out.push(`Itens no chão: ${ground.map((i) => `${i.name} [${i.id}] (${i.holder.kind === 'ground' ? `${i.holder.x},${i.holder.y}` : ''})`).join(', ')}`);
       for (const i of ground) sceneIds.add(i.id);
+    }
+    // O que está escrito nos itens em cena e quem já sabe: toda leitura repete esse texto.
+    const texts = Object.values(s.items).filter((i) => i.text !== undefined && itemPlace(s, i)?.locationId === loc.id);
+    if (texts.length) {
+      const known = (i: (typeof texts)[number]) => {
+        const fact = s.facts.find((f) => f.id === i.textFact);
+        return !fact ? '' : fact.knownBy === 'all' ? 'todos' : fact.knownBy.map((id) => s.characters[id]?.name ?? id).join(', ');
+      };
+      out.push(
+        `Textos aqui: ${texts
+          .map((i) =>
+            typeof i.text === 'string'
+              ? `${i.name} [${i.id}] diz «${truncate(i.text, 400)}» (sabem: ${known(i) || 'ninguém'})`
+              : `${i.name} [${i.id}] tem algo escrito que ninguém leu ainda (a primeira leitura define)`,
+          )
+          .join('; ')}`,
+      );
     }
   }
 

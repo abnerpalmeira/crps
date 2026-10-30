@@ -1,3 +1,4 @@
+import { labelMenuActs } from '../engine/actions';
 import { parseActs } from '../engine/body';
 import { parseBeats, sceneAt, type Beat } from '../engine/frames';
 import type { Clock, SceneFrame, WorldState } from '../engine/types';
@@ -192,7 +193,7 @@ export class Playback {
       speeches.map((s, k) => ({ speakerId: s.speakerId, html: speechHtml(s), mode: s.mode, age: speeches.length - 1 - k + offset })),
     );
     if (!current) this.ui.caption(null);
-    else if (current.kind === 'input') this.ui.caption(current.text, 'Você');
+    else if (current.kind === 'input') this.ui.caption(labelMenuActs(current.text, this.world), 'Você');
     else if (current.kind === 'narration') this.ui.caption(readable(current.text) || null);
     else if (missing.includes(current.speakerId)) {
       const who = current.alias ? capitalize(current.alias) : (this.nameOf(current.speakerId) ?? current.speakerId);

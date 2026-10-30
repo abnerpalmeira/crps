@@ -8,7 +8,8 @@ import { Ui, type TurnView } from './ui';
 
 const ui = new Ui();
 const view = new WorldView(document.querySelector<HTMLElement>('#stage-canvas')!);
-const playback = new Playback(view, ui, (id) => world?.characters[id]?.name ?? null);
+// Quem fala, ou o item que está sendo lido (a leitura vira legenda com o nome do papel).
+const playback = new Playback(view, ui, (id) => world?.characters[id]?.name ?? (world?.items[id] ? `📜 ${world.items[id].name}` : null));
 let world: WorldState | null = null;
 let busy = false;
 

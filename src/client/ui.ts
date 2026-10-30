@@ -1,5 +1,5 @@
+import { actLabel, actionsFor, type ActionOption } from '../engine/actions';
 import { lightAt, lightLabel, lightSources } from '../engine/light';
-import { objectType } from '../engine/objects';
 import { perceptionOf, strangerLabel } from '../engine/perception';
 import { findByName, hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
 import { chebyshev, formatClock, hhmm } from '../engine/text';
@@ -50,6 +50,7 @@ const SUGGESTIONS = [
 
 interface TurnContext {
   speaker: (id: string) => Speaker | null;
+  world: () => WorldState | null;
   onReplay: (turn: number) => void;
 }
 
@@ -68,7 +69,7 @@ export class TurnView {
   ) {
     if (input) {
       const line = el('div', 'player-line');
-      line.innerHTML = formatPlayerInput(input);
+      line.innerHTML = formatPlayerInput(input, ctx.world());
       this.root.append(line);
     }
     this.root.append(this.chips, this.status, this.narration);
@@ -169,6 +170,7 @@ export class Ui {
   private world: WorldState | null = null;
   private readonly ctx: TurnContext = {
     speaker: (id) => this.speaker(id),
+    world: () => this.world,
     onReplay: (turn) => this.onReplay(turn),
   };
 
@@ -284,10 +286,29 @@ export class Ui {
     if (!busy) this.input.focus();
   }
 
+  /** Completa a ação com um texto (fala, escrita) depois do que já está escrito, com o cursor no fim. */
   prefill(text: string): void {
-    this.input.value = text;
+    const before = this.input.value.trimEnd();
+    this.input.value = before ? `${before} ${text}` : text;
+    const end = this.input.value.length;
     this.input.focus();
-    this.input.setSelectionRange(text.length, text.length);
+    this.input.setSelectionRange(end, end);
+    this.showTab('log');
+    this.renderPreview();
+  }
+
+  /** Põe a marca de uma ação do menu onde está o cursor, com espaço dos dois lados. */
+  private insertToken(token: string): void {
+    const input = this.input;
+    const { selectionStart: a, selectionEnd: b, value } = input;
+    const before = value.slice(0, a);
+    const after = value.slice(b);
+    const pre = before && !/\s$/.test(before) ? ' ' : '';
+    const post = after && !/^\s/.test(after) ? ' ' : '';
+    input.value = `${before}${pre}${token}${post}${after}`;
+    const caret = before.length + pre.length + token.length + post.length;
+    input.focus();
+    input.setSelectionRange(caret, caret);
     this.showTab('log');
     this.renderPreview();
   }
@@ -370,6 +391,12 @@ export class Ui {
           chip.title = !target ? 'Ninguém com esse nome aqui.' : d !== null && d > reach ? `${capitalize(who!)} está a ${d} passos: o mestre leva você até lá.` : '';
         }
         if (s.kind === 'pensamento') chip.title = 'Só você ouve, a não ser quem lê mentes.';
+        if (s.kind === 'menu') {
+          // Ação do menu: o motor faz na hora o que é físico (sentar, pegar…); o resto vai ao mestre.
+          const label = actLabel(world, s.act!);
+          chip.textContent = label.length > 60 ? `${label.slice(0, 59)}…` : label;
+          return chip;
+        }
         chip.textContent = `${INPUT_ICON[s.kind]} ${text.length > 60 ? `${text.slice(0, 59)}…` : text}`;
         return chip;
       }),
@@ -492,7 +519,7 @@ export class Ui {
     this.inspected = pick;
     if (!world || !pick) return this.closeInspector();
     const body = el('div', 'inspector-body');
-    const actions: [string, string][] = [];
+    const actions: ActionOption[] = [];
     if (pick.kind === 'character') {
       const c = world.characters[pick.id];
       if (!c) return this.closeInspector();
@@ -511,8 +538,7 @@ export class Ui {
           el('p', 'muted', sight === 'vulto' ? 'Está escuro demais para ver quem é.' : 'Você não enxerga quem está aí.'),
           truth(),
         );
-        actions.push(['Ir até lá', 'Vou, com cuidado, na direção do vulto.']);
-        return this.openInspector(body, actions);
+        return this.openInspector(body, [{ label: 'Ir até lá', prefill: 'Vou, com cuidado, na direção do vulto.' }]);
       }
       const stranger = strangerLabel(c);
       if (known) body.append(el('h3', '', c.name), el('p', 'muted', c.role));
@@ -526,7 +552,17 @@ export class Ui {
         } else body.append(el('p', 'hint', 'Ainda um esboço: o mestre aprofunda quando a pessoa ficar importante.'));
       }
       const held = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === c.id);
-      if (held.length && sight === 'nitido') body.append(el('p', 'muted', `Com: ${held.map((i) => i.name).join(', ')}`));
+      if (held.length && c.isPlayer) {
+        // Os próprios itens abrem o inspetor deles.
+        const row = el('p', 'muted', 'Com: ');
+        for (const i of held) {
+          const b = el('button', 'link', i.name);
+          b.type = 'button';
+          b.addEventListener('click', () => this.showInspector(world, { kind: 'item', id: i.id }));
+          row.append(b, ' ');
+        }
+        body.append(row);
+      } else if (held.length && sight === 'nitido') body.append(el('p', 'muted', `Com: ${held.map((i) => i.name).join(', ')}`));
       if (!c.isPlayer) {
         const stats = statTexts(world, c);
         const visible = stats.filter((s) => view.canSeeStat(s.id, c.id)).map((s) => s.text);
@@ -542,17 +578,7 @@ export class Ui {
         if (secrets.length) box.append(el('p', 'hint', `Sabe (bastidores): ${secrets.map((f) => f.text).join(' · ')}`));
         body.append(box);
       }
-      if (!c.isPlayer && known) {
-        const first = c.name.split(' ')[0];
-        actions.push([`Falar com ${first}`, `Digo a ${first}: "`], [`Sussurrar para ${first}`, `@${first} "`], [`Ir até ${first}`, `Vou até ${first}.`]);
-      } else if (!c.isPlayer) {
-        actions.push(
-          ['Falar', `Digo para ${stranger}: "`],
-          ['Perguntar o nome', `Pergunto para ${stranger}: "Desculpe, qual é o seu nome?"`],
-          ['Sussurrar', `@[${stranger}] "`],
-          ['Ir até lá', `Vou até ${stranger}.`],
-        );
-      }
+      actions.push(...actionsFor(world, pick));
     } else if (pick.kind === 'fixture') {
       const loc = Object.values(world.locations).find((l) => l.fixtures.some((fx) => fx.id === pick.id));
       const f = loc?.fixtures.find((fx) => fx.id === pick.id);
@@ -571,35 +597,55 @@ export class Ui {
       if (on.length) body.append(el('p', 'muted', `Aqui: ${on.map((i) => i.name).join(', ')}`));
       const sitter = Object.values(world.characters).find((c) => c.seatId === f.id);
       if (sitter) body.append(el('p', 'muted', `Ocupado por ${shownAs(world, sitter)}`));
-      const article = objectType(world, f.kind).article ?? 'a';
-      const noun = `${article} ${f.kind === 'board' ? 'quadro' : f.label}`;
-      actions.push([`Ir até ${noun}`, `Vou até ${noun}.`]);
-      if (f.kind === 'board') actions.push(['Escrever no quadro', 'Escrevo no quadro: "']);
-      // Sem aspas, asteriscos nem parênteses: no texto do jogador, eles viram fala, ação ou pensamento.
-      const name = exit?.label.replace(/["“”*()]/g, '').trim();
-      const by = `${article === 'o' ? 'pelo' : 'pela'} ${f.label}`;
-      if (exit && f.kind === 'elevator') actions.push(['Pegar o elevador', `Pego o ${name} para o andar `]);
-      else if (exit && f.kind === 'stairs') actions.push(['Usar a escada', 'Vou pela escada até o andar ']);
-      else if (exit && f.exit === 'floors') actions.push([`Usar ${noun}`, `Vou ${by} até o andar `]);
-      else if (exit) actions.push([`Passar ${by}`, `Passo ${by}: ${name}.`]);
+      actions.push(...actionsFor(world, pick));
     } else {
       const item = world.items[pick.id];
       if (!item) return this.closeInspector();
       body.append(el('h3', '', item.name), el('p', '', item.description));
       if (item.light) body.append(el('p', 'muted', item.light.on ? 'Acesa.' : 'Apagada.'));
-      actions.push([`Pegar ${item.name}`, `Pego ${item.name.toLowerCase()}.`]);
+      // O texto só aparece para quem já leu: é conhecimento, como uma fala ouvida.
+      if (item.text !== undefined) {
+        const fact = world.facts.find((f) => f.id === item.textFact);
+        const read = fact && world.playerId && (fact.knownBy === 'all' || fact.knownBy.includes(world.playerId));
+        body.append(read && item.text ? el('p', 'paper', `«${item.text}»`) : el('p', 'muted', 'Tem algo escrito.'));
+        const box = el('div', 'backstage-only');
+        const readers = fact && fact.knownBy !== 'all' ? fact.knownBy.map((id) => world.characters[id]?.name ?? id).join(', ') : 'todos';
+        box.append(el('p', 'hint', item.text ? `Texto (bastidores): «${item.text}» · sabem: ${readers || 'ninguém'}` : 'Texto (bastidores): ainda não lido; a primeira leitura define.'));
+        body.append(box);
+      }
+      actions.push(...actionsFor(world, pick));
     }
     this.openInspector(body, actions);
   }
 
-  private openInspector(body: HTMLElement, actions: [string, string][]): void {
+  /** Botões das ações; uma com mais escolhas (a quem entregar, que gesto) abre a lista no lugar. */
+  private renderActions(row: HTMLElement, actions: ActionOption[], back?: () => void): void {
+    row.replaceChildren();
+    row.classList.toggle('sub', Boolean(back));
+    if (back) {
+      const b = el('button', 'action back', '‹ voltar');
+      b.type = 'button';
+      b.addEventListener('click', back);
+      row.append(b);
+    }
+    for (const a of actions) {
+      const b = el('button', 'action', a.label);
+      b.type = 'button';
+      b.disabled = Boolean(a.disabled);
+      if (a.note) b.append(el('small', 'note', a.note));
+      b.addEventListener('click', () => {
+        if (a.options) return this.renderActions(row, a.options, () => this.renderActions(row, actions, back));
+        if (a.token) this.insertToken(a.token);
+        else if (a.prefill) this.prefill(a.prefill);
+      });
+      row.append(b);
+    }
+  }
+
+  private openInspector(body: HTMLElement, actions: ActionOption[]): void {
     if (actions.length) {
       const row = el('div', 'actions');
-      for (const [label, text] of actions) {
-        const b = el('button', 'action', label);
-        b.addEventListener('click', () => this.prefill(text));
-        row.append(b);
-      }
+      this.renderActions(row, actions);
       body.append(row);
     }
     const close = el('button', 'close', '×');
@@ -610,6 +656,8 @@ export class Ui {
   }
 
   private speaker(id: string): Speaker | null {
+    const item = this.world?.items[id];
+    if (item) return { name: item.name, color: 'var(--muted)', document: true };
     const c = this.world?.characters[id];
     if (!c) return null;
     return { name: c.name, color: c.isPlayer ? 'var(--accent)' : `hsl(${hash(c.id) % 360} 62% 72%)` };
@@ -706,9 +754,13 @@ export class Ui {
     const items = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === player.id);
     if (!items.length) parts.push(el('p', 'muted', 'Vazio.'));
     for (const i of items) {
-      const row = el('div', 'item');
+      // Clicar no item abre o inspetor dele, com o que dá para fazer (empunhar, ler, entregar…).
+      const row = el('button', 'item clickable');
+      row.type = 'button';
       const lit = i.light ? (i.light.on ? ' · acesa' : ' · apagada') : '';
-      row.append(el('strong', '', `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}`), el('span', 'muted', `${i.description}${lit}`));
+      const hand = i.holder.kind === 'character' && i.holder.hand ? ` · na mão ${i.holder.hand}` : '';
+      row.append(el('strong', '', `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}`), el('span', 'muted', `${i.description}${lit}${hand}`));
+      row.addEventListener('click', () => this.showInspector(world, { kind: 'item', id: i.id }));
       parts.push(row);
     }
     sheet.replaceChildren(...parts);
