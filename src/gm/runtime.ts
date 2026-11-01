@@ -2,20 +2,42 @@ import Anthropic from '@anthropic-ai/sdk';
 import { WorkloadIdentityError } from '@anthropic-ai/sdk/lib/credentials/types';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseEnv } from 'node:util';
 import { ModelCatalog, eraLooks, modelCatalog, setBaseLooks, setModelCatalog, type RepertoireItem } from '../engine/catalog';
 import { GameEngine } from '../engine/engine';
 import { ClaudeProvider, DEFAULT_MODEL } from './claude';
 import { GameMaster } from './gm';
-import { modelChoice } from './models';
+import { SERVICES, modelChoice, serviceOf } from './models';
+import { OpenAICompatibleProvider, ProviderHttpError } from './openai';
 import { systemPrompt, type LookOption } from './prompts';
 import { OfflineProvider } from './offline';
 import type { Mode } from './pricing';
-import type { Effort } from './provider';
+import type { Effort, ModelProvider } from './provider';
 
 const EFFORTS = new Set<string>(['low', 'medium', 'high', 'xhigh', 'max']);
 
-export function loadEnv(): void {
-  if (existsSync('.env')) process.loadEnvFile('.env');
+/** Chaves de serviço que vieram do .env, e não do ambiente: essas o .env pode trocar. */
+const fileKeys = new Set<string>();
+
+/** Lê o .env sem passar por cima do ambiente. */
+export function loadEnv(file = '.env'): void {
+  reloadServiceKeys(file);
+  if (existsSync(file)) process.loadEnvFile(file);
+}
+
+/**
+ * Relê no .env só as chaves dos serviços (VENICE_API_KEY…); o servidor chama a cada pedido de
+ * estado, então a chave posta ou trocada com ele no ar já vale. A que veio do ambiente continua.
+ */
+export function reloadServiceKeys(file = '.env'): void {
+  if (!existsSync(file)) return;
+  const vars = parseEnv(readFileSync(file, 'utf8')) as Record<string, string | undefined>;
+  for (const { keyEnv } of Object.values(SERVICES)) {
+    const value = vars[keyEnv];
+    if (value === undefined || (process.env[keyEnv] !== undefined && !fileKeys.has(keyEnv))) continue;
+    process.env[keyEnv] = value;
+    fileKeys.add(keyEnv);
+  }
 }
 
 function effortFromEnv(name: string, fallback: Effort): Effort {
@@ -51,6 +73,35 @@ export function lookOptions(path = join('public', 'models', 'catalog.json')): Lo
   }
 }
 
+/**
+ * O provedor de um modelo: o Claude, ou um serviço compatível com a OpenAI pelo prefixo do id
+ * ("venice/…", models.ts). O verificador é do mesmo modelo, salvo CRPS_VERIFIER_MODEL; se ele for
+ * de outro serviço, o mestre fala com um e o juiz com o outro.
+ */
+export function providerFor(model: string, verifierModel?: string): ModelProvider {
+  const same = !verifierModel || (serviceOf(verifierModel)?.id ?? 'claude') === (serviceOf(model)?.id ?? 'claude');
+  const main = singleProvider(model, same ? verifierModel : undefined);
+  if (same) return main;
+  const judge = singleProvider(verifierModel!, verifierModel);
+  return { label: main.label, startSession: (opts) => main.startSession(opts), verify: (prompt) => judge.verify(prompt) };
+}
+
+function singleProvider(model: string, verifierModel: string | undefined): ModelProvider {
+  const s = serviceOf(model);
+  if (!s) return new ClaudeProvider({ model, fallback: modelChoice(model)?.fallback ?? true, verifierModel });
+  return new OpenAICompatibleProvider({
+    service: s.id,
+    label: s.service.label,
+    // Outra URL do mesmo serviço (um proxy, uma região): VENICE_BASE_URL.
+    baseUrl: process.env[`${s.id.toUpperCase()}_BASE_URL`] ?? s.service.baseUrl,
+    apiKey: () => process.env[s.service.keyEnv],
+    keyEnv: s.service.keyEnv,
+    model: s.model,
+    verifierModel: verifierModel ? serviceOf(verifierModel)?.model : undefined,
+    extra: s.service.extra,
+  });
+}
+
 /** Mestre com o modelo escolhido na interface, o de CRPS_MODEL ou o padrão, nessa ordem. */
 export function createGameMaster(opts: { model?: string } = {}): GameMaster {
   const model = opts.model || process.env.CRPS_MODEL || DEFAULT_MODEL;
@@ -60,9 +111,7 @@ export function createGameMaster(opts: { model?: string } = {}): GameMaster {
   setBaseLooks(base);
   const looks = base.length > 0 || (!isOffline() && modelCatalog() !== null);
   return new GameMaster({
-    provider: isOffline()
-      ? new OfflineProvider()
-      : new ClaudeProvider({ model, fallback: modelChoice(model)?.fallback ?? true, verifierModel: process.env.CRPS_VERIFIER_MODEL }),
+    provider: isOffline() ? new OfflineProvider() : providerFor(model, process.env.CRPS_VERIFIER_MODEL),
     effortSetup: effortFromEnv('CRPS_EFFORT_SETUP', 'medium'),
     effortTurn: effortFromEnv('CRPS_EFFORT_TURN', 'low'),
     verify: process.env.CRPS_VERIFY !== '0',
@@ -77,6 +126,13 @@ export function describeError(err: unknown): string {
   }
   if (err instanceof Anthropic.RateLimitError) return 'Limite de uso da API atingido. Espere um pouco e tente de novo.';
   if (err instanceof Anthropic.APIConnectionError) return 'Sem conexão com a API do Claude.';
+  if (err instanceof ProviderHttpError) {
+    const label = serviceOf(`${err.service}/x`)?.service.label ?? err.service;
+    if (err.status === 401 || err.status === 403) return `A ${label} recusou a chave (${err.status}): ${err.message}`;
+    if (err.status === 402) return `Sem saldo na ${label}: ${err.message}`;
+    if (err.status === 429) return `Limite de uso da ${label} atingido. Espere um pouco e tente de novo.`;
+    return `Erro da ${label} (${err.status}): ${err.message}`;
+  }
   if (err instanceof Anthropic.APIError) {
     const body = err.error as { error?: { message?: string } } | undefined;
     return `Erro da API do Claude (${err.status ?? '?'}): ${body?.error?.message ?? err.message}`;

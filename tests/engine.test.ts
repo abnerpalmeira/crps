@@ -140,6 +140,12 @@ describe('runTool', () => {
     expect(r.content).toMatch(/^Entrada inválida para move_character/);
   });
 
+  it('num union, o erro diz as formas que o campo aceita', () => {
+    const r = runTool(classroom(), 'add_fact', { subject: 'kenji', text: 'Kenji esqueceu o giz.', known_by: 'yuki,haruto' });
+    expect(r.ok).toBe(false);
+    expect(r.content).toContain('known_by aceita uma destas formas: expected "all" | expected "present" | expected array, received string');
+  });
+
   it('desfaz mudanças parciais quando a regra falha', () => {
     const e = classroom();
     const r = runTool(e, 'create_items', {

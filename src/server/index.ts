@@ -3,9 +3,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { GameEngine } from '../engine/engine';
 import type { Emit, GmEvent } from '../gm/gm';
-import { MODEL_CHOICES, modelChoice } from '../gm/models';
+import { MODEL_CHOICES, modelAvailable, modelChoice, serviceOf } from '../gm/models';
 import { CostMeter, costEvent, describeCost, priceOf } from '../gm/pricing';
-import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, isOffline, loadEnv, loadModelCatalog, modeFromEnv } from '../gm/runtime';
+import { SaveStore, createGameMaster, creditUsdFromEnv, describeError, isOffline, loadEnv, loadModelCatalog, modeFromEnv, reloadServiceKeys } from '../gm/runtime';
 import { ModelService } from './models';
 
 loadEnv();
@@ -113,7 +113,11 @@ const server = createServer(async (req, res) => {
   try {
     if (pathname === '/api/state' && req.method === 'GET') {
       // O seletor de modelo é do modo dev; na demo offline o mestre é um roteiro fixo.
-      const models = MODE === 'dev' && !isOffline() ? MODEL_CHOICES.map(({ fallback: _f, ...m }) => ({ ...m, price: priceOf(m.id) })) : [];
+      // Só os modelos com a chave do serviço no ambiente (o Claude sempre); a chave posta no .env
+      // com o servidor no ar aparece no próximo pedido.
+      reloadServiceKeys();
+      const models =
+        MODE === 'dev' && !isOffline() ? MODEL_CHOICES.filter((m) => modelAvailable(m.id)).map(({ fallback: _f, ...m }) => ({ ...m, price: priceOf(m.id) })) : [];
       json(res, 200, { world: engine?.snapshot() ?? null, busy, mode: MODE, model: MODE === 'dev' ? gm.label : '', models });
       return;
     }
@@ -122,6 +126,7 @@ const server = createServer(async (req, res) => {
       if (isOffline()) return json(res, 400, { error: 'Na demo offline o mestre é um roteiro fixo.' });
       const choice = modelChoice(await readText(req, 'model'));
       if (!choice) return json(res, 400, { error: `Modelo desconhecido. Opções: ${MODEL_CHOICES.map((m) => m.id).join(', ')}.` });
+      if (!modelAvailable(choice.id)) return json(res, 400, { error: `Falta a chave: defina ${serviceOf(choice.id)?.service.keyEnv} no .env.` });
       if (busy) return json(res, 409, { error: 'Espere o mestre terminar o turno para trocar de modelo.' });
       gm = createGameMaster({ model: choice.id });
       store.saveSettings({ ...store.loadSettings(), model: choice.id });

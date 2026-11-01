@@ -26,7 +26,8 @@ npm install
 ```
 
 O mestre usa a API do Claude. As credenciais vêm de `ant auth login` ou de
-`ANTHROPIC_API_KEY` num `.env` (veja `.env.example`).
+`ANTHROPIC_API_KEY` num `.env` (veja `.env.example`). Com `VENICE_API_KEY` no `.env`, ele
+também pode rodar na Venice (veja [Outros provedores](#outros-provedores)).
 
 ```bash
 npm run dev
@@ -52,8 +53,10 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 
 | Variável | Padrão | |
 |---|---|---|
-| `CRPS_MODEL` | `claude-haiku-5-5` | Modelo do mestre (a escolha feita na interface tem prioridade) |
-| `CRPS_VERIFIER_MODEL` | `claude-haiku-5-5` | Verificador de consistência (barato) |
+| `CRPS_MODEL` | `claude-haiku-5-5` | Modelo do mestre (a escolha feita na interface tem prioridade); `venice/…` vai pela Venice |
+| `CRPS_VERIFIER_MODEL` | `claude-haiku-5-5` | Verificador de consistência (barato); sem ele, um mestre de outro serviço verifica com o próprio modelo |
+| `VENICE_API_KEY` | | Chave da Venice; sem ela o seletor não oferece os modelos `venice/…` |
+| `VENICE_BASE_URL` | `https://api.venice.ai/api/v1` | Outra URL para a Venice (um proxy) |
 | `CRPS_EFFORT_SETUP` | `medium` | Esforço na criação do mundo |
 | `CRPS_EFFORT_TURN` | `low` | Esforço nos turnos; suba se o mestre esquecer de chamar tools |
 | `CRPS_VERIFY` | `1` | `0` desliga o verificador |
@@ -64,7 +67,8 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 | `CRPS_CREDIT_USD` | `0.01` | Quanto vale 1 crédito em US$ |
 
 No modo dev, clicar no nome do modelo no topo do painel abre o seletor do mestre: Fable 5.1,
-Opus 5.5, Opus 5, Sonnet 5.5 ou Haiku 5.5, com o preço por milhão de tokens de cada um. A troca
+Opus 5.5, Opus 5, Sonnet 5.5, Haiku 5.5 e, com a chave da Venice, DeepSeek V4.1 Flash
+Uncensored, com o preço por milhão de tokens de cada um. A troca
 vale a partir do próximo turno e fica salva em `saves/settings.json`, então sobrevive ao
 reinício do servidor. O verificador continua no `CRPS_VERIFIER_MODEL`. O Haiku 5.5 não tem
 fallback no servidor quando recusa, então o mestre não pede fallback a ele. O seletor não
@@ -90,6 +94,42 @@ exemplo), a API refaz o pedido num modelo recomendado em vez de parar o turno.
 O prompt de sistema e as tools ficam em cache (`cache_control`), e as tools usam
 `eager_input_streaming`, porque o motor valida toda entrada com zod.
 
+### Outros provedores
+
+O mestre fala com o modelo pela interface de `src/gm/provider.ts`: abrir a sessão do turno, dar
+um passo (texto e tools em streaming), devolver os resultados das tools e verificar o turno. O
+Claude (`claude.ts`) e o roteiro offline (`offline.ts`) são duas implementações; `openai.ts` é a
+terceira, para qualquer serviço compatível com a API de chat da OpenAI (`POST /chat/completions`).
+
+O id de um modelo de serviço tem o prefixo dele (`venice/deepseek-v4-1-flash-uncensored`); sem
+prefixo, é do Claude. Os serviços ficam em `SERVICES` (`src/gm/models.ts`), com a URL, a variável
+da chave e o que vai no corpo de toda chamada. Hoje há um, a Venice:
+
+- **Chave:** `VENICE_API_KEY` no `.env`. O servidor relê a chave a cada pedido de estado: posta ou
+  trocada com ele no ar, vale ao recarregar a página. Um turno sem ela diz qual variável falta.
+- **Corpo:** `venice_parameters` tira o prompt de sistema da própria Venice e o raciocínio do
+  texto. O raciocínio chega à parte (`reasoning_content`) e volta para a conversa entre uma
+  tool e outra, como o serviço pede.
+- **Tools:** as mesmas, como funções (o JSON Schema do zod vai em `parameters`). No stream, cada
+  chamada chega em pedaços e é montada pelo índice. O DeepSeek manda lista como texto JSON
+  (`known_by: "[\"ana\"]"`): onde o esquema pede lista ou objeto, o texto vira o que ele contém.
+  Argumento que não é JSON vai ao motor como texto, o motor recusa e o modelo corrige; num union,
+  o erro diz as formas que o campo aceita.
+- **Verificador:** `response_format` com o esquema do veredito e 16 mil tokens de saída, porque o
+  raciocínio conta nela (com 4 mil o DeepSeek parava antes do veredito). Resposta fora do esquema
+  não trava o turno, mas vai para o log. Sem `CRPS_VERIFIER_MODEL`, quem verifica é o próprio
+  modelo do mestre.
+- **Custo:** o preço do modelo fica na mesma tabela (`pricing.ts`). A Venice faz o cache sozinha
+  e conta o que leu dele; o `prompt_cache_key` mantém as chamadas do turno no mesmo cache.
+
+Na primeira run (nov/2026), o DeepSeek V4.1 Flash criou o mundo em ~5 min por US$ 0,09 e jogou
+cada turno em ~65 s por US$ 0,02–0,03, uns 7× o Haiku. A narração saiu boa, no formato de falas
+do motor. O primeiro pedido de cada turno não pegou o cache da Venice (~28 mil tokens cheios),
+e isso é perto de 40% do custo do turno.
+
+O fallback no servidor, o `cache_control` e o `eager_input_streaming` são só do Claude. Outro
+serviço compatível entra em `SERVICES`, com o preço em `pricing.ts` e o modelo em `MODEL_CHOICES`.
+
 ## Arquitetura
 
 ```
@@ -109,6 +149,8 @@ src/gm/       o mestre
   gm.ts         loop do turno, eventos, verificador e rollback se a API falhar
   provider.ts   interface do provedor de modelo
   claude.ts     implementação com o SDK da Anthropic
+  openai.ts     serviços compatíveis com a API de chat da OpenAI (Venice)
+  models.ts     modelos do seletor e serviços (prefixo do id → URL e chave)
   offline.ts    provedor de roteiro fixo
   prompts.ts    prompt de sistema, mensagem de criação e do verificador
 src/server/   API HTTP (estado, novo jogo e turno em NDJSON)

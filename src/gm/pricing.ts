@@ -11,6 +11,8 @@ interface Price {
  * US$ por milhão de tokens (tabela da Anthropic, out/2026; gravação de cache de 5 min = 1,25× a entrada).
  * Cache do Haiku estimado em 0,1× e 1,25× da entrada; o Haiku 5.5 sobe para US$ 0,50/2,50 acima de
  * 100 mil tokens de prompt, o que um turno do CRPS não alcança. "offline" é o roteiro da demo, sem custo.
+ * Os da Venice vêm da lista de modelos dela (/models, nov/2026); ela não cobra gravar no cache, e
+ * a gravação fica com o preço da entrada.
  */
 const PRICES: Record<string, Price> = {
   'claude-fable-5-1': { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
@@ -19,6 +21,7 @@ const PRICES: Record<string, Price> = {
   'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
   'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  'venice/deepseek-v4-1-flash-uncensored': { input: 0.33, output: 1.32, cacheRead: 0.00825, cacheWrite: 0.33 },
   offline: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 

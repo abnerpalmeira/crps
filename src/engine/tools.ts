@@ -974,6 +974,20 @@ export interface ToolResult {
   data?: unknown;
 }
 
+/**
+ * Quando nenhuma forma de um union serve, o zod diz só "Invalid input": aqui vão as formas que o
+ * campo aceita, para o modelo corrigir sem tentar às cegas.
+ */
+function unionForms(error: z.ZodError): string {
+  let out = '';
+  for (const issue of error.issues) {
+    if (issue.code !== 'invalid_union') continue;
+    const forms = issue.errors.map((branch) => branch.map((b) => b.message.replace(/^Invalid input: /, '')).join(', '));
+    out += `\n${issue.path.join('.') || 'a entrada'} aceita uma destas formas: ${forms.join(' | ')}`;
+  }
+  return out;
+}
+
 /** Executa uma tool de forma atômica: se a regra falhar no meio, o estado volta ao que era. */
 export function runTool(engine: GameEngine, name: string, input: unknown): ToolResult {
   const def = TOOL_MAP.get(name);
@@ -982,7 +996,7 @@ export function runTool(engine: GameEngine, name: string, input: unknown): ToolR
   if (!parsed.success) {
     return {
       ok: false,
-      content: `Entrada inválida para ${name}:\n${z.prettifyError(parsed.error)}`,
+      content: `Entrada inválida para ${name}:\n${z.prettifyError(parsed.error)}${unionForms(parsed.error)}`,
       summary: `⚠️ ${name}: entrada inválida`,
       mutated: false,
     };
