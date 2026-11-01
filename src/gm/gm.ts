@@ -3,6 +3,7 @@ import type { GameEngine } from '../engine/engine';
 import { describeInput, hasMarks, parsePlayerInput } from '../engine/input';
 import { analyzeActs } from '../engine/body';
 import { dropRepeated } from '../engine/checks';
+import { answer, freeAct } from '../engine/free';
 import { performMenuAct } from '../engine/perform';
 import { analyzeReading } from '../engine/reading';
 import { analyzeSpeech, playerNarration, type SpeechLine } from '../engine/speech';
@@ -12,6 +13,7 @@ import { LlmChecker, type CheckInput, type Checker } from './checker';
 import type { CostEvent } from './pricing';
 import { OPTIONS_REQUEST, SYSTEM_PROMPT, setupMessage, turnMessage, verifierFeedback } from './prompts';
 import type { Effort, ModelProvider, ModelSession, Usage, Verdict } from './provider';
+import type { InputReader } from './reader';
 
 /** Eventos que o servidor transmite ao cliente (NDJSON) e a CLI imprime. */
 export type GmEvent =
@@ -21,6 +23,8 @@ export type GmEvent =
   | { type: 'narration'; text: string; turn: number; options: string[] }
   | { type: 'state'; world: WorldState }
   | { type: 'verify'; consistent: boolean; issues: string[] }
+  /** O texto do jogador resolvido no grid, sem o mestre: os passos e as falas, como o jogador os vê. */
+  | { type: 'free'; entries: string[] }
   | { type: 'usage'; usage: Usage }
   | { type: 'error'; message: string }
   /** Emitido pelo servidor no fim do turno: US$ no modo dev, só créditos no release. */
@@ -37,6 +41,8 @@ export interface GameMasterOptions {
   verify?: boolean;
   /** Quem confere a narração (padrão: o modelo do mestre, com o verificador de sempre). */
   checker?: Checker;
+  /** Quem lê o texto do jogador antes do turno, para resolver no grid o que não precisa do mestre. */
+  reader?: InputReader;
   /**
    * Prompt do mestre (padrão: SYSTEM_PROMPT, sem os visuais do catálogo 3D). Como função, sai do
    * mundo: os visuais são os da época dele, e na criação (setup) a época ainda não existe.
@@ -72,6 +78,7 @@ export class GameMaster {
   }
 
   async play(engine: GameEngine, input: string, emit: Emit): Promise<void> {
+    if (this.opts.reader && (await this.tryFree(engine, input, emit))) return;
     await this.atomically(engine, emit, async (before) => {
       engine.beginTurn();
       // O que o jogador pensa neste turno vira estado: só quem percebe mentes fica sabendo.
@@ -101,6 +108,30 @@ export class GameMaster {
         .map((o) => `{${player!.id}:${o.act.target}${o.act.other ? `>${o.act.other}` : ''}}`);
       await this.runTurn(engine, turnMessage(brief, input, marked), this.opts.effortTurn ?? 'low', verified, emit, changes, gestures, false, before);
     });
+  }
+
+  /**
+   * O texto que o motor resolve sozinho não chama o mestre nem gasta um turno: andar, sentar, pegar,
+   * passar por uma porta conhecida, ou perguntar a alguém algo que uma fala pronta dele já responde.
+   * O leitor (o Jev) escolhe entre as opções do motor; na dúvida, ou se o motor recusar, segue o turno.
+   */
+  private async tryFree(engine: GameEngine, input: string, emit: Emit): Promise<boolean> {
+    emit({ type: 'status', text: 'Lendo o que você escreveu…' });
+    try {
+      const { plan, usages } = await this.opts.reader!.read(engine, input);
+      for (const usage of usages) emit({ type: 'usage', usage });
+      if (!plan) return false;
+      const outcome = plan.kind === 'act' ? freeAct(engine, plan.act) : answer(engine, plan.npcId, plan.line, plan.said);
+      // O que o motor fez antes de recusar (ir até lá) aconteceu e fica, e o mestre continua dali.
+      if (outcome.entries.length) {
+        emit({ type: 'free', entries: outcome.entries });
+        emit({ type: 'state', world: engine.snapshot() });
+      }
+      return outcome.ok;
+    } catch (err) {
+      emit({ type: 'status', text: `Não deu para resolver sem o mestre (${err instanceof Error ? err.message : String(err)}).` });
+      return false;
+    }
   }
 
   /** Se a API cair no meio do turno, o mundo volta ao que era antes dele. */

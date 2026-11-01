@@ -4,6 +4,7 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { GESTURES, GRIPS, POSES, bodyPose, clipFor, gripOf, handsOf, mainGrip, variantIndex, type Act, type Grip, type Hand } from '../engine/body';
 import { ERA_DOORS, decorModel, locationLook } from '../engine/eras';
 import { isPassable, tileDef } from '../engine/layout';
+import { findPath } from '../engine/path';
 import { lightSources } from '../engine/light';
 import { hasNews } from '../engine/lines';
 import { typeChain } from '../engine/objects';
@@ -81,6 +82,13 @@ interface Actor {
   target: THREE.Vector3;
   yaw: number;
   seated: boolean;
+  /** O caminho que falta andar: o centro de cada tile e, no fim, o lugar exato (o assento). */
+  route: THREE.Vector3[];
+  /** Tiles por segundo no caminho atual, e para onde o corpo vira enquanto anda. */
+  speed: number;
+  walkYaw: number;
+  /** Sentou do outro lado da sala: o corpo dobra quando chegar, não no caminho. */
+  sitOnArrival?: boolean;
   /** Personagem animado do catálogo, quando já carregou (antes disso, o boneco primitivo). */
   model?: CharacterModel;
   /** Clipe pedido para o corpo inteiro (a pose, o andar ou um gesto) e a ação que está tocando. */
@@ -902,6 +910,27 @@ export class WorldView {
     if (this.shown) this.syncItems(this.shown.world, this.shown.loc);
   }
 
+  /**
+   * O caminho de quem mudou de lugar, pelo mesmo A* do motor, desviando de quem está parado. O último
+   * ponto é o lugar exato (no assento, com o ajuste dele). Sem caminho, a pessoa desliza como antes.
+   */
+  private walk(actor: Actor, world: WorldState, loc: Location, c: Character, pos: THREE.Vector3): boolean {
+    if (!c.pos) return false;
+    const from = { x: Math.round(actor.obj.position.x), y: Math.round(actor.obj.position.z) };
+    const people = new Set(
+      Object.values(world.characters)
+        .filter((o) => o.id !== c.id && o.locationId === loc.id && o.pos)
+        .map((o) => `${o.pos!.x},${o.pos!.y}`),
+    );
+    const tiles = findPath(loc, from, c.pos, (x, y) => people.has(`${x},${y}`));
+    if (!tiles || tiles.length < 2) return false;
+    actor.route = [...tiles.slice(1, -1).map((t) => new THREE.Vector3(t.x, pos.y, t.y)), pos.clone()];
+    const length = actor.route.reduce((sum, p, i) => sum + p.distanceTo(i ? actor.route[i - 1] : actor.obj.position), 0);
+    // Passo de quem anda; num caminho longo, mais depressa, para chegar em até três segundos.
+    actor.speed = Math.max(2.2, length / 3);
+    return true;
+  }
+
   private syncActors(world: WorldState, loc: Location): void {
     const present = new Set<string>();
     const view = perceptionOf(world, world.playerId);
@@ -924,7 +953,7 @@ export class WorldView {
         const label = new CSS2DObject(el);
         obj.add(label);
         this.room.add(obj);
-        actor = { obj, label, target: pos.clone(), yaw, seated: false, missing: new Set(), pose: '', poseClip: 'idle', stance: 'pe', grip: null, held: new Map() };
+        actor = { obj, label, target: pos.clone(), yaw, seated: false, route: [], speed: 2.2, walkYaw: yaw, missing: new Set(), pose: '', poseClip: 'idle', stance: 'pe', grip: null, held: new Map() };
         this.actors.set(c.id, actor);
         void this.upgradeActor(actor, c);
       }
@@ -952,8 +981,14 @@ export class WorldView {
         bar.append(fill);
         label.append(bar);
       }
+      // Mudou de lugar: anda pelo caminho do grid, tile a tile, em vez de deslizar reto até lá.
+      const walking = actor.target.distanceTo(pos) > 0.5 && this.walk(actor, world, loc, c, pos);
       actor.target.copy(pos);
-      if (actor.seated !== seated) setSeated(actor.obj, seated);
+      if (walking) {
+        // Levanta antes de sair andando; senta quando chegar.
+        if (actor.seated) setSeated(actor.obj, false);
+        actor.sitOnArrival = seated;
+      } else if (actor.seated !== seated && !actor.route.length) setSeated(actor.obj, seated);
       actor.seated = seated;
       this.pose(actor, world, c, loc, yaw);
       actor.label.position.set(0, labelHeight(actor), 0);
@@ -1121,7 +1156,8 @@ export class WorldView {
     this.controls.update();
     const now = this.clock.elapsedTime;
     for (const a of this.actors.values()) {
-      const moving = a.obj.position.distanceTo(a.target) > 0.06;
+      const next = a.route[0];
+      const moving = Boolean(next) || a.obj.position.distanceTo(a.target) > 0.06;
       if (a.model) {
         a.model.mixer.update(dt);
         // Gesto acaba no tempo dele, ou quando a pessoa sai andando.
@@ -1138,8 +1174,22 @@ export class WorldView {
         const want = moving ? 'walk' : a.missing.has(a.poseClip) ? 'idle' : a.poseClip;
         if (!(a.gesture && !a.gesture.upper) && a.clip !== want) void this.play(a, want);
       }
-      a.obj.position.lerp(a.target, 1 - Math.exp(-dt * 5));
-      a.obj.rotation.y = lerpAngle(a.obj.rotation.y, a.gesture?.yaw ?? a.yaw, 1 - Math.exp(-dt * 8));
+      if (next) {
+        // Anda até o próximo tile do caminho, virado para onde vai.
+        const to = V3.copy(next).sub(a.obj.position);
+        const d = to.length();
+        const step = a.speed * dt;
+        if (d > 0.05) a.walkYaw = Math.atan2(to.x, to.z);
+        if (d <= step) {
+          a.obj.position.copy(next);
+          a.route.shift();
+          if (!a.route.length && a.sitOnArrival) {
+            setSeated(a.obj, true);
+            a.sitOnArrival = false;
+          }
+        } else a.obj.position.addScaledVector(to, step / d);
+      } else a.obj.position.lerp(a.target, 1 - Math.exp(-dt * 5));
+      a.obj.rotation.y = lerpAngle(a.obj.rotation.y, a.gesture?.yaw ?? (next ? a.walkYaw : a.yaw), 1 - Math.exp(-dt * 8));
       if (a.obj.scale.x < 1) a.obj.scale.setScalar(Math.min(1, a.obj.scale.x + dt * 3));
       for (const [hand, h] of a.held) this.placeHeld(a, hand, h);
       // No chão, o corpo não fica onde a pessoa estava de pé (quem cai vai para trás): o nome segue a cabeça.

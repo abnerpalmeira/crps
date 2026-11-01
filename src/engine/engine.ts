@@ -3,6 +3,7 @@ import { modelCatalog, portable, sizeLabel, type CatalogItem } from './catalog';
 import { DECOR_IDS, ERAS, ERA_LOOK, PACK_ERA, outOfEra } from './eras';
 import { MAX_FRAMES, snapshotScene } from './frames';
 import { LEGEND, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, tileOf, type LocationSpec } from './layout';
+import { findPath as searchPath } from './path';
 import { OBJECT_LIBRARY, findObjectType, librarySummary, objectType, resolveType, typeChain } from './objects';
 import { DEFAULT_VISION, sightOf, type Sight } from './perception';
 import { parseDice, pickMany, randInt, rollDice } from './rng';
@@ -553,35 +554,9 @@ export class GameEngine {
     return null;
   }
 
-  /** Busca em largura com 8 direções, sem cortar quinas (exceto ao entrar/sair de um assento). */
-  findPath(loc: Location, from: Pos, to: Pos): Pos[] | null {
-    const W = loc.width;
-    const key = (x: number, y: number) => y * W + x;
-    const goal = key(to.x, to.y);
-    const prev = new Map<number, number>([[key(from.x, from.y), -1]]);
-    const queue: Pos[] = [from];
-    for (let i = 0; i < queue.length; i++) {
-      const cur = queue[i];
-      if (key(cur.x, cur.y) === goal) {
-        const path: Pos[] = [];
-        for (let k = goal; k !== -1; k = prev.get(k)!) path.unshift({ x: k % W, y: Math.floor(k / W) });
-        return path;
-      }
-      const curPassable = isPassable(loc, cur.x, cur.y);
-      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
-        const nx = cur.x + dx;
-        const ny = cur.y + dy;
-        if (nx < 0 || ny < 0 || nx >= loc.width || ny >= loc.height || prev.has(key(nx, ny))) continue;
-        const isGoal = key(nx, ny) === goal;
-        const nextPassable = isPassable(loc, nx, ny);
-        if (!isGoal && !nextPassable) continue;
-        const seatStep = !curPassable || !nextPassable;
-        if (dx && dy && !seatStep && !(isPassable(loc, cur.x + dx, cur.y) && isPassable(loc, cur.x, cur.y + dy))) continue;
-        prev.set(key(nx, ny), key(cur.x, cur.y));
-        queue.push({ x: nx, y: ny });
-      }
-    }
-    return null;
+  /** Caminho até um tile do local (A*, em path.ts), desviando de quem está parado no meio. */
+  findPath(loc: Location, from: Pos, to: Pos, moverId: string | null = null): Pos[] | null {
+    return searchPath(loc, from, to, (x, y) => !this.freeTile(loc, x, y, moverId));
   }
 
   private nearestFreeAround(loc: Location, target: Rect, from: Pos | null, moverId: string | null): Pos | null {
@@ -596,7 +571,7 @@ export class GameEngine {
     if (from) {
       let best: { p: Pos; len: number } | null = null;
       for (const p of candidates) {
-        const path = this.findPath(loc, from, p);
+        const path = this.findPath(loc, from, p, moverId);
         if (path && (!best || path.length < best.len)) best = { p, len: path.length };
       }
       if (best) return best.p;
@@ -1419,7 +1394,7 @@ export class GameEngine {
         exitUsed = this.exitTowards(fromLoc, targetLoc.id, input.via);
         if (exitUsed) {
           const goal = this.nearestFreeAround(fromLoc, exitUsed, c.pos, c.id);
-          if (goal && !this.findPath(fromLoc, c.pos, goal)) {
+          if (goal && !this.findPath(fromLoc, c.pos, goal, c.id)) {
             throw new EngineError(`${c.name} não tem caminho até ${exitUsed.label} (${exitUsed.id.slice(fromLoc.id.length + 1)}).`);
           }
           this.link(fromLoc, exitUsed, targetLoc.id);
@@ -1437,7 +1412,7 @@ export class GameEngine {
       if (!hasSpot) throw new EngineError('Informe o destino: {x, y}, {seat}, {near} ou {location_id} de outro local.');
       spot = this.resolvePlacement(targetLoc, input.to, c.id, c.pos);
       if (c.pos) {
-        path = this.findPath(targetLoc, c.pos, spot.pos);
+        path = this.findPath(targetLoc, c.pos, spot.pos, c.id);
         if (!path) throw new EngineError(`${c.name} não tem caminho de (${c.pos.x},${c.pos.y}) até (${spot.pos.x},${spot.pos.y}).`);
       }
     }

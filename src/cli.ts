@@ -57,6 +57,9 @@ function print(event: GmEvent): void {
     case 'tool':
       stdout.write(dim(`  ${event.summary}\n`));
       break;
+    case 'free':
+      stdout.write(`\n${event.entries.map(formatLine).join('\n')}\n${dim('  ⚡ resolvido no grid, sem o mestre')}\n`);
+      break;
     case 'verify':
       if (!event.consistent) stdout.write(dim(`  🔁 verificador: ${event.issues.join(' | ')}\n`));
       break;

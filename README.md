@@ -65,6 +65,7 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 | `CRPS_EFFORT_SETUP` | `medium` | Esforço na criação do mundo |
 | `CRPS_EFFORT_TURN` | `low` | Esforço nos turnos; suba se o mestre esquecer de chamar tools |
 | `TYPESAFE_API_KEY` | | Chave do Jev, que confere a narração; sem ela, quem confere é o modelo |
+| `CRPS_READ` | `1` | `0` desliga a leitura do texto do jogador pelo Jev (tudo o que ele escreve vai ao mestre) |
 | `CRPS_VERIFY` | `jev` | `jev`: o código e o Jev conferem, com o modelo de reserva; `llm`: só o modelo; `ambos`: os dois, com o jogo seguindo o modelo e os vereditos em `conferencias.jsonl`; `0` desliga |
 | `CRPS_PROVIDER` | `claude` | `offline` usa o roteiro fixo |
 | `CRPS_SAVES` | `saves` | Pasta dos saves |
@@ -197,12 +198,14 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   brief.ts      o resumo do estado que o modelo recebe a cada turno
   frames.ts     falas `@id[modo>alvo]:` → passos do replay; retratos da cena por turno
   free.ts       ações livres no grid (andar, conversar com as falas prontas), sem o mestre
+  path.ts       caminho no grid por A*, o mesmo no motor e no 3D
   lines.ts      falas prontas dos NPCs: a próxima que toca e quem tem novidade
   diff.ts       o que o turno mudou no mundo (antes × depois), para a conferência
   checks.ts     conferências só de código: nomes indevidos e falas que repetem a narração
 src/gm/       o mestre
   gm.ts         loop do turno, eventos, conferência e rollback se a API falhar
   checker.ts    quem confere a narração: o código e o Jev, o modelo, ou os dois em paralelo
+  reader.ts     o Jev lê o texto do jogador e resolve no grid o que não precisa do mestre
   jev.ts        cliente do Jev (TypeSafe), que responde perguntas tipadas
   provider.ts   interface do provedor de modelo
   claude.ts     implementação com o SDK da Anthropic
@@ -338,6 +341,16 @@ Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e
 - **Andar:** clicar no chão leva o personagem até o tile (numa parede, num móvel ou em alguém,
   até o livre mais perto), e "Ir até" no inspetor leva até a pessoa ou o móvel, pelas regras de
   `move_character`.
+- **O caminho:** o grid é um grafo, e o caminho sai do A* ([path.ts](src/engine/path.ts)). Cada tile
+  liga com os oito vizinhos, o passo reto custa 1 e o diagonal √2, e ninguém corta quina de parede
+  ou móvel. A rota desvia de quem está parado; sem outra saída, passa por essa pessoa. O 3D anda
+  pelo mesmo caminho, tile a tile e virado para onde vai, em vez de deslizar reto até o destino.
+  Quem senta do outro lado da sala se levanta antes de sair e senta quando chega.
+- **Escrever:** o que o jogador escreve também pode não precisar do mestre. O Jev lê o texto e
+  escolhe entre as ações livres do menu naquela cena ("Vou até a Hana", "Vou para a cozinha",
+  "Sento numa cadeira"), ou entre as falas prontas de quem o jogador procura ("Hana, ele é da
+  vigilância?"). Resolvido assim, o chat marca "⚡ Resolvido no grid, sem o mestre", e o turno não
+  avança.
 - **Agir:** sentar, deitar, levantar, mudar de postura, pegar, largar, segurar um objeto, guardar,
   acender, apagar, pôr sobre um móvel e passar por uma porta que já leva a um lugar conhecido,
   também na hora. Sacar uma arma, mirar e abrir caminho para um lugar novo continuam com o mestre.
@@ -804,16 +817,29 @@ Falta:
 
 ### O mestre com o Jev
 
-A conferência foi a primeira fase (veja [Conferência com o Jev](#conferência-com-o-jev)). A ideia é
-o código manter as regras e montar as opções, o Jev decidir entre elas, e um modelo de texto só
-escrever. As próximas fases, uma de cada vez, depois de medir a anterior:
+A ideia é o código manter as regras e montar as opções, o Jev decidir entre elas, e um modelo de
+texto só escrever. Duas fases estão feitas:
 
-- **Texto do jogador sem o mestre:** o Jev lê o que o jogador escreve (intenção, com quem fala, de
-  quem fala, alvo, objeto). As ações físicas com confiança alta viram ação livre, e uma pergunta a
-  um NPC é respondida pela fala pronta que o Jev escolher. Se nenhuma servir, o turno vai ao mestre.
+1. **A conferência** (veja [Conferência com o Jev](#conferência-com-o-jev)).
+2. **O texto do jogador sem o mestre** ([reader.ts](src/gm/reader.ts)). Antes do turno, um pedido ao
+   Jev pergunta:
+   - se o jogador faz uma coisa só;
+   - se ele fala, e com quem;
+   - qual ação livre do menu ele faz, entre as da cena (cada móvel com o id, "mesa (mesa-1)");
+   - para cada pessoa com falas prontas, qual delas responde ao que o jogador disse.
+
+   A ação física sai com confiança de 0,6; a fala pronta, só com 0,8, porque uma resposta errada
+   quebra a cena e o mestre só custa o turno. Pensamentos, marcas do menu, sussurros marcados e
+   texto comprido vão direto ao mestre. Na avaliação, no restaurante, ele acertou 13 de 13 frases.
+   Cada leitura custou uns US$ 0,00013 e levou uns 0,2 s. Um pedido de chá não foi tomado por uma
+   fala que fala de chá.
+
+As próximas, uma de cada vez, depois de medir a anterior:
+
 - **NPCs decididos pelo Jev:** a iniciativa vira sim ou não por NPC ("viria agora?"), a fala pronta
   é escolhida entre as dele, e no turno do mestre o Jev decide como cada um reage e o que conta,
-  entre os fatos que ele sabe.
+  entre os fatos que ele sabe. Quem acabou de falar com o jogador já não emenda outra fala pela
+  iniciativa.
 - **O escritor:** o turno comum vira motor → Jev → motor → uma chamada sem tools que escreve a
   narração, as falas e as três ações → conferência. O loop com as tools fica para criar o mundo e
   para o que o Jev não decide com confiança, e é ele que custará moedas.

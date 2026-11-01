@@ -9,6 +9,7 @@ import { JevChecker, LlmChecker, ShadowChecker, type Checker } from './checker';
 import { ClaudeProvider, DEFAULT_MODEL } from './claude';
 import { GameMaster } from './gm';
 import { JEV_KEY_ENV, JevClient } from './jev';
+import { JevReader } from './reader';
 import { SERVICES, modelChoice, serviceOf } from './models';
 import { OpenAICompatibleProvider, ProviderHttpError } from './openai';
 import { systemPrompt, type LookOption } from './prompts';
@@ -120,6 +121,8 @@ export function createGameMaster(opts: { model?: string } = {}): GameMaster {
     verify: process.env.CRPS_VERIFY !== '0',
     // Na demo offline quem confere é o roteiro, sem rede.
     checker: isOffline() ? undefined : checkerFor(provider),
+    // O Jev lê o texto do jogador e resolve no grid o que não precisa do mestre (CRPS_READ=0 desliga).
+    reader: isOffline() || process.env.CRPS_READ === '0' ? undefined : new JevReader(new JevClient()),
     system: (world, setup) => systemPrompt(!looks ? null : setup ? [] : eraLooks(world.era)),
   });
 }

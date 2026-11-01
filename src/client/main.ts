@@ -58,6 +58,10 @@ function handle(event: GmEvent, turn: TurnView): void {
     case 'verify':
       if (!event.consistent) turn.note('🔁 O verificador pediu uma correção ao mestre');
       break;
+    case 'free':
+      turn.free(event.entries);
+      turn.note('⚡ Resolvido no grid, sem o mestre');
+      break;
     case 'status':
       turn.setStatus(event.text);
       break;
@@ -83,9 +87,14 @@ async function run(path: '/api/new' | '/api/turn', body: Record<string, string>,
   const turn = ui.beginTurn(input);
   turn.setStatus(path === '/api/new' ? 'Montando o mundo…' : 'O mestre está pensando…');
   let failure: string | null = null;
+  // Marcados dentro do callback: a análise de fluxo do TypeScript não vê, daí o "as".
+  let freed = null as string[] | null;
+  let narrated = false as boolean;
   try {
     await streamEvents(path, body, (event) => {
       if (event.type === 'error') failure = event.message;
+      if (event.type === 'free') freed = event.entries;
+      if (event.type === 'narration') narrated = true;
       handle(event, turn);
     });
   } catch (err) {
@@ -96,7 +105,10 @@ async function run(path: '/api/new' | '/api/turn', body: Record<string, string>,
     busy = false;
     ui.setBusy(false);
   }
-  if (failure === null) playback.playLatest();
+  // Resolvido no grid: sem turno novo para rever, só o balão de quem respondeu.
+  if (failure === null && freed && !narrated) {
+    if (freed.some((e) => parseSpeechLine(e))) playback.showLast();
+  } else if (failure === null) playback.playLatest();
   else if (path === '/api/new') await resync(failure);
 }
 
