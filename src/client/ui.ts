@@ -1,4 +1,6 @@
 import { actLabel, actionsFor, type ActionOption } from '../engine/actions';
+import { parseSpeechLine } from '../engine/frames';
+import type { FreeAct } from '../engine/free';
 import { lightAt, lightLabel, lightSources } from '../engine/light';
 import { FEELING_LABELS, feelingsHere, perceptionOf, strangerLabel } from '../engine/perception';
 import { findByName, hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
@@ -54,13 +56,14 @@ interface TurnContext {
   onReplay: (turn: number) => void;
 }
 
-/** Um turno no registro: fala do jogador, chips do motor e a narração (que pode ser reescrita). */
+/** Um turno no registro: fala do jogador, chips do motor e a narração, que chega inteira e já conferida. */
 export class TurnView {
   private readonly root = el('li', 'turn');
   private readonly chips = el('div', 'chips');
-  private readonly narration = el('div', 'narration live');
+  private readonly narration = el('div', 'narration');
   private readonly status = el('div', 'status');
-  private raw = '';
+  /** O que o jogador fez no grid depois da narração, sem o mestre. */
+  private readonly after = el('div', 'after');
 
   constructor(
     private readonly log: HTMLElement,
@@ -72,7 +75,7 @@ export class TurnView {
       line.innerHTML = formatPlayerInput(input, ctx.world());
       this.root.append(line);
     }
-    this.root.append(this.chips, this.status, this.narration);
+    this.root.append(this.chips, this.status, this.narration, this.after);
     log.append(this.root);
     this.scroll();
   }
@@ -86,23 +89,21 @@ export class TurnView {
     this.scroll();
   }
 
-  delta(text: string): void {
-    this.raw += text;
+  final(text: string): void {
     this.status.textContent = '';
-    this.narration.innerHTML = formatNarration(this.raw, this.ctx.speaker);
+    this.narration.innerHTML = formatNarration(text, this.ctx.speaker);
     this.scroll();
   }
 
-  reset(): void {
-    this.raw = '';
-    this.narration.innerHTML = '';
-  }
-
-  final(text: string): void {
-    this.raw = text;
-    this.status.textContent = '';
-    this.narration.innerHTML = formatNarration(text, this.ctx.speaker);
-    this.narration.classList.remove('live');
+  /** Ações livres depois da narração: o passo vira chip; a fala pronta que ele ouviu, fala. */
+  free(entries: string[]): void {
+    for (const text of entries) {
+      if (parseSpeechLine(text)) {
+        const said = el('div', 'narration');
+        said.innerHTML = formatNarration(text, this.ctx.speaker);
+        this.after.append(said);
+      } else this.after.append(el('span', `chip ${chipKind(text, true)}`, text));
+    }
     this.scroll();
   }
 
@@ -138,7 +139,6 @@ export class TurnView {
 
   finish(): void {
     this.status.textContent = '';
-    this.narration.classList.remove('live');
   }
 
   private scroll(): void {
@@ -152,6 +152,8 @@ export class Ui {
   onNewGame: (premise: string) => void = () => {};
   onSelect: (pick: Pick | null) => void = () => {};
   onReplay: (turn: number) => void = () => {};
+  /** Ação livre (andar, conversar): o motor faz na hora, sem o mestre. */
+  onFree: (act: FreeAct) => void = () => {};
   onControl: (command: string) => void = () => {};
   onModel: (id: string) => void = () => {};
 
@@ -168,6 +170,10 @@ export class Ui {
   private model = { current: '', options: [] as ModelOption[] };
   private inspected: Pick | null = null;
   private world: WorldState | null = null;
+  /** As ações que o mestre sugeriu no fim da última narração. */
+  private options: string[] = [];
+  /** O último turno do registro, onde entram as ações livres feitas depois dele. */
+  private lastTurn: TurnView | null = null;
   private readonly ctx: TurnContext = {
     speaker: (id) => this.speaker(id),
     world: () => this.world,
@@ -283,7 +289,25 @@ export class Ui {
     $<HTMLButtonElement>('#model').disabled = busy || !this.model.options.length;
     if (busy) this.closeModelMenu();
     document.body.classList.toggle('busy', busy);
+    $('#options').hidden = busy || !this.options.length;
     if (!busy) this.input.focus();
+  }
+
+  /** Botões das ações que o mestre sugeriu: um clique manda a ação como se o jogador a escrevesse. */
+  setOptions(options: string[]): void {
+    this.options = options;
+    const box = $('#options');
+    box.replaceChildren(
+      ...options.map((text) => {
+        const button = el('button', 'option');
+        button.type = 'button';
+        // Fala, sussurro e pensamento aparecem como na linha do jogador no registro.
+        button.innerHTML = formatPlayerInput(text, this.world);
+        button.addEventListener('click', () => this.onSend(text));
+        return button;
+      }),
+    );
+    box.hidden = this.busy || !options.length;
   }
 
   /** Completa a ação com um texto (fala, escrita) depois do que já está escrito, com o cursor no fim. */
@@ -405,11 +429,19 @@ export class Ui {
 
   beginTurn(input: string | null): TurnView {
     $('#empty-log').hidden = true;
-    return new TurnView(this.log, input, this.ctx);
+    this.lastTurn = new TurnView(this.log, input, this.ctx);
+    return this.lastTurn;
+  }
+
+  /** O que o jogador fez no grid (o passo, a fala que ouviu) entra no último turno do registro. */
+  addFree(entries: string[]): void {
+    this.lastTurn?.free(entries);
   }
 
   clearLog(): void {
     this.log.replaceChildren();
+    this.lastTurn = null;
+    this.setOptions([]);
     this.closeInspector();
   }
 
@@ -474,6 +506,7 @@ export class Ui {
   renderHistory(world: WorldState): void {
     this.world = world;
     this.log.replaceChildren();
+    this.lastTurn = null;
     const byTurn = new Map<number, LogEntry[]>();
     for (const entry of world.log) byTurn.set(entry.turn, [...(byTurn.get(entry.turn) ?? []), entry]);
     for (const [turnNumber, entries] of byTurn) {
@@ -485,10 +518,13 @@ export class Ui {
           turn.setTurn(turnNumber);
         }
         if (e.kind === 'system') turn.note(e.text);
+        if (e.kind === 'free') turn.free([e.text]);
       }
       turn.finish();
+      this.lastTurn = turn;
     }
     $('#empty-log').hidden = world.log.length > 0;
+    this.setOptions(world.log.findLast((e) => e.kind === 'narration')?.options ?? []);
   }
 
   renderWorld(world: WorldState): void {
@@ -506,6 +542,7 @@ export class Ui {
 
   renderNoWorld(): void {
     this.world = null;
+    this.setOptions([]);
     $('#hud-location').textContent = 'CRPS';
     $('#hud-clock').textContent = '';
     $('#hud-sense').textContent = '';
@@ -644,7 +681,8 @@ export class Ui {
       if (a.note) b.append(el('small', 'note', a.note));
       b.addEventListener('click', () => {
         if (a.options) return this.renderActions(row, a.options, () => this.renderActions(row, actions, back));
-        if (a.token) this.insertToken(a.token);
+        if (a.free) this.onFree(a.free);
+        else if (a.token) this.insertToken(a.token);
         else if (a.prefill) this.prefill(a.prefill);
       });
       row.append(b);

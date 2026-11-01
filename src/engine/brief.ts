@@ -7,7 +7,7 @@ import { typeChain } from './objects';
 import { lightAt, lightLabel, lightSources } from './light';
 import { FEELING_LABELS, feelingsHere, perceives, perceptionOf, strangerLabel, visionOf, type Perception } from './perception';
 import { formatClock, signed, truncate } from './text';
-import type { Character, DifficultyName, Location, PerkDef, Visibility } from './types';
+import type { Character, DifficultyName, Location, PerkDef, ReadyLine, Visibility } from './types';
 
 const MARKERS = '123456789AEFGHIJKLMNOPQRUVXYZ'.split('');
 
@@ -237,7 +237,7 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       return (
         `- ${markers.get(c.id) ?? '?'} ${c.name} [${c.id}]${c.isPlayer ? ' (VOCÊ, jogador)' : ''}: ${c.role}; ${where} (${c.pos?.x},${c.pos?.y}), olhando ${c.facing}${holding}; ` +
         `${c.detail === 'sketch' ? 'esboço' : 'completo'}; traços: ${c.traits.join(', ') || '—'}${res ? `; ${res}` : ''}` +
-        `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${senses}${manner}${mind}${feels}${wants}`
+        `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${senses}${manner}${mind}${feels}${wants}${c.isPlayer ? '' : linesNote(c)}`
       );
     });
     out.push(`\nPersonagens aqui:\n${people.join('\n') || '(ninguém)'}`);
@@ -340,11 +340,22 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     }
   }
 
-  const recent = s.log.filter((e) => (e.kind === 'player' || e.kind === 'narration') && e.turn > s.turn - recentTurns);
+  // "Livre" é o que o jogador fez no grid depois da narração, sem o mestre: andou, ouviu uma fala pronta.
+  const recent = s.log.filter((e) => (e.kind === 'player' || e.kind === 'narration' || e.kind === 'free') && e.turn > s.turn - recentTurns);
+  const who = { player: 'Jogador', narration: 'Mestre', free: 'Livre' } as Record<string, string>;
   out.push(
     `\n## Últimos acontecimentos\n` +
-      (recent.map((e) => `T${e.turn} ${e.kind === 'player' ? 'Jogador' : 'Mestre'}: ${e.kind === 'player' ? e.text : truncate(e.text, 1200)}`).join('\n') ||
-        '(início da campanha)'),
+      (recent.map((e) => `T${e.turn} ${who[e.kind]}: ${e.kind === 'narration' ? truncate(e.text, 1200) : e.text}`).join('\n') || '(início da campanha)') +
+      (recent.some((e) => e.kind === 'free') ? '\n(Livre: o que o jogador fez no grid depois da narração, sem você. Continue de onde ele está.)' : ''),
   );
   return out.join('\n');
+}
+
+/** As falas prontas do NPC, para o mestre manter a voz dele e saber quem ainda não tem as gerais. */
+function linesNote(c: Character): string {
+  const quote = (list: ReadyLine[]) =>
+    list.map((l) => `«${truncate(l.text, 120)}»${l.fact ? ` (conta ${l.fact})` : ''}${l.introduces ? ' (diz o nome)' : ''}${l.whisper ? ' (cochicho)' : ''}`).join(' ');
+  const turn = c.lines?.turn.length ? `; falas do turno: ${quote(c.lines.turn)}` : '';
+  const initiative = c.lines?.initiative ? `; iniciativa: ${c.lines.initiative}` : '';
+  return `${turn}${initiative}${c.lines?.general.length ? `; falas gerais: ${quote(c.lines.general)}` : '; sem falas gerais'}`;
 }

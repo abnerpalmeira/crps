@@ -8,16 +8,15 @@ import { analyzeSpeech, playerNarration, type SpeechLine } from '../engine/speec
 import { runTool, toolSpecs, type ToolResult } from '../engine/tools';
 import type { WorldState } from '../engine/types';
 import type { CostEvent } from './pricing';
-import { SYSTEM_PROMPT, setupMessage, turnMessage, verifierFeedback, verifierPrompt } from './prompts';
+import { OPTIONS_REQUEST, SYSTEM_PROMPT, setupMessage, turnMessage, verifierFeedback, verifierPrompt } from './prompts';
 import type { Effort, ModelProvider, ModelSession, Usage, Verdict } from './provider';
 
 /** Eventos que o servidor transmite ao cliente (NDJSON) e a CLI imprime. */
 export type GmEvent =
   | { type: 'status'; text: string }
   | { type: 'tool'; name: string; ok: boolean; summary: string; input: unknown; result: string }
-  | { type: 'narration_delta'; text: string }
-  | { type: 'narration_reset' }
-  | { type: 'narration'; text: string; turn: number }
+  /** A narração do turno, só depois de conferida, como o jogador a percebe, e as ações que o mestre sugere. */
+  | { type: 'narration'; text: string; turn: number; options: string[] }
   | { type: 'state'; world: WorldState }
   | { type: 'verify'; consistent: boolean; issues: string[] }
   | { type: 'usage'; usage: Usage }
@@ -130,24 +129,30 @@ export class GameMaster {
 
     if (result.verifiable && result.text) {
       // Alcance das falas, dos gestos e das leituras é regra do motor: confere sem depender do verificador.
+      const { narration } = splitOptions(result.text);
       const speechIssues = [
-        ...analyzeSpeech(engine.state, result.text).issues,
-        ...analyzeActs(engine.state, result.text),
-        ...analyzeReading(engine.state, result.text).issues,
+        ...analyzeSpeech(engine.state, narration).issues,
+        ...analyzeActs(engine.state, narration),
+        ...analyzeReading(engine.state, narration).issues,
       ];
+      if (this.opts.verify !== false) emit({ type: 'status', text: 'Conferindo a narração…' });
+      // O verificador vê também as ações sugeridas: elas não podem usar nome nem fato que o jogador não sabe.
       const verdict = this.opts.verify !== false ? await this.check(engine, changes, input, result.text, emit) : null;
       if (verdict) emit({ type: 'verify', ...verdict });
       if (speechIssues.length) emit({ type: 'verify', consistent: false, issues: speechIssues });
       const issues = [...speechIssues, ...(verdict && !verdict.consistent ? verdict.issues : [])];
       if (issues.length) {
-        emit({ type: 'narration_reset' });
+        emit({ type: 'status', text: 'Ajustando a narração…' });
         session.addUserText(verifierFeedback(issues));
         const corrected = await this.loop(engine, session, emit, changes);
         if (corrected.text) result = { ...corrected, text: dropPreamble(corrected.text) };
       }
     }
 
-    const told = result.text || SILENCE;
+    const { narration, options: suggested } = splitOptions(result.text);
+    // Sempre três ações: se o mestre esqueceu, ele é chamado de novo só para elas.
+    const options = result.verifiable && narration && suggested.length < 3 ? await this.askOptions(session, emit, suggested) : suggested;
+    const told = narration || SILENCE;
     const missing = gestures.filter((g) => !told.includes(g));
     const text = missing.length ? `${missing.join(' ')}\n${told}` : told;
     const speech = analyzeSpeech(engine.state, text);
@@ -163,10 +168,23 @@ export class GameMaster {
       engine.readText(item, line.readerId);
     }
     const shown = playerNarration(engine.state, text);
-    engine.log('narration', text, shown !== text ? shown : undefined);
+    engine.log('narration', text, shown !== text ? shown : undefined, options);
     engine.recordFrame();
-    emit({ type: 'narration', text: shown, turn: engine.state.turn });
+    emit({ type: 'narration', text: shown, turn: engine.state.turn, options });
     emit({ type: 'state', world: engine.snapshot() });
+  }
+
+  /** Pede só as ações, sem refazer a narração. Se a chamada falhar, o turno fica com as que havia. */
+  private async askOptions(session: ModelSession, emit: Emit, had: string[]): Promise<string[]> {
+    try {
+      session.addUserText(OPTIONS_REQUEST);
+      const step = await session.step();
+      if (step.usage) emit({ type: 'usage', usage: step.usage });
+      const { options } = splitOptions(step.text);
+      return options.length ? options : had;
+    } catch {
+      return had;
+    }
   }
 
   /** Cochichos e falas que nem todos ouviram viram conhecimento só de quem ouviu. */
@@ -186,35 +204,21 @@ export class GameMaster {
   private async loop(engine: GameEngine, session: ModelSession, emit: Emit, changes: string[]): Promise<LoopResult> {
     let reserve = '';
     for (let i = 0; i < (this.opts.maxSteps ?? 30); i++) {
-      let streamed = false;
-      // Linhas de fala só saem inteiras e já como o jogador as percebe.
-      const filter = new SpeechFilter(
-        (line) => playerNarration(engine.state, line),
-        (text) => {
-          streamed = true;
-          emit({ type: 'narration_delta', text });
-        },
-      );
+      // O texto não vai ao jogador enquanto chega: a narração só sai inteira, depois de conferida.
+      let writing = false;
       const step = await session.step({
-        onText: (delta) => filter.push(delta),
-        onRetry: () => {
-          filter.reset();
-          if (streamed) emit({ type: 'narration_reset' });
-          streamed = false;
+        onText: () => {
+          if (!writing) emit({ type: 'status', text: 'O mestre está narrando…' });
+          writing = true;
         },
       });
-      filter.flush();
       if (step.usage) emit({ type: 'usage', usage: step.usage });
-      if (step.stop === 'refusal') {
-        if (streamed) emit({ type: 'narration_reset' });
-        return { text: REFUSAL, verifiable: false };
-      }
+      if (step.stop === 'refusal') return { text: REFUSAL, verifiable: false };
       const text = step.text.trim();
       if (step.stop !== 'tool_use') return { text: text || reserve, verifiable: step.stop === 'end_turn' };
 
       // Texto antes de tools não é a narração do turno; fica só de reserva.
       if (text) reserve = text;
-      if (streamed) emit({ type: 'narration_reset' });
       let mutated = false;
       const results = step.toolCalls.map((call) => {
         const r = safeRunTool(engine, call.name, call.input);
@@ -254,54 +258,19 @@ export function dropPreamble(text: string): string {
   return rest.length && PREAMBLE.test(first) ? rest.join('\n\n').trim() : text;
 }
 
-/**
- * Repassa a narração em pedaços, mas segura cada linha que começa com "@" (uma fala) até ela
- * fechar, para transformá-la antes: o jogador nunca recebe o conteúdo de algo que não ouviu.
- */
-export class SpeechFilter {
-  private line = '';
-  private holding = false;
-  private atLineStart = true;
+/** Ação sugerida: linha ">> texto" no fim da resposta do mestre (aceita ">" e numeração). */
+const OPTION = /^\s*>{1,2}\s*(?:\d+[.)]\s*|[-*•]\s*)?(.+?)\s*$/;
 
-  constructor(
-    private readonly transform: (line: string) => string,
-    private readonly out: (text: string) => void,
-  ) {}
-
-  push(chunk: string): void {
-    let passthrough = '';
-    for (const ch of chunk) {
-      if (this.atLineStart && ch === '@') this.holding = true;
-      if (this.holding) {
-        if (ch === '\n') {
-          // Fala que o jogador nem vê nem ouve some inteira, sem deixar linha em branco.
-          const shown = this.transform(this.line);
-          if (shown) passthrough += `${shown}\n`;
-          this.line = '';
-          this.holding = false;
-          this.atLineStart = true;
-        } else {
-          this.line += ch;
-          this.atLineStart = false;
-        }
-      } else {
-        passthrough += ch;
-        this.atLineStart = ch === '\n';
-      }
-    }
-    if (passthrough) this.out(passthrough);
+/** Separa da narração as ações que o mestre sugere ao jogador: a narração fica sem elas, e vão até três. */
+export function splitOptions(text: string): { narration: string; options: string[] } {
+  const narration: string[] = [];
+  const options: string[] = [];
+  for (const line of text.split('\n')) {
+    const option = OPTION.exec(line)?.[1];
+    if (option) options.push(option);
+    else narration.push(line);
   }
-
-  flush(): void {
-    if (this.holding && this.line) this.out(this.transform(this.line));
-    this.reset();
-  }
-
-  reset(): void {
-    this.line = '';
-    this.holding = false;
-    this.atLineStart = true;
-  }
+  return { narration: narration.join('\n').trim(), options: options.slice(0, 3) };
 }
 
 /** Um bug no motor vira erro de tool para o modelo, em vez de derrubar o turno. */

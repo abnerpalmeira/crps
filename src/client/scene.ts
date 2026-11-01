@@ -5,6 +5,7 @@ import { GESTURES, GRIPS, POSES, bodyPose, clipFor, gripOf, handsOf, mainGrip, v
 import { ERA_DOORS, decorModel, locationLook } from '../engine/eras';
 import { isPassable, tileDef } from '../engine/layout';
 import { lightSources } from '../engine/light';
+import { hasNews } from '../engine/lines';
 import { typeChain } from '../engine/objects';
 import { lifeStatId, perceptionOf, strangerLabel, visionOf } from '../engine/perception';
 import type { Character, Fixture, Item, Location, ObjectType, WorldState } from '../engine/types';
@@ -155,6 +156,8 @@ function heldKey(item: Item): string {
  */
 export class WorldView {
   onPick: (pick: Pick | null) => void = () => {};
+  /** Clique no chão: o jogador anda até o tile, sem o mestre. */
+  onWalk: (x: number, y: number) => void = () => {};
 
   private readonly renderer: THREE.WebGLRenderer;
   private readonly labels = new CSS2DRenderer();
@@ -233,10 +236,13 @@ export class WorldView {
     canvas.addEventListener('pointerdown', (e) => (this.pressed = { x: e.clientX, y: e.clientY }));
     canvas.addEventListener('pointerup', (e) => {
       if (Math.hypot(e.clientX - this.pressed.x, e.clientY - this.pressed.y) > 5) return;
-      this.select(this.pickAt(e));
+      const pick = this.pickAt(e);
+      if (pick?.kind === 'tile') return this.onWalk(pick.x, pick.y);
+      this.select(pick);
     });
     canvas.addEventListener('pointermove', (e) => {
-      canvas.style.cursor = this.pickAt(e) ? 'pointer' : 'grab';
+      const pick = this.pickAt(e);
+      canvas.style.cursor = !pick ? 'grab' : pick.kind === 'tile' ? 'cell' : 'pointer';
     });
     new ResizeObserver(() => this.resize()).observe(host);
     this.resize();
@@ -341,12 +347,16 @@ export class WorldView {
     return Boolean(this.room.getObjectByProperty('name', `fixture:${pick.id}`));
   }
 
-  private pickAt(e: PointerEvent): Pick | null {
+  /** O que está sob o ponteiro: uma pessoa, um móvel ou um item, ou o tile do chão (para andar). */
+  private pickAt(e: PointerEvent): Pick | { kind: 'tile'; x: number; y: number } | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
-    const hit = this.raycaster.intersectObjects(this.room.children, true).find((h) => h.object.userData.pick);
-    return (hit?.object.userData.pick as Pick | undefined) ?? null;
+    const hit = this.raycaster.intersectObjects(this.room.children, true).find((h) => h.object.userData.pick || h.object.userData.floor);
+    if (!hit) return null;
+    if (!hit.object.userData.floor) return hit.object.userData.pick as Pick;
+    const p = this.room.worldToLocal(hit.point.clone());
+    return { kind: 'tile', x: Math.round(p.x), y: Math.round(p.z) };
   }
 
   private resize(): void {
@@ -415,6 +425,7 @@ export class WorldView {
       floor.setColorAt(i, floorColor(loc.floor, x, y));
     });
     floor.receiveShadow = true;
+    floor.userData.floor = true;
     this.room.add(floor);
 
     for (const f of loc.fixtures) {
@@ -927,6 +938,8 @@ export class WorldView {
       );
       label.classList.toggle('vulto', sight !== 'nitido');
       label.classList.toggle('stranger', !known && sight === 'nitido');
+      // 💬: tem fala do turno que o jogador ainda não ouviu, como os NPCs que chamam atenção em Persona.
+      label.classList.toggle('news', !c.isPlayer && sight === 'nitido' && hasNews(c));
       actor.label.visible = sight !== 'nada' || known;
       // Barra de vida só quando o jogador vê a pessoa e pode ver a vida dela (pública ou por perk).
       if (life && sight === 'nitido' && view.canSeeStat(life, c.id)) {

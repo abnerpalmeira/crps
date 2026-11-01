@@ -1,6 +1,6 @@
 import { labelMenuActs } from '../engine/actions';
 import { parseActs } from '../engine/body';
-import { parseBeats, sceneAt, type Beat } from '../engine/frames';
+import { parseBeats, parseSpeechLine, sceneAt, type Beat } from '../engine/frames';
 import type { Clock, SceneFrame, WorldState } from '../engine/types';
 import { capitalize, readable, speechHtml } from './format';
 import type { WorldView } from './scene';
@@ -32,18 +32,20 @@ export interface PlaybackUi {
 }
 
 export function buildFrames(world: WorldState): Frame[] {
-  const turns = new Map<number, { input: string | null; narration: string | null }>();
+  const turns = new Map<number, { input: string | null; narration: string | null; free: string[] }>();
   for (const e of world.log) {
-    const t = turns.get(e.turn) ?? { input: null, narration: null };
+    const t = turns.get(e.turn) ?? { input: null, narration: null, free: [] };
     if (e.kind === 'player') t.input = e.text;
     if (e.kind === 'narration') t.narration = e.text;
+    // As falas prontas que o jogador ouviu no grid vêm depois da narração do turno.
+    if (e.kind === 'free' && parseSpeechLine(e.text)) t.free.push(e.text);
     turns.set(e.turn, t);
   }
   const frames: Frame[] = [];
   for (const [turn, t] of turns) {
     if (!t.narration) continue;
     const input: Beat[] = t.input ? [{ kind: 'input', text: t.input }] : [];
-    frames.push({ turn, beats: [...input, ...parseBeats(t.narration)], scene: world.frames.find((f) => f.turn === turn) });
+    frames.push({ turn, beats: [...input, ...parseBeats(t.narration), ...parseBeats(t.free.join('\n'))], scene: world.frames.find((f) => f.turn === turn) });
   }
   return frames;
 }
@@ -87,6 +89,16 @@ export class Playback {
 
   playLatest(): void {
     if (this.frames.length) this.go(this.frames.length - 1, 0, true);
+  }
+
+  /** Mostra só o último passo do turno atual (a fala de uma conversa livre), sem tocar o resto. */
+  showLast(): void {
+    const i = this.frames.length - 1;
+    if (i < 0) return;
+    this.go(i, this.frames[i].beats.length - 1, false);
+    // Na conversa livre, só o balão de quem acabou de falar: as falas da narração não voltam.
+    const last = this.frames[i].beats.at(-1);
+    if (last?.kind === 'speech') this.view.setBalloons([{ speakerId: last.speakerId, html: speechHtml(last), mode: last.mode, age: 0 }]);
   }
 
   toggle(): void {

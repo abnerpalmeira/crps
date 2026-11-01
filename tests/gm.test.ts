@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { GameEngine } from '../src/engine/engine';
 import { EXAMPLE_CLASSROOM } from '../src/engine/tools';
-import { GameMaster, dropPreamble, type GmEvent } from '../src/gm/gm';
-import { SYSTEM_PROMPT, turnMessage, verifierPrompt } from '../src/gm/prompts';
+import { GameMaster, dropPreamble, splitOptions, type GmEvent } from '../src/gm/gm';
+import { OPTIONS_REQUEST, SYSTEM_PROMPT, turnMessage, verifierPrompt } from '../src/gm/prompts';
 import { compileBrief } from '../src/engine/brief';
 import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, Verdict } from '../src/gm/provider';
 
@@ -96,7 +96,7 @@ describe('GameMaster', () => {
     expect(engine.player?.name).toBe('Kenji Tanaka');
     expect(engine.itemsHeldBy('kenji').map((i) => i.name)).toEqual(['Giz']);
     expect(events.filter((e) => e.type === 'tool')).toHaveLength(4);
-    expect(events.filter((e) => e.type === 'narration_reset')).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'narration')).toHaveLength(1);
     expect(events.find((e) => e.type === 'narration')).toMatchObject({ text: 'A sala 1-A cheira a giz e café requentado.' });
     expect(provider.options[0].effort).toBe('medium');
     expect(provider.verifyPrompts[0]).toContain('<narracao>\nA sala 1-A cheira a giz');
@@ -127,7 +127,7 @@ describe('GameMaster', () => {
     expect(provider.options[1].userMessage).toContain('Ação do jogador:\n"""\nEscrevo a data no quadro.');
     expect(events.find((e) => e.type === 'verify')).toMatchObject({ consistent: false });
     expect(events.filter((e) => e.type === 'narration')).toEqual([
-      { type: 'narration', text: 'Você escreve 28/10 no quadro, e o giz range.', turn: 1 },
+      { type: 'narration', text: 'Você escreve 28/10 no quadro, e o giz range.', turn: 1, options: [] },
     ]);
   });
 
@@ -150,10 +150,52 @@ describe('GameMaster', () => {
 
     expect(provider.sessions[1].userTexts[0]).toContain('comece direto pela história');
     expect(events.filter((e) => e.type === 'narration')).toEqual([
-      { type: 'narration', text: 'Você escreve 28/10 no quadro, e o giz range.', turn: 1 },
+      { type: 'narration', text: 'Você escreve 28/10 no quadro, e o giz range.', turn: 1, options: [] },
     ]);
     // Parágrafo de história fica, mesmo sem recado nenhum antes dele.
     expect(dropPreamble('Lúcia se vira.\n\nO vento sobe.')).toBe('Lúcia se vira.\n\nO vento sobe.');
+  });
+
+  it('a narração chega inteira, depois do verificador, e as três ações saem dela para os botões e o log', async () => {
+    const provider = new FakeProvider([
+      worldBuildingSteps(),
+      [say('Você escreve 28/10 no quadro.\n>> Começo a chamada.\n>> "Bom dia, turma."\n>> Vou até a janela.')],
+    ]);
+    const gm = new GameMaster({ provider });
+    const { engine } = await setUpWorld(provider, gm);
+    const events: GmEvent[] = [];
+    await gm.play(engine, 'Escrevo a data no quadro.', (e) => events.push(e));
+
+    const options = ['Começo a chamada.', '"Bom dia, turma."', 'Vou até a janela.'];
+    expect(events.filter((e) => e.type === 'narration')).toEqual([{ type: 'narration', text: 'Você escreve 28/10 no quadro.', turn: 1, options }]);
+    expect(engine.state.log.at(-1)).toMatchObject({ kind: 'narration', text: 'Você escreve 28/10 no quadro.', options });
+    // O verificador vê as ações, para apontar nome ou fato que o jogador não sabe.
+    expect(provider.verifyPrompts[1]).toContain('>> Vou até a janela.');
+    const types = events.map((e) => e.type);
+    expect(types.indexOf('narration')).toBeGreaterThan(types.indexOf('verify'));
+    expect(events).toContainEqual({ type: 'status', text: 'Conferindo a narração…' });
+  });
+
+  it('narração sem as ações: o mestre é chamado de novo só para elas, e a narração fica', async () => {
+    const provider = new FakeProvider([
+      worldBuildingSteps(),
+      [say('Você escreve 28/10 no quadro.'), say('>> 1. Começo a chamada.\n> 2. Vou até a janela.\n>> Sento e espero.\n>> Saio da sala.')],
+    ]);
+    const gm = new GameMaster({ provider });
+    const { engine } = await setUpWorld(provider, gm);
+    const events: GmEvent[] = [];
+    await gm.play(engine, 'Escrevo a data no quadro.', (e) => events.push(e));
+
+    expect(provider.sessions[1].userTexts).toEqual([OPTIONS_REQUEST]);
+    expect(events.find((e) => e.type === 'narration')).toEqual({
+      type: 'narration',
+      text: 'Você escreve 28/10 no quadro.',
+      turn: 1,
+      options: ['Começo a chamada.', 'Vou até a janela.', 'Sento e espero.'],
+    });
+    // Se nem o pedido trouxer as ações (a criação aqui não tem mais roteiro), o turno segue sem elas.
+    expect(engine.state.log.find((e) => e.kind === 'narration' && e.turn === 0)?.options).toBeUndefined();
+    expect(splitOptions('Chove.\n\n>> Corro.')).toEqual({ narration: 'Chove.', options: ['Corro.'] });
   });
 
   it('o prompt do mestre sai do mundo: na criação, sem a época; nos turnos, com a dela', async () => {

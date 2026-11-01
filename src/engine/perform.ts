@@ -17,6 +17,8 @@ export interface MenuOutcome {
   status: 'feito' | 'recusado' | 'mestre';
   /** A linha que o mestre recebe em "Como o jogador marcou". */
   line: string;
+  /** Por que o motor recusou, numa frase (para a ação livre mostrar ao jogador). */
+  reason?: string;
   tools: MenuTool[];
 }
 
@@ -128,7 +130,7 @@ export function performMenuAct(engine: GameEngine, act: MenuAct): MenuOutcome {
     }
   } catch (err) {
     if (!(err instanceof Refused)) throw err;
-    return { act, status: 'recusado', line: `- o jogador tentou pelo menu: ${label}, e o motor recusou: ${err.message} Narre a tentativa.`, tools };
+    return { act, status: 'recusado', reason: err.message, line: `- o jogador tentou pelo menu: ${label}, e o motor recusou: ${err.message} Narre a tentativa.`, tools };
   }
   const done = tools.map((t) => t.result.summary).join('; ');
   return { act, status: 'feito', line: `- feito pelo motor (menu): ${label} (${done}). Narre; não refaça.`, tools };

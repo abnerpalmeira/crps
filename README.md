@@ -10,10 +10,15 @@ O mundo é um grid 2D, exibido em 3D low-poly no navegador.
 jogador: "escrevo a data no quadro com o giz"
   → o motor compila o contexto do turno (cena, mapa, fichas, fios, fatos, últimos eventos)
   → o modelo chama tools ⇄ o motor valida, aplica, rola os dados
-  → o modelo narra a partir dos resultados
+  → o modelo narra a partir dos resultados e sugere três ações
   → um verificador compara narração × mudanças e, se precisar, pede correção
+  → a narração aparece já conferida, e as três ações viram botões
   → o 3D e os painéis mostram o novo estado
 ```
+
+A narração não vai aparecendo enquanto o modelo escreve: ela só chega ao chat depois do
+verificador e da correção, se houver. Até lá, o turno mostra o que o mestre está fazendo
+(as tools, "narrando…", "conferindo a narração…").
 
 O modelo nunca carrega o histórico da campanha. Cada turno é uma conversa nova
 com o resumo que o motor compila, então o prompt na hora 80 tem o mesmo tamanho
@@ -145,6 +150,8 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   speech.ts     falas: alcance de cada modo, quem ouve e o que o jogador vê
   brief.ts      o resumo do estado que o modelo recebe a cada turno
   frames.ts     falas `@id[modo>alvo]:` → passos do replay; retratos da cena por turno
+  free.ts       ações livres no grid (andar, conversar com as falas prontas), sem o mestre
+  lines.ts      falas prontas dos NPCs: a próxima que toca e quem tem novidade
 src/gm/       o mestre
   gm.ts         loop do turno, eventos, verificador e rollback se a API falhar
   provider.ts   interface do provedor de modelo
@@ -251,13 +258,60 @@ abre o inspetor com o que combina com aquilo. As ações saem dos dados, em
 - **Com os ids:** cada ação entra na caixa como uma marca com os ids (`{pegar>pedra}`,
   `{entregar>caneta>mei}`, `{gesto>acena>mei}`), ao lado da fala e do resto. A prévia mostra
   "🪑 sentar em cadeira". Dá para juntar várias ações e uma fala num turno só.
-- **Ações físicas:** ir, sentar, deitar, levantar, postura, pegar, largar, empunhar, guardar,
-  acender, apagar, pôr e mirar, e passar por uma porta que já leva a um lugar. O motor as faz na
-  hora, antes do mestre, com as mesmas tools e regras, e leva o personagem até lá se o alvo
-  estiver longe. O mestre recebe o que foi feito ou recusado e narra.
+- **Ações livres:** ir até, sentar, deitar, levantar, postura, pegar, largar, segurar um objeto,
+  guardar, acender, apagar, pôr e passar por uma porta que já leva a um lugar conhecido acontecem
+  na hora, sem esperar o turno do mestre (veja [Grid vivo](#grid-vivo-andar-e-conversar-sem-o-mestre)).
+  O motor as faz com as mesmas tools e regras e leva o personagem até lá se o alvo estiver longe.
+- **Marcas para o mestre:** sacar ou empunhar uma arma, mirar e passar para um lugar que ainda
+  não existe entram na caixa como marca e vão com o turno; o motor faz o que é físico antes do
+  mestre, que recebe o que foi feito ou recusado e narra.
 - **O resto vai ao mestre** com os ids e a tool que resolve: entregar (a pessoa aceita ou não),
   ler, atacar e os verbos dos objetos. Quando a ação pede estar perto, o motor já leva o jogador
   até lá. O gesto escolhido acontece no 3D mesmo que a narração esqueça a marca.
+
+### Ações sugeridas
+
+Toda narração termina com três ações que o mestre sugere, cada uma numa linha `>> `: curtas, na
+primeira pessoa e puxando para lados diferentes (arriscar, ter cautela, seguir um fio da
+história). O servidor tira essas linhas do texto e guarda as ações no log do turno. A interface
+mostra as ações como botões acima da caixa de texto, e um clique manda a ação como se o jogador a
+tivesse escrito; fala entre aspas vira fala. Na CLI, 1, 2 ou 3 escolhe uma.
+
+O verificador confere as ações com as regras de nome e de conhecimento da narração: elas não
+podem chamar pelo nome quem o jogador não conhece nem usar um fato que ele não sabe. Se a
+narração vier sem as ações, o mestre é chamado de novo só para elas, sem refazer o texto.
+
+### Grid vivo: andar e conversar sem o mestre
+
+Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e sem custo:
+
+- **Andar:** clicar no chão leva o personagem até o tile (numa parede, num móvel ou em alguém,
+  até o livre mais perto), e "Ir até" no inspetor leva até a pessoa ou o móvel, pelas regras de
+  `move_character`.
+- **Agir:** sentar, deitar, levantar, mudar de postura, pegar, largar, segurar um objeto, guardar,
+  acender, apagar, pôr sobre um móvel e passar por uma porta que já leva a um lugar conhecido,
+  também na hora. Sacar uma arma, mirar e abrir caminho para um lugar novo continuam com o mestre.
+- **Conversar:** a cada turno o mestre dá aos NPCs em cena falas prontas com `set_lines`. As do
+  turno falam do que acabou de acontecer e somem no próximo turno dele; as gerais são do jeito da
+  pessoa e ficam. "💬 Conversar" no inspetor leva o jogador até a pessoa e toca a próxima fala num
+  balão: as do turno na ordem, depois as gerais em rodízio. Quem tem fala do turno que o jogador
+  ainda não ouviu aparece com 💬 no nome.
+- **Falas que revelam:** a fala que conta um fato registrado leva o id dele (`fact_id`), e quem a
+  ouve fica sabendo, como em `share_knowledge`: o jogador e quem mais estava perto. Só quem sabe
+  pode contar. A fala em que a pessoa diz o nome leva `introduces`, e quem ouve passa a conhecê-la.
+  O segredo vai cochichado (`whisper`): a pessoa chega perto, e só o jogador ouve e fica sabendo.
+- **Iniciativa:** como em Persona, alguns NPCs não esperam. Com `initiative` "vem", depois de uma
+  ação livre do jogador o NPC vai até ele e diz a fala do turno; com "chama", diz de onde está (de
+  longe, gritando). Um por ação, o mais perto, e só enquanto tem fala nova. Quem não tem iniciativa
+  só fala se o jogador puxar conversa ou provocar.
+- **Continuidade:** cada passo, ação e fala ouvida entram no log como ação livre, aparecem no
+  registro depois da narração e chegam ao próximo turno do mestre em "Últimos acontecimentos",
+  marcados como "Livre".
+- **Regras:** o verificador confere as falas prontas como a narração: nome que o jogador não
+  conhece (salvo quem se apresenta na fala), fato contado sem o id dele, contradição com o estado.
+
+As ações livres ficam em [src/engine/free.ts](src/engine/free.ts), e o servidor as recebe em
+`POST /api/act`.
 
 ### Textos escritos
 
@@ -304,8 +358,8 @@ O motor confere cada fala antes de aceitar a narração: cochichar com quem est�
 da sala vira correção para o mestre (mover antes ou trocar a ação), na mesma rodada do
 verificador. Depois calcula quem percebeu. O conteúdo de uma fala que nem todos ouviram vira
 fato conhecido só por quem ouviu, e, se o personagem do jogador não percebeu, o jogador vê
-só o gesto (🤫 "cochicha algo para Mei"). A troca acontece no servidor, inclusive durante o
-streaming; o texto original fica nos bastidores.
+só o gesto (🤫 "cochicha algo para Mei"). A troca acontece no servidor, antes de a narração
+sair; o texto original fica nos bastidores.
 
 Quem percebe depende de canais sensoriais, que são dados como o resto das regras. `som`,
 `labios` e `mente` vêm de fábrica (só o som funciona sem perk), e o alcance num canal é o
@@ -669,7 +723,36 @@ para passar pela porta, pegar o elevador ou usar a escada.
 
 ## Próximos passos
 
-- Trocar as primitivas por assets low-poly CC0 (Kenney, KayKit, Quaternius).
+### Moedas no lugar dos créditos
+
+O custo vira parte do jogo. Em vez de créditos, que são a conta do servidor em outra unidade,
+o jogador tem moedas, e é gastando moedas que o mestre narra. O que o motor resolve sozinho
+(andar, olhar, as ações físicas do menu, as falas prontas do grid vivo) não custa nada.
+
+- Cada turno do mestre custa moedas, pelo custo real do turno (mestre, correção, verificador e
+  ações sugeridas), e o turno mostra quanto custou.
+- Saldo, compra e margem sobre o custo, que hoje não existem. Sem moedas, o mundo continua de pé
+  e o grid continua jogável, mas o mestre não narra.
+- Em aberto: se as moedas também se ganham jogando (um fio resolvido, uma conquista, um bônus por
+  dia), e se há uma moeda só ou duas (uma ganha no jogo, trocada pela que faz o mestre narrar).
+
+### Grid vivo: o mestre narra possibilidades
+
+Para cada turno render muito, o mestre deixa de narrar tudo: ele narra o que acontece e o que
+pode acontecer, e o jogador vive o resto no grid, sem esperar o modelo. Já existe (veja
+[Grid vivo](#grid-vivo-andar-e-conversar-sem-o-mestre)): andar e as ações físicas são livres; cada
+NPC em cena tem as falas do turno e as gerais (`dialogos_do_turno` e `dialogos_gerais`), que podem
+contar um fato ou o nome de quem fala; e quem tem iniciativa vem até o jogador ou chama por ele.
+Falta:
+
+- **O que chama o mestre, e custa moedas:** provocar, convencer, entregar, atacar, decidir algo
+  que muda a história ou dizer o que as falas prontas não cobrem.
+- **Mais vida própria:** NPCs que andam pelo lugar entre os turnos, pela agenda e pelo que querem,
+  e conversas entre eles que o jogador ouve se estiver perto.
+- Cada narração fica mais longa, com as falas prontas, mas o jogador chama o mestre menos vezes.
+
+### Outros
+
 - Agenda dos NPCs e eventos disparados pelo relógio (o sinal da escola, o intervalo).
 - Mais layouts prontos (apartamento, loja, escritório) e gerar o local vizinho sob demanda.
 - Avaliação automática do mestre: roteiros de jogador e checagem de consistência ao longo de muitos turnos.

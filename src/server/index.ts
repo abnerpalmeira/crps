@@ -2,6 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { GameEngine } from '../engine/engine';
+import { freeAct, freeActSchema } from '../engine/free';
 import type { Emit, GmEvent } from '../gm/gm';
 import { MODEL_CHOICES, modelAvailable, modelChoice, serviceOf } from '../gm/models';
 import { CostMeter, costEvent, describeCost, priceOf } from '../gm/pricing';
@@ -37,7 +38,7 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-async function readText(req: IncomingMessage, field: string): Promise<string> {
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req as AsyncIterable<Buffer>) {
@@ -45,8 +46,11 @@ async function readText(req: IncomingMessage, field: string): Promise<string> {
     if (size > 64_000) throw new Error('Requisição grande demais.');
     chunks.push(chunk);
   }
-  const body = chunks.length ? (JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>) : {};
-  const value = body[field];
+  return chunks.length ? (JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>) : {};
+}
+
+async function readText(req: IncomingMessage, field: string): Promise<string> {
+  const value = (await readJson(req))[field];
   return typeof value === 'string' ? value.trim().slice(0, MAX_TEXT) : '';
 }
 
@@ -162,6 +166,16 @@ const server = createServer(async (req, res) => {
       const current = engine;
       await streamTurn(res, (emit) => gm.play(current, input, emit));
       return;
+    }
+    if (pathname === '/api/act' && req.method === 'POST') {
+      // Ação livre no grid (andar, conversar): o motor resolve na hora, sem o mestre e sem custo.
+      if (!engine) return json(res, 400, { error: 'Nenhuma campanha em andamento.' });
+      if (busy) return json(res, 409, { error: 'O mestre ainda está narrando.' });
+      const act = freeActSchema.safeParse(await readJson(req));
+      if (!act.success) return json(res, 400, { error: 'Ação livre inválida.' });
+      const outcome = freeAct(engine, act.data);
+      if (outcome.entries.length) store.save(engine);
+      return json(res, 200, { ...outcome, world: engine.snapshot() });
     }
     if (pathname === '/api/models/meta' && req.method === 'GET') {
       const params = new URL(req.url ?? '/', 'http://localhost').searchParams;

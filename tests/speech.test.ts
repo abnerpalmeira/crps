@@ -3,7 +3,7 @@ import { GameEngine } from '../src/engine/engine';
 import { parseSpeechLine } from '../src/engine/frames';
 import { analyzeSpeech, playerNarration } from '../src/engine/speech';
 import { EXAMPLE_CLASSROOM } from '../src/engine/tools';
-import { GameMaster, SpeechFilter, type GmEvent } from '../src/gm/gm';
+import { GameMaster, type GmEvent } from '../src/gm/gm';
 import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, Verdict } from '../src/gm/provider';
 
 /**
@@ -90,19 +90,6 @@ describe('falas com alcance', () => {
   });
 });
 
-describe('SpeechFilter', () => {
-  it('a narração flui na hora; cada fala só sai inteira e transformada', () => {
-    const out: string[] = [];
-    const filter = new SpeechFilter((line) => line.toUpperCase(), (text) => out.push(text));
-    filter.push('Narra');
-    filter.push('ção\n@hit: seg');
-    filter.push('redo\nFim');
-    filter.flush();
-    expect(out[0]).toBe('Narra');
-    expect(out.join('')).toBe('Narração\n@HIT: SEGREDO\nFim');
-  });
-});
-
 /** Provedor roteirizado: cada sessão (turno) consome uma lista de respostas do "modelo". */
 class Script implements ModelProvider {
   readonly label = 'script';
@@ -142,7 +129,8 @@ describe('mestre e cochichos', () => {
     expect(provider.sessions[0].userTexts[0]).toContain('"cochicho" exige até 2');
     const narration = events.filter((ev) => ev.type === 'narration').at(-1) as Extract<GmEvent, { type: 'narration' }>;
     expect(narration.text).toBe('Haruto vai até a Mei.\n@haruto[cochicho>mei|oculto]: cochicha algo para Mei');
-    expect(events.filter((ev) => ev.type === 'narration_delta').map((ev) => (ev as { text: string }).text).join('')).not.toContain('bom humor');
+    // Nem a primeira versão, a do cochicho à distância, chega ao jogador.
+    expect(JSON.stringify(events.filter((ev) => ev.type === 'narration' || ev.type === 'status'))).not.toContain('bom humor');
 
     const fact = e.state.facts.find((f) => f.text.includes('bom humor'))!;
     expect(fact.knownBy).toEqual(expect.arrayContaining(['haruto', 'mei']));

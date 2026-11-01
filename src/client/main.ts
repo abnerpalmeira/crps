@@ -1,6 +1,8 @@
+import { parseSpeechLine } from '../engine/frames';
+import type { FreeAct } from '../engine/free';
 import type { WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
-import { chooseModel, fetchState, streamEvents } from './api';
+import { chooseModel, fetchState, freeAction, streamEvents } from './api';
 import { Playback } from './playback';
 import { WorldView } from './scene';
 import './style.css';
@@ -48,15 +50,10 @@ function handle(event: GmEvent, turn: TurnView): void {
     case 'tool':
       turn.tool(event);
       break;
-    case 'narration_delta':
-      turn.delta(event.text);
-      break;
-    case 'narration_reset':
-      turn.reset();
-      break;
     case 'narration':
       turn.final(event.text);
       turn.setTurn(event.turn);
+      ui.setOptions(event.options);
       break;
     case 'verify':
       if (!event.consistent) turn.note('🔁 O verificador pediu uma correção ao mestre');
@@ -121,6 +118,27 @@ async function resync(failure: string): Promise<void> {
 ui.onSend = (text) => {
   if (!busy && world) void run('/api/turn', { input: text }, text);
 };
+
+/** Andar e conversar com as falas prontas: o motor faz na hora, sem o mestre. */
+async function runFree(act: FreeAct): Promise<void> {
+  if (busy || !world) return;
+  busy = true;
+  playback.live();
+  try {
+    const r = await freeAction(act);
+    applyWorld(r.world);
+    ui.addFree(r.entries);
+    if (!r.ok && r.error) ui.notice(r.error);
+    // A fala ouvida (de quem o jogador procurou, ou de quem veio até ele) aparece no balão sobre quem falou.
+    if (r.entries.some((e) => parseSpeechLine(e))) playback.showLast();
+  } catch (err) {
+    ui.notice(err instanceof Error ? err.message : String(err));
+  } finally {
+    busy = false;
+  }
+}
+ui.onFree = (act) => void runFree(act);
+view.onWalk = (x, y) => void runFree({ kind: 'walk', x, y });
 let modelNames = new Map<string, string>();
 const modelName = (id: string) => modelNames.get(id) ?? id;
 

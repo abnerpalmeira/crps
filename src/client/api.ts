@@ -1,3 +1,4 @@
+import type { FreeAct, FreeOutcome } from '../engine/free';
 import type { WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 
@@ -25,6 +26,14 @@ export async function chooseModel(id: string): Promise<string> {
   const body = (await res.json().catch(() => ({}))) as { model?: string; error?: string };
   if (!res.ok || !body.model) throw new Error(body.error ?? `O servidor respondeu ${res.status}.`);
   return body.model;
+}
+
+/** Ação livre no grid (andar, conversar): o motor resolve na hora, sem o mestre. */
+export async function freeAction(act: FreeAct): Promise<FreeOutcome & { world: WorldState }> {
+  const res = await fetch('/api/act', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(act) });
+  const body = (await res.json().catch(() => ({}))) as Partial<FreeOutcome & { world: WorldState }>;
+  if (!res.ok || !body.world) throw new Error(body.error ?? `O servidor respondeu ${res.status}.`);
+  return body as FreeOutcome & { world: WorldState };
 }
 
 export async function fetchState(): Promise<StateResponse> {

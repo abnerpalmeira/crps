@@ -1,4 +1,6 @@
 import { GESTURES, GESTURE_IDS, GRIPS, POSES, POSE_IDS, bodyPose, gripOf, handsOf } from './body';
+import type { FreeAct } from './free';
+import { hasNews, nextLine } from './lines';
 import { objectType, typeChain } from './objects';
 import { perceptionOf, strangerLabel } from './perception';
 import { itemPlace } from './reading';
@@ -27,6 +29,8 @@ export interface ActionOption {
   token?: string;
   /** Texto que preenche a caixa (fala, escrita): o jogador completa. */
   prefill?: string;
+  /** Ação livre: o motor faz na hora, sem o mestre (andar, conversar com as falas prontas). */
+  free?: FreeAct;
   /** Escolha seguinte: a quem entregar, que item pôr, que gesto. */
   options?: ActionOption[];
   /** Observação: distância, quem ocupa. */
@@ -38,6 +42,8 @@ interface VerbDef {
   icon: string;
   /** O motor faz na hora (ação física certa); sem isso, vai ao mestre. */
   motor: boolean;
+  /** Ação livre pelo menu: acontece já, sem esperar o turno do mestre (free.ts). */
+  free?: boolean;
   /** Frase com {alvo} e {outro}. */
   text: string;
   /** Para o mestre: como resolver ({eu}, {alvo_id} e {outro_id} viram ids). */
@@ -46,19 +52,19 @@ interface VerbDef {
 
 export const VERBS: Record<string, VerbDef> = {
   ir: { icon: '🚶', motor: true, text: 'ir até {alvo}' },
-  sentar: { icon: '🪑', motor: true, text: 'sentar em {alvo}' },
-  deitar: { icon: '🛏️', motor: true, text: 'deitar em {alvo}' },
-  levantar: { icon: '🧍', motor: true, text: 'levantar' },
-  pose: { icon: '🧘', motor: true, text: 'ficar {alvo}' },
+  sentar: { icon: '🪑', motor: true, free: true, text: 'sentar em {alvo}' },
+  deitar: { icon: '🛏️', motor: true, free: true, text: 'deitar em {alvo}' },
+  levantar: { icon: '🧍', motor: true, free: true, text: 'levantar' },
+  pose: { icon: '🧘', motor: true, free: true, text: 'ficar {alvo}' },
   mirar: { icon: '🎯', motor: true, text: 'mirar em {alvo}' },
-  pegar: { icon: '✋', motor: true, text: 'pegar {alvo}' },
-  empunhar: { icon: '🗡️', motor: true, text: 'empunhar {alvo}' },
-  guardar: { icon: '🎒', motor: true, text: 'guardar {alvo}' },
-  largar: { icon: '⬇️', motor: true, text: 'largar {alvo}' },
-  acender: { icon: '💡', motor: true, text: 'acender {alvo}' },
-  apagar: { icon: '🌑', motor: true, text: 'apagar {alvo}' },
-  por: { icon: '📥', motor: true, text: 'pôr {alvo} em {outro}' },
-  passar: { icon: '🚪', motor: true, text: 'passar por {alvo}' },
+  pegar: { icon: '✋', motor: true, free: true, text: 'pegar {alvo}' },
+  empunhar: { icon: '🗡️', motor: true, free: true, text: 'empunhar {alvo}' },
+  guardar: { icon: '🎒', motor: true, free: true, text: 'guardar {alvo}' },
+  largar: { icon: '⬇️', motor: true, free: true, text: 'largar {alvo}' },
+  acender: { icon: '💡', motor: true, free: true, text: 'acender {alvo}' },
+  apagar: { icon: '🌑', motor: true, free: true, text: 'apagar {alvo}' },
+  por: { icon: '📥', motor: true, free: true, text: 'pôr {alvo} em {outro}' },
+  passar: { icon: '🚪', motor: true, free: true, text: 'passar por {alvo}' },
   entregar: { icon: '🤝', motor: false, text: 'entregar {alvo} para {outro}', hint: 'transfer_item para a pessoa, que pode aceitar ou recusar' },
   ler: { icon: '📜', motor: false, text: 'ler {alvo}', hint: 'narre a leitura numa linha própria, @{alvo_id}[>{eu}]: texto' },
   gesto: { icon: '👋', motor: false, text: '{alvo}', hint: 'marque o gesto na narração' },
@@ -173,11 +179,14 @@ export function actionsFor(world: WorldState, pick: { kind: 'character' | 'fixtu
   const hands = handsOf(world, me.id);
   const weapon = [hands.direita, hands.esquerda].find((i) => i && GRIPS[gripOf(i)].ranged) ?? null;
   const out: ActionOption[] = [];
+  // A ação livre acontece na hora; as outras viram marca na caixa e vão ao mestre com o turno.
   const act = (label: string, verb: string, target?: string | null, other?: string | null, extra: Partial<ActionOption> = {}): ActionOption => ({
     label,
-    token: menuToken(verb, target, other),
+    ...(VERBS[verb]?.free ? { free: { kind: 'act' as const, verb, target: target ?? null, other: other ?? null } } : { token: menuToken(verb, target, other) }),
     ...extra,
   });
+  /** Marca para o mestre, mesmo de um verbo livre: sacar uma arma, passar para um lugar que ainda não existe. */
+  const toMaster = (verb: string, target?: string | null, other?: string | null): Partial<ActionOption> => ({ free: undefined, token: menuToken(verb, target, other) });
 
   if (pick.kind === 'character') {
     const c = world.characters[pick.id];
@@ -193,10 +202,12 @@ export function actionsFor(world: WorldState, pick: { kind: 'character' | 'fixtu
     const known = view.recognize(c.id);
     const name = known ? c.name.split(' ')[0] : strangerLabel(c);
     const d = c.pos ? distTo({ ...c.pos, w: 1, h: 1 }) : null;
+    // Conversa livre: a próxima fala pronta, sem o mestre. "Falar" é para dizer algo e o mestre responder.
+    if (nextLine(c)) out.push({ label: '💬 Conversar', free: { kind: 'talk', with: c.id }, note: hasNews(c) ? 'tem algo a dizer' : away(d) });
     out.push({ label: 'Falar', prefill: known ? `Digo a ${name}: "` : `Digo para ${name}: "` });
     out.push({ label: 'Sussurrar', prefill: known ? `@${name} "` : `@[${name}] "` });
     if (!known) out.push({ label: 'Perguntar o nome', prefill: `Pergunto para ${name}: "Desculpe, qual é o seu nome?"` });
-    out.push(act('Ir até', 'ir', c.id, null, { note: away(d) }));
+    out.push({ label: 'Ir até', free: { kind: 'walk', near: c.id }, note: away(d) });
     out.push({ label: 'Gesto para…', options: MENU_GESTURES.filter((g) => GESTURES[g].face).map((g) => act(GESTURES[g].label, 'gesto', g, c.id)) });
     if (inventory.length) out.push({ label: 'Entregar…', options: inventory.map((i) => act(i.name, 'entregar', i.id, c.id)), note: away(d) });
     if (weapon) out.push(act(`Mirar com ${weapon.name.toLowerCase()}`, 'mirar', c.id));
@@ -224,12 +235,16 @@ export function actionsFor(world: WorldState, pick: { kind: 'character' | 'fixtu
     if (exit && f.exit === 'floors') {
       const name = exit.label.replace(/["“”*()]/g, '').trim();
       out.push({ label: f.kind === 'stairs' ? 'Usar a escada' : f.kind === 'elevator' ? `Pegar ${name}` : `Usar ${f.label}`, prefill: `Vou ${by} até o andar ` });
-    } else if (exit) out.push(act(`Passar ${by}`, 'passar', f.id, null, { note: exit.to.length === 1 ? away(d) : 'o mestre decide aonde leva' }));
+    } else if (exit) {
+      // Porta que já leva a um lugar conhecido: passa na hora. Para um lugar que ainda não existe, o mestre cria.
+      const known = f.exit === 'door' && exit.to.length === 1 && Boolean(world.locations[exit.to[0]]);
+      out.push(act(`Passar ${by}`, 'passar', f.id, null, { note: exit.to.length === 1 ? away(d) : 'o mestre decide aonde leva', ...(known ? {} : toMaster('passar', f.id)) }));
+    }
     if (f.kind === 'board') out.push({ label: 'Escrever no quadro', prefill: 'Escrevo no quadro: ' });
     const surface = chain.some((t) => t.surface !== undefined || t.table);
     if (surface && inventory.length && !f.wall) out.push({ label: 'Pôr aqui…', options: inventory.map((i) => act(i.name, 'por', i.id, f.id)), note: away(d) });
     for (const verb of chain.find((t) => t.actions?.length)?.actions ?? []) out.push(act(verb[0].toUpperCase() + verb.slice(1), verbSlug(verb), f.id, null, { note: away(d) }));
-    out.push(act(`Ir até ${article} ${f.label}`, 'ir', f.id, null, { note: away(d) }));
+    out.push({ label: `Ir até ${article} ${f.label}`, free: { kind: 'walk', near: f.id }, note: away(d) });
     return out;
   }
 
@@ -242,7 +257,7 @@ export function actionsFor(world: WorldState, pick: { kind: 'character' | 'fixtu
   if (!mine && !other) out.push(act('Pegar', 'pegar', item.id, null, { note: away(d) }));
   if (mine) {
     const hand = item.holder.kind === 'character' && item.holder.hand;
-    out.push(hand ? act('Guardar', 'guardar', item.id) : act(item.grip && item.grip !== 'objeto' ? 'Empunhar' : 'Segurar na mão', 'empunhar', item.id));
+    out.push(hand ? act('Guardar', 'guardar', item.id) : item.grip && item.grip !== 'objeto' ? act('Empunhar', 'empunhar', item.id, null, toMaster('empunhar', item.id)) : act('Segurar na mão', 'empunhar', item.id));
     out.push(act('Largar', 'largar', item.id));
     if (people.length) {
       out.push({

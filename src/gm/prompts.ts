@@ -96,8 +96,15 @@ O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegad
   Haruto se inclina por cima do corredor.
   @haruto[cochicho>mei]: Ele tá de bom humor hoje.
 - O motor confere cada fala: o alvo precisa estar no alcance do modo (cochichar exige estar praticamente colado), e ele calcula quem percebe o conteúdo pelos sentidos de cada um. Se os personagens estão longe, mova antes com move_character ou escolha outra ação (falar alto, passar um bilhete). O conteúdo de um cochicho fica só na linha da fala; na narração, descreva só o gesto. Quem não ouviu não sabe o que foi dito, e o jogador só vê o conteúdo quando o personagem dele percebe.
-- Termine com a cena aberta para a próxima ação, sem listar opções e sem perguntar "o que você faz?".
+- Termine com a cena aberta para a próxima ação, sem perguntar "o que você faz?".
+- Depois da narração, sempre três ações que o jogador pode tomar agora, cada uma numa linha que começa com \`>> \`. A interface as tira do texto e mostra como botões, e um clique manda a ação como se o jogador a tivesse escrito. Escreva cada uma como ele escreveria: curta (até 12 palavras), na primeira pessoa, com a fala entre aspas quando ele fala. Faça as três puxarem para lados diferentes (arriscar, ter cautela, seguir um fio da história), com o que existe na cena agora. Valem as regras de nome e de conhecimento: só o que o personagem do jogador sabe e percebe. Exemplo:
+  >> Escrevo a data no quadro e começo a chamada.
+  >> "Haruto, prova surpresa só se você continuar falando."
+  >> Vou até o fundo da sala e acordo o Ren.
 - Fora o prefixo das falas e as marcas de gesto, não mencione tools, ids, coordenadas ou números de regras: o jogador vê dados e mudanças na interface.
+
+# Grid vivo: falas prontas
+Entre os seus turnos, o jogador vive o grid sem você: anda, senta, pega e larga coisas, acende luzes, passa por portas que já levam a um lugar e puxa conversa, e conversar com um NPC toca a próxima fala pronta dele. Por isso, a cada turno, antes de narrar, dê com set_lines falas do turno aos NPCs em cena com quem ele pode querer falar: o que cada um diria agora sobre o que acabou de acontecer, do ponto de vista dele, pelo que sabe, sente e quer. Quem o resumo marca "sem falas gerais" ganha também as gerais, do jeito dele, para qualquer momento. Quem não daria papo (o soldado calado, quem está ocupado) tem uma fala que corta a conversa. Uma fala pode revelar: a que conta um fato registrado leva fact_id, e o motor registra quem ouviu; a que diz o nome de quem fala leva introduces; o segredo vai com whisper, e só o jogador ouve (em voz normal, quem estiver perto também fica sabendo). Quem tem motivo para puxar conversa (a dona da estalagem que quer cobrar, o amigo que viu tudo, o guarda desconfiado) ganha initiative: "vem" até o jogador ou "chama" de onde está; quem só reage se provocado fica sem. O que o jogador fez sozinho aparece em "Últimos acontecimentos" como "Livre": continue de onde ele está, sem repetir o que ele já ouviu.
 
 # Corpo, armas e gestos
 O 3D mostra o corpo de cada personagem: mantenha-o igual ao que a narração conta.
@@ -146,7 +153,8 @@ Monte o mundo inicial com as tools, nesta ordem:
 3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Informe figure (adulto, adulta, menino ou menina) e, se houver a lista de visuais da época, look de cada um (dela ou de search_models): é o corpo e a roupa que aparecem no 3D. Informe também seen_as, como um estranho chamaria a pessoa pelo que vê. Atributos e recursos que variam de pessoa para pessoa nascem no valor de cada um, conforme a premissa, não no padrão. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random. Depois, com introduce, registre quem já se conhece: o personagem do jogador conhece quem a premissa diz (colegas, família, a turma), e os desconhecidos ficam de fora. Com set_feelings, registre o que cada NPC sente por quem conhece de perto, inclusive pelo personagem do jogador; num grupo grande, só as relações que se destacam.
 4. create_items com os objetos citados na premissa e os que a cena pede, já com quem os tem.
 5. advance_time com o horário inicial (to: "HH:MM"); fios iniciais com update_thread e fatos de partida com add_fact, se fizerem sentido.
-Depois narre a cena de abertura, situando o jogador.`;
+6. set_lines com as falas gerais e as do turno de cada NPC em cena.
+Depois narre a cena de abertura, situando o jogador, e termine com as três ações (linhas \`>> \`).`;
 }
 
 export function turnMessage(brief: string, input: string, marked: string[] = []): string {
@@ -158,7 +166,7 @@ Ação do jogador:
 ${input}
 """${marked.length ? `\nComo o jogador marcou:\n${marked.join('\n')}` : ''}
 
-Antes de narrar: cada um em cena, inclusive quem sofreu a ação, reage do jeito dele, pelo papel, pelo que pensa, pelo que quer e, acima de tudo, pelo que sente por quem agiu e por quem sofreu; quem ameaçou cumpre se o jogador insistiu; set_feelings registra o sentimento que faltava e o que o turno mudou.`;
+Antes de narrar: cada um em cena, inclusive quem sofreu a ação, reage do jeito dele, pelo papel, pelo que pensa, pelo que quer e, acima de tudo, pelo que sente por quem agiu e por quem sofreu; quem ameaçou cumpre se o jogador insistiu; set_feelings registra o sentimento que faltava e o que o turno mudou; set_lines dá a quem está em cena o que diria se o jogador puxar conversa.`;
 }
 
 export function verifierPrompt(args: { state: string; changes: string[]; input: string; narration: string }): string {
@@ -181,8 +189,9 @@ export function verifierPrompt(args: { state: string; changes: string[]; input: 
 - passividade: o jogador agride alguém, foge ou faz o que um NPC presente pretende impedir ou punir (veja o papel, o que pensa e o que quer no estado), e quem tem o dever de reagir só olha, ameaça de novo ou deixa passar; diga quem deveria agir e por quê;
 - sentimento: a narração mostra que o que um NPC sente por alguém mudou de verdade (passou a odiar, temer, confiar ou gostar) e o estado continua com o sentimento de antes, ou sem nenhum (veja "sente" no estado); ou um NPC trata alguém ao contrário do que sente por ele, sem a narração mostrar por quê;
 - sentimento que falta: um NPC reage na narração a quem agiu ou a quem sofreu (defende, acusa, consola, ri, foge ou se encolhe por causa dessa pessoa) e a linha dele no estado ainda diz "falta sentimento por" essa pessoa, ou "por todos aqui"; diga de quem por quem falta;
+- fala pronta: uma fala do turno ou geral de um NPC (no estado) chama pelo nome alguém que o estado marca como "o jogador NÃO conhece" (salvo quem fala, numa fala marcada "diz o nome"), revela um fato registrado sem estar marcada "conta" com o id dele, ou contradiz o que aconteceu, o que o NPC sabe ou o que ele sente; diga de quem é a fala;
 - visão: a narração descreve detalhes visuais (rosto, expressão, roupa, o que alguém faz em silêncio) de quem o estado marca como não visto pelo jogador, ou descreve a cena com nitidez quando ele está cego; ou a luz ou a visão mudam na narração (luzes apagam, lanterna acende, alguém fica cego) sem a mudança correspondente.
-Linhas no formato \`@id: texto\` ou \`@id[modo>alvo]: texto\` são falas do personagem com aquele id; o motor já confere o alcance delas e esconde do jogador o conteúdo que ele não ouve, então não aponte essas linhas por isso. Marcas \`{id:gesto}\` e \`{id:gesto>alvo}\` são gestos que o 3D anima, já conferidos pelo motor. Linhas \`@id_de_item[>leitor]: texto\` são leituras do que está escrito no item, também conferidas pelo motor. Personagens podem saber o que estão vendo e ouvindo agora e o que é óbvio pelo papel deles; só aponte vazamento de fatos registrados. Ignore ambientação, emoções, gestos fora dessa lista e pequenas ações que não mudam posição, postura nem quem tem o quê. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português, citando o personagem e o id do fato quando houver.
+Linhas no formato \`@id: texto\` ou \`@id[modo>alvo]: texto\` são falas do personagem com aquele id; o motor já confere o alcance delas e esconde do jogador o conteúdo que ele não ouve, então não aponte essas linhas por isso. Marcas \`{id:gesto}\` e \`{id:gesto>alvo}\` são gestos que o 3D anima, já conferidos pelo motor. Linhas \`@id_de_item[>leitor]: texto\` são leituras do que está escrito no item, também conferidas pelo motor. Linhas \`>> texto\` no fim são as ações que o mestre sugere ao jogador; nelas, aponte só nome indevido e conhecimento que o personagem do jogador não tem. Personagens podem saber o que estão vendo e ouvindo agora e o que é óbvio pelo papel deles; só aponte vazamento de fatos registrados. Ignore ambientação, emoções, gestos fora dessa lista e pequenas ações que não mudam posição, postura nem quem tem o quê. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português, citando o personagem e o id do fato quando houver.
 
 <estado>
 ${args.state}
@@ -201,8 +210,11 @@ ${args.narration}
 </narracao>`;
 }
 
+/** Quando a narração vem sem as três ações: pede só elas, sem refazer a narração. */
+export const OPTIONS_REQUEST = 'Faltaram as três ações sugeridas ao jogador. Responda só com elas, cada uma numa linha que começa com ">> ", sem repetir a narração.';
+
 export function verifierFeedback(issues: string[]): string {
   return `[Verificador de consistência do motor] A narração afirma coisas que o estado não registra:
 ${issues.map((i) => `- ${i}`).join('\n')}
-Corrija chamando as tools que faltaram ou, se a ação não deveria acontecer, ajuste a história. Num vazamento de conhecimento, reescreva a fala para o personagem não saber o que não sabe (ou mostre como ele descobriu, com share_knowledge). Num sentimento que falta, registre com set_feelings o que a cena mostrou; a história pode ficar como estava. Depois escreva de novo a narração final completa deste turno: ela substitui a anterior. O jogador lê essa resposta inteira, então comece direto pela história, sem explicar o que mudou nem falar da correção.`;
+Corrija chamando as tools que faltaram ou, se a ação não deveria acontecer, ajuste a história. Num vazamento de conhecimento, reescreva a fala para o personagem não saber o que não sabe (ou mostre como ele descobriu, com share_knowledge). Num sentimento que falta, registre com set_feelings o que a cena mostrou; a história pode ficar como estava. Depois escreva de novo a narração final completa deste turno, com as três ações no fim: ela substitui a anterior. O jogador lê essa resposta inteira, então comece direto pela história, sem explicar o que mudou nem falar da correção.`;
 }

@@ -137,6 +137,13 @@ const resourceInput = z.object({
 /** Campos de personagem que qualquer um percebe; o resto de um NPC só aparece nos bastidores. */
 const OPEN_FIELDS = new Set(['name', 'role', 'appearance', 'figure', 'look', 'seen_as', 'traits', 'pose']);
 
+const readyLine = z.object({
+  text: z.string().max(240).describe('Só o que a pessoa diz, com a voz dela.'),
+  fact_id: z.string().optional().describe('Fato registrado que a fala conta: quem ouvir passa a saber. Só quem sabe pode contar.'),
+  introduces: z.boolean().optional().describe('A pessoa diz o próprio nome nesta fala: quem ouvir passa a conhecê-la.'),
+  whisper: z.boolean().optional().describe('Cochicho: quem fala chega perto, e só o jogador ouve. Para segredos.'),
+});
+
 const placement = z
   .object({
     x: z.number().int().optional(),
@@ -539,6 +546,45 @@ export const TOOLS = [
         (x) => `${name(x.who)} → ${name(x.toward)} ${signed(x.degree)}${x.before !== null && x.before !== x.degree ? ` (era ${signed(x.before)})` : ''}`,
       );
       return { content: r, summary: `🤫 Sentimentos: ${list.join(', ')}` };
+    },
+  }),
+
+  tool({
+    name: 'set_lines',
+    description:
+      'Falas prontas: o que cada NPC diz se o jogador puxar conversa com ele no grid, entre os seus turnos, sem você. O motor ' +
+      'toca uma por conversa: as de turn na ordem, depois as de general em rodízio. turn fala do que acabou de acontecer, do ' +
+      'ponto de vista dele (some no seu próximo turno); general é do jeito da pessoa, para qualquer momento (fica até você ' +
+      'trocar). Uma a três de cada, curtas, só o que ele diz, com a voz dele (um gesto curto entre asteriscos cabe). A fala que ' +
+      'conta um fato registrado leva fact_id (só quem sabe pode contar; quem ouvir passa a saber), e a fala em que a pessoa diz ' +
+      'o próprio nome leva introduces (quem ouvir passa a conhecê-la); o segredo vai com whisper, e só o jogador ouve (em voz ' +
+      'normal, quem estiver perto também fica sabendo). Fora isso, valem as regras da narração: ninguém chama ' +
+      'pelo nome quem o jogador não conhece, e nenhuma fala muda o estado. initiative, até o seu próximo turno: "vem", o NPC ' +
+      'vai até o jogador e diz a primeira fala do turno; "chama", diz de onde está; sem ela, só fala se o jogador puxar ' +
+      'conversa. A lista que vier substitui a anterior; a que não vier fica como estava.',
+    schema: z.object({
+      lines: z
+        .array(
+          z.object({
+            who: z.string().describe('O NPC (id ou nome).'),
+            turn: z.array(readyLine).max(4).optional().describe('Sobre o que acabou de acontecer; somem no seu próximo turno.'),
+            general: z.array(readyLine).max(4).optional().describe('Do jeito da pessoa, para qualquer momento; ficam.'),
+            initiative: z
+              .enum(['vem', 'chama', 'nenhuma'])
+              .optional()
+              .describe('Quem tem motivo para puxar conversa: "vem" até o jogador ou "chama" de onde está. Vale até o seu próximo turno.'),
+          }),
+        )
+        .min(1)
+        .max(30),
+    }),
+    mutates: true,
+    run(engine, input) {
+      const r = engine.setLines(input.lines);
+      const name = (id: string) => engine.state.characters[id].name.split(' ')[0];
+      const extra = (x: (typeof r.changed)[number]) => (x.initiative ? `, ${x.initiative}` : '');
+      // Como os pensamentos, as falas ficam nos bastidores até o jogador puxar conversa.
+      return { content: r, summary: `🤫 Falas prontas: ${r.changed.map((x) => `${name(x.who)} (${x.turn} do turno, ${x.general} gerais${extra(x)})`).join(', ')}` };
     },
   }),
 

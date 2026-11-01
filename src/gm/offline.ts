@@ -101,6 +101,22 @@ function setupSteps(): StepResult[] {
         call('advance_time', { to: '07:55', reason: 'início da aula' }),
         call('update_thread', { title: 'Primeira aula do dia', description: 'Dar a aula sobre o período Edo até o sinal das 8h50.' }),
         call('add_fact', { subject: 'yuki', text: 'Yuki ainda não entregou o trabalho de história', known_by: ['yuki'] }),
+        // O que cada um diz se o professor puxar conversa. O Haruto não espera: vem até ele. A Yuki
+        // cochicha o fato que só ela sabe (fato_1): o professor fica sabendo, e a turma não.
+        call('set_lines', {
+          lines: [
+            {
+              who: 'haruto',
+              initiative: 'vem',
+              turn: [{ text: 'Professor, se tiver prova surpresa, eu nem vim hoje, tá?' }],
+              general: [{ text: 'Viu o jogo de ontem? Que virada!' }, { text: 'Eu estudo depois, prometo.' }],
+            },
+            { who: 'aiko', turn: [{ text: 'Não liga para o Haruto, professor. Ele inventa tudo.' }], general: [{ text: 'Eu fiz o resumo do capítulo 4, se o senhor quiser ver.' }] },
+            { who: 'yuki', turn: [{ text: 'Professor… eu ainda não entreguei o trabalho de história. Desculpa.', fact_id: 'fato_1', whisper: true }] },
+            { who: 'ren', general: [{ text: '*boceja* …só mais cinco minutos.' }] },
+            { who: 'mei', turn: [{ text: 'Bom dia, professor. *volta os olhos para o caderno*' }], general: [{ text: '*sorri sem graça e continua desenhando*' }] },
+          ],
+        }),
       ],
     },
     {
@@ -114,6 +130,9 @@ function setupSteps(): StepResult[] {
         'Alguém ri baixo no fundo. O Ren apoiou o queixo na mão como quem pretende dormir de olhos abertos.',
         '',
         '(Modo offline: este é um roteiro fixo. Conecte o Claude para o mestre de verdade montar o mundo e narrar.)',
+        '>> Escrevo a data no quadro e começo a chamada.',
+        '>> "Prova surpresa só se o Haruto continuar falando."',
+        '>> @Ren "Acorda, Ren. A aula já começou."',
       ].join('\n'),
       toolCalls: [],
       stop: 'end_turn',
@@ -180,6 +199,15 @@ function turnSteps(action: string, ctx: TurnContext): StepResult[] {
   if (whisper) tools.push(call('move_character', { character_id: playerId, to: { near: whisper[2] } }));
   const playerLines = says.length ? says.map((s) => `@${playerId}: ${s}`) : whisper ? [] : [`@${playerId}: ${quoted ?? 'Muito bem, turma. Vamos começar.'}`];
   if (whisper) playerLines.push(`Você vai até ${whisper[1].split(' ')[0]} e se inclina.`, `@${playerId}[cochicho>${whisper[2]}]: ${whisper[3]}`);
+  // O que a Aiko e o Haruto dizem se o professor puxar conversa depois, sem o mestre; a Aiko chama de onde está.
+  tools.push(
+    call('set_lines', {
+      lines: [
+        { who: 'aiko', initiative: 'chama', turn: [{ text: 'Professor, posso apagar o quadro no fim da aula?' }] },
+        { who: 'haruto', turn: [{ text: 'O senhor tá de bom humor hoje, né? *sorriso amarelo*' }] },
+      ],
+    }),
+  );
   return [
     { text: '', stop: 'tool_use', toolCalls: tools },
     {
@@ -192,6 +220,9 @@ function turnSteps(action: string, ctx: TurnContext): StepResult[] {
         '@haruto[cochicho>mei]: Ele tá de bom humor hoje.',
         '',
         '(Modo offline: sem o modelo, o mestre só registra a ação.)',
+        '>> Peço silêncio e começo a explicar o período Edo.',
+        '>> Escrevo "Período Edo" no quadro.',
+        '>> (Esse Haruto vai me dar trabalho hoje.)',
       ].join('\n'),
       toolCalls: [],
       stop: 'end_turn',
@@ -224,9 +255,10 @@ class OfflineSession implements ModelSession {
   async step(handlers: StepHandlers = {}): Promise<StepResult> {
     const next = this.steps.shift() ?? { text: '…', toolCalls: [], stop: 'end_turn' };
     await new Promise((r) => setTimeout(r, 250));
-    for (const chunk of next.text.match(/\S+\s*/g) ?? []) {
-      handlers.onText?.(chunk);
-      await new Promise((r) => setTimeout(r, 18));
+    // O jogador só vê a narração inteira, depois de conferida; a pausa é o tempo do mestre escrever.
+    if (next.text) {
+      handlers.onText?.(next.text);
+      await new Promise((r) => setTimeout(r, 600));
     }
     // Uso zerado, para o custo e os créditos aparecerem na demo sem gasto.
     return { ...next, usage: { model: 'offline', inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } };

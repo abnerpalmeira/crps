@@ -177,6 +177,24 @@ export interface Character {
    * quem percebe mentes. O personagem do jogador não tem: o que ele sente, quem diz é o jogador.
    */
   feelings: Record<string, Feeling>;
+  /**
+   * Falas prontas (set_lines): o que o NPC diz quando o jogador puxa conversa no grid, sem o mestre.
+   * As do turno falam do que acabou de acontecer e somem no próximo turno do mestre; as gerais são
+   * do jeito da pessoa e ficam. `heard` conta as que o jogador já ouviu desde a última troca.
+   * `initiative`, do turno: o NPC não espera e vem até o jogador ("vem") ou chama de onde está ("chama").
+   */
+  lines?: { turn: ReadyLine[]; general: ReadyLine[]; heard: number; initiative?: 'vem' | 'chama' };
+}
+
+/** Uma fala pronta e o que ela revela a quem ouve. */
+export interface ReadyLine {
+  text: string;
+  /** Fato registrado que a fala conta: quem ouve passa a saber, como em share_knowledge. */
+  fact?: string;
+  /** Quem fala diz o próprio nome: quem ouve passa a conhecê-lo, como em introduce. */
+  introduces?: boolean;
+  /** Cochichada: quem fala chega perto, e só o jogador ouve (o segredo fica entre os dois). */
+  whisper?: boolean;
 }
 
 /** Como um item é empunhado (body.ts): decide a mão, o encaixe no 3D e as animações de quem o segura. */
@@ -363,7 +381,8 @@ export interface Thread {
   updatedTurn: number;
 }
 
-export type LogKind = 'player' | 'narration' | 'tool' | 'system';
+/** `free`: o que o jogador fez no grid entre os turnos do mestre (um passo, uma fala pronta que ouviu). */
+export type LogKind = 'player' | 'narration' | 'tool' | 'system' | 'free';
 
 export interface LogEntry {
   turn: number;
@@ -372,6 +391,8 @@ export interface LogEntry {
   text: string;
   /** Versão que o jogador vê, quando difere (falas que ele não ouviu viram só o gesto). */
   playerText?: string;
+  /** Na narração: as ações que o mestre sugeriu ao jogador, que viram botões. */
+  options?: string[];
 }
 
 /** Retrato da cena no fim de um turno: o que o replay precisa para mostrar o passado. */

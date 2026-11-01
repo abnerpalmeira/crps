@@ -30,6 +30,7 @@ import type {
   PerkDef,
   PerkGrant,
   Pos,
+  ReadyLine,
   ResourceDef,
   Ruleset,
   SpeechMode,
@@ -163,6 +164,12 @@ function migrate(state: WorldState): WorldState {
     c.feelings ??= {};
     for (const r of rules.resources) c.resources[r.id] ??= r.max;
     c.knows ??= ids.filter((id) => id !== c.id);
+    // Falas prontas de antes dos fatos e dos nomes: só o texto.
+    if (c.lines) {
+      for (const key of ['turn', 'general'] as const) {
+        c.lines[key] = (c.lines[key] as unknown[]).map((l) => (typeof l === 'string' ? { text: l } : l)) as ReadyLine[];
+      }
+    }
     if (!c.voices) {
       c.voices = {};
       voicesMissing = true;
@@ -248,6 +255,14 @@ const DIR_ALIASES: Record<string, Dir> = {
 /** Para onde leva uma saída do local: destino (id de local, pode ainda não existir) e nome. */
 /** Tipo de objeto novo, na legenda de um local: o que não for informado vem do parecido (like). */
 export type ObjectTypeInput = Omit<ObjectType, 'id' | 'char' | 'slug'>;
+
+/** Uma fala pronta como o mestre manda em set_lines. */
+export interface LineInput {
+  text: string;
+  fact_id?: string;
+  introduces?: boolean;
+  whisper?: boolean;
+}
 
 export interface ExitInput {
   fixture: string;
@@ -590,6 +605,14 @@ export class GameEngine {
     return candidates.sort((a, b) => Math.hypot(a.x - c.x, a.y - c.y) - Math.hypot(b.x - c.x, b.y - c.y))[0];
   }
 
+  /** Para onde vai um clique no chão: o próprio tile, se dá para ficar nele, ou o livre mais perto. */
+  walkTarget(locationId: string, p: Pos, moverId: string): Pos | null {
+    const loc = this.state.locations[locationId];
+    if (!loc) return null;
+    if (isPassable(loc, p.x, p.y) && this.freeTile(loc, p.x, p.y, moverId)) return p;
+    return this.nearestFreePassable(loc, p);
+  }
+
   private nearestFreePassable(loc: Location, p: Pos): Pos | null {
     let best: Pos | null = null;
     for (let y = 0; y < loc.height; y++) {
@@ -686,11 +709,25 @@ export class GameEngine {
 
   // --------------------------------------------------------------- mutações
 
-  log(kind: LogKind, text: string, playerText?: string): void {
-    this.state.log.push({ turn: this.state.turn, clock: { ...this.state.clock }, kind, text, ...(playerText !== undefined ? { playerText } : {}) });
+  log(kind: LogKind, text: string, playerText?: string, options?: string[]): void {
+    this.state.log.push({
+      turn: this.state.turn,
+      clock: { ...this.state.clock },
+      kind,
+      text,
+      ...(playerText !== undefined ? { playerText } : {}),
+      ...(options?.length ? { options } : {}),
+    });
   }
 
   beginTurn(): number {
+    // As falas do turno eram sobre o que tinha acabado de acontecer: a próxima narração traz outras.
+    for (const c of Object.values(this.state.characters)) {
+      if (!c.lines) continue;
+      c.lines.turn = [];
+      c.lines.heard = 0;
+      delete c.lines.initiative;
+    }
     return ++this.state.turn;
   }
 
@@ -1473,6 +1510,38 @@ export class GameEngine {
       if (degree === 0 && !text) delete c.feelings[t.id];
       else c.feelings[t.id] = { degree, text };
       changed.push({ who: c.id, toward: t.id, degree, before });
+    }
+    return { changed };
+  }
+
+  /**
+   * Falas prontas dos NPCs: as listas que vierem substituem as de antes, e o rodízio recomeça. A
+   * fala que conta um fato precisa ser de quem sabe; a iniciativa vale até o próximo turno do mestre.
+   */
+  setLines(entries: { who: string; turn?: LineInput[]; general?: LineInput[]; initiative?: 'vem' | 'chama' | 'nenhuma' }[]) {
+    const changed: { who: string; turn: number; general: number; initiative?: string }[] = [];
+    const clean = (c: Character, list: LineInput[] | undefined): ReadyLine[] | undefined =>
+      list
+        ?.map((l) => ({ ...l, text: l.text.replace(/\s+/g, ' ').trim() }))
+        .filter((l) => l.text)
+        .map((l) => {
+          if (/^@|\{[a-z0-9_]+:/i.test(l.text)) throw new EngineError(`Fala pronta de ${c.name} com marca: escreva só o que a pessoa diz, sem @id nem {gesto}.`);
+          const fact = l.fact_id ? this.findFact(l.fact_id) : null;
+          if (fact && !this.knows(c.id, fact)) {
+            throw new EngineError(`${c.name} não sabe ${fact.id}, então não pode contar numa fala pronta. Dê a fala a quem sabe, ou registre antes como ele soube.`);
+          }
+          return { text: l.text, ...(fact ? { fact: fact.id } : {}), ...(l.introduces ? { introduces: true } : {}), ...(l.whisper ? { whisper: true } : {}) };
+        });
+    for (const entry of entries) {
+      const c = this.findCharacter(entry.who);
+      if (c.isPlayer) throw new EngineError(`O que ${c.name} diz, quem decide é o jogador: falas prontas são dos NPCs.`);
+      const lines = (c.lines ??= { turn: [], general: [], heard: 0 });
+      lines.turn = clean(c, entry.turn) ?? lines.turn;
+      lines.general = clean(c, entry.general) ?? lines.general;
+      lines.heard = 0;
+      if (entry.initiative === 'nenhuma') delete lines.initiative;
+      else if (entry.initiative) lines.initiative = entry.initiative;
+      changed.push({ who: c.id, turn: lines.turn.length, general: lines.general.length, ...(lines.initiative ? { initiative: lines.initiative } : {}) });
     }
     return { changed };
   }

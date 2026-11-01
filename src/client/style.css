@@ -100,6 +100,11 @@ button {
   font-style: italic;
 }
 
+.name.news::before {
+  content: '💬 ';
+  font-style: normal;
+}
+
 .name.player {
   background: var(--accent);
   color: var(--accent-ink);
@@ -787,12 +792,6 @@ body.release .toggle {
   color: var(--accent);
 }
 
-.narration.live p:last-child::after {
-  content: '▍';
-  color: var(--accent);
-  animation: blink 1s steps(2) infinite;
-}
-
 .error {
   margin-top: 8px;
   padding: 8px 10px;
@@ -904,6 +903,52 @@ body.release .toggle {
   position: relative;
   padding: 10px 12px 12px;
   border-top: 1px solid var(--line);
+}
+
+/* Depois da narração: o que o jogador fez no grid sem o mestre (passos e falas prontas). */
+.after {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.after:empty {
+  display: none;
+}
+
+/* Ações que o mestre sugere no fim da narração: um clique manda a ação. */
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.options[hidden] {
+  display: none;
+}
+
+.option {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.option::before {
+  content: '▸ ';
+  color: var(--accent);
+}
+
+.option:hover {
+  border-color: var(--accent);
 }
 
 /* Marcas da ação: botões que inserem "fala", @Nome "sussurro", (pensamento) e *ação*. */

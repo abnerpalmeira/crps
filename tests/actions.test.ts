@@ -39,7 +39,12 @@ describe('ações pelo menu', () => {
   it('cada móvel oferece o que combina com ele', () => {
     const e = sala();
     const chair = fixture(e, 'chair');
-    expect(actionsFor(e.state, { kind: 'fixture', id: chair.id })[0]).toMatchObject({ label: 'Sentar', token: `{sentar>${chair.id}}`, note: 'a 3 passos: você vai até lá' });
+    // Sentar é ação livre: acontece na hora, sem esperar o turno do mestre.
+    expect(actionsFor(e.state, { kind: 'fixture', id: chair.id })[0]).toMatchObject({
+      label: 'Sentar',
+      free: { kind: 'act', verb: 'sentar', target: chair.id, other: null },
+      note: 'a 3 passos: você vai até lá',
+    });
     expect(labels(actionsFor(e.state, { kind: 'fixture', id: fixture(e, 'bed').id }))).toContain('Deitar');
     expect(labels(actionsFor(e.state, { kind: 'fixture', id: fixture(e, 'piano').id }))).toContain('Tocar');
     e.moveCharacter({ character_id: 'mei', to: { seat: chair.id } });
@@ -47,7 +52,7 @@ describe('ações pelo menu', () => {
     // Com algo no bolso, a mesa aceita o item.
     e.createItem({ name: 'Caneta', description: '', holder: { character_id: 'rita' } });
     const table = actionsFor(e.state, { kind: 'fixture', id: fixture(e, 'table').id }).find((o) => o.label === 'Pôr aqui…')!;
-    expect(table.options!.map((o) => o.token)).toEqual([`{por>caneta>${fixture(e, 'table').id}}`]);
+    expect(table.options!.map((o) => o.free)).toEqual([{ kind: 'act', verb: 'por', target: 'caneta', other: fixture(e, 'table').id }]);
   });
 
   it('tipos novos trazem os verbos que o mestre deu', () => {
@@ -68,11 +73,17 @@ describe('ações pelo menu', () => {
   it('item: pegar de longe, e o que dá para fazer com o que está com o jogador', () => {
     const e = sala();
     e.createItem({ name: 'Pedra', description: '', holder: { x: 6, y: 4, location_id: 'sala' } });
-    expect(actionsFor(e.state, { kind: 'item', id: 'pedra' })[0]).toMatchObject({ label: 'Pegar', token: '{pegar>pedra}', note: 'a 4 passos: você vai até lá' });
+    expect(actionsFor(e.state, { kind: 'item', id: 'pedra' })[0]).toMatchObject({
+      label: 'Pegar',
+      free: { kind: 'act', verb: 'pegar', target: 'pedra', other: null },
+      note: 'a 4 passos: você vai até lá',
+    });
     e.createItem({ name: 'Pistola', description: '', holder: { character_id: 'rita' }, grip: 'pistola' });
     e.createItem({ name: 'Bilhete', description: '', holder: { character_id: 'rita' }, text: '' });
     e.createItem({ name: 'Lanterna', description: '', holder: { character_id: 'rita' }, light: { radius: 3, intensity: 1 } });
     expect(labels(actionsFor(e.state, { kind: 'item', id: 'pistola' }))).toEqual(['Empunhar', 'Largar', 'Entregar para…']);
+    // Sacar uma arma é provocação: vai ao mestre, com o turno.
+    expect(actionsFor(e.state, { kind: 'item', id: 'pistola' })[0]).toMatchObject({ token: '{empunhar>pistola}', free: undefined });
     expect(labels(actionsFor(e.state, { kind: 'item', id: 'bilhete' }))).toContain('Ler');
     expect(labels(actionsFor(e.state, { kind: 'item', id: 'lanterna' }))).toContain('Acender');
     // Com a arma na mão, dá para mirar e atacar de longe.
@@ -87,7 +98,7 @@ describe('ações pelo menu', () => {
     const e = sala();
     const self = actionsFor(e.state, { kind: 'character', id: 'rita' });
     expect(labels(self)).toEqual(['Postura…', 'Gesto…']);
-    expect(self[0].options!.map((o) => o.token)).toContain('{pose>ajoelhado}');
+    expect(self[0].options!.map((o) => o.free?.kind === 'act' && o.free.target)).toContain('ajoelhado');
     e.moveCharacter({ character_id: 'rita', to: { seat: fixture(e, 'chair').id } });
     expect(labels(actionsFor(e.state, { kind: 'character', id: 'rita' }))[0]).toBe('Levantar');
   });

@@ -22,8 +22,8 @@ async function ask(prompt: string): Promise<string | null> {
   return next.done ? null : next.value.trim();
 }
 
-let streamed = '';
-let pendingLine = '';
+/** As ações que o mestre sugeriu na última narração: 1, 2 ou 3 escolhe uma. */
+let options: string[] = [];
 let current: GameEngine | null = null;
 let meter = new CostMeter();
 
@@ -47,31 +47,12 @@ function formatLine(line: string): string {
   return `\x1b[1m${nameOf(speech.speakerId)}${how ? ` (${how})` : ''}:\x1b[0m ${speech.text}`;
 }
 
-/** A narração chega em pedaços; cada linha só é impressa inteira, já formatada. */
-function writeNarration(chunk: string): void {
-  pendingLine += chunk;
-  for (let nl = pendingLine.indexOf('\n'); nl >= 0; nl = pendingLine.indexOf('\n')) {
-    stdout.write(`${formatLine(pendingLine.slice(0, nl))}\n`);
-    pendingLine = pendingLine.slice(nl + 1);
-  }
-}
-
 function print(event: GmEvent): void {
   switch (event.type) {
-    case 'narration_delta':
-      streamed += event.text;
-      writeNarration(event.text);
-      break;
-    case 'narration_reset':
-      if (streamed) stdout.write(dim('\n↺ (o mestre reescreveu)\n'));
-      streamed = '';
-      pendingLine = '';
-      break;
     case 'narration':
-      if (event.text.trim() !== streamed.trim()) stdout.write(`\n${event.text.split('\n').map(formatLine).join('\n')}\n`);
-      else stdout.write(`${formatLine(pendingLine)}\n`);
-      streamed = '';
-      pendingLine = '';
+      stdout.write(`\n${event.text.split('\n').map(formatLine).join('\n')}\n`);
+      options = event.options;
+      options.forEach((option, i) => stdout.write(dim(`  ${i + 1}. ${option}\n`)));
       break;
     case 'tool':
       stdout.write(dim(`  ${event.summary}\n`));
@@ -120,8 +101,10 @@ async function main(): Promise<void> {
     engine = await newGame();
   }
   while (engine) {
-    const input = await ask('\n> ');
-    if (input === null || input === '/sair') break;
+    const typed = await ask('\n> ');
+    if (typed === null || typed === '/sair') break;
+    const input = /^[1-3]$/.test(typed) ? (options[Number(typed) - 1] ?? typed) : typed;
+    if (input !== typed) stdout.write(dim(`  ${input}\n`));
     if (!input) continue;
     if (input === '/estado') {
       console.log(dim(compileBrief(engine)));
