@@ -10,6 +10,7 @@
     "dev:web": "vite",
     "demo": "CRPS_PROVIDER=offline CRPS_SAVES=saves/demo CRPS_API_PORT=8788 npm run dev",
     "demo:release": "CRPS_MODE=release npm run demo",
+    "teste": "CRPS_SAVES=saves/teste CRPS_API_PORT=8790 concurrently -k -n server,web -c blue,green \"tsx watch src/server/index.ts\" \"vite --port 5175 --strictPort\"",
     "play": "tsx src/cli.ts",
     "start": "vite build && CRPS_MODE=release tsx src/server/index.ts",
     "test": "vitest run",
