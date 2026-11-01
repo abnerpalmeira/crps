@@ -1,6 +1,7 @@
 import { POSES, bodyPose, handsOf } from './body';
 import { itemPlace } from './reading';
 import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
+import { DECOR, FLOOR_LABELS, WALL_MATERIALS, locationLook } from './eras';
 import { LEGEND } from './layout';
 import { typeChain } from './objects';
 import { lightAt, lightLabel, lightSources } from './light';
@@ -63,6 +64,17 @@ function feelingsLine(engine: GameEngine, view: Perception, c: Character, presen
   if (missing.length === others.length && others.length > 1) return `${feels}; falta sentimento por todos aqui`;
   const names = missing.slice(0, 4).map((o) => o.name.split(' ')[0]).join(', ');
   return `${feels}; falta sentimento por: ${names}${missing.length > 4 ? ` e mais ${missing.length - 4}` : ''}`;
+}
+
+/** Como o lugar se parece no 3D, para a narração bater com o que o jogador vê. */
+function lookLine(loc: Location): string {
+  const floor = `chão de ${FLOOR_LABELS[loc.floor] ?? loc.floor}`;
+  if (loc.outdoor) return floor;
+  const look = locationLook(loc);
+  const material = WALL_MATERIALS.find((m) => m.id === look.walls?.material)?.label ?? 'reboco claro';
+  const walls = `paredes de ${material}${look.walls?.color ? ` (${look.walls.color})` : ''}`;
+  const decor = look.decor.map((id) => DECOR.find((d) => d.id === id)?.label ?? id);
+  return `${walls}, ${floor}; ${decor.length ? `nas paredes: ${decor.join(', ')}` : 'paredes nuas'}`;
 }
 
 function shortId(loc: Location, id: string): string {
@@ -141,6 +153,7 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     const { map, markers } = renderMap(engine, loc);
     out.push(`\n## Local atual: ${loc.name} [${loc.id}], ${loc.width}×${loc.height}, ${loc.outdoor ? 'área aberta' : 'interior'}`);
     if (loc.description) out.push(loc.description);
+    out.push(`Aparência: ${lookLine(loc)}.`);
     out.push('```', map, '```');
     const used = [...new Set(loc.tiles.join(''))].map((ch) => LEGEND[ch] ?? loc.legend?.[ch]).filter((d) => d && d.char !== ' ');
     out.push(

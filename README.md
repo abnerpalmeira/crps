@@ -576,6 +576,31 @@ A época decide o visual no 3D (`src/engine/eras.ts`):
   jogo, e as outras usam os do catálogo, alternando pacotes e corpos. Um visual de outra época
   vale, porque pode ser um viajante do tempo, mas o motor avisa.
 
+### Aparência dos lugares
+
+Cada local fechado tem paredes, chão e decoração (`Location.walls`, `floor`, `decor`). O mestre dá
+os três em `create_location` e muda com `update_location`, numa reforma ou num saque.
+
+- **Paredes:** reboco pintado, pedra, tijolo aparente, tábuas de madeira, painéis de metal,
+  concreto, azulejo ou papel de parede com lambri, e `wall_color` quando a cor importa. O 3D
+  desenha cada material numa textura. A janela acompanha: moldura de madeira e vidro velho em
+  pedra, tijolo e madeira, e moldura de metal na nave.
+- **Chão:** os de antes (madeira, ladrilho, pedra, carpete, grama, terra), mais metal, mármore e
+  concreto.
+- **Decoração:** quadros, tapeçarias, tochas e luminárias, escudos e armas, prateleiras, cartazes e
+  mapas. O 3D pendura uma peça a cada três tiles de parede reta, longe de cantos, portas e móveis
+  altos, com o modelo da época (`ERA_DECOR`). Sem modelo na época, usa o da mais próxima, de
+  preferência a mais antiga: numa casa de hoje, o escudo com espadas é peça antiga. `[]` deixa as
+  paredes nuas.
+- **Porta:** a folha é a da época (`ERA_DOORS`): tábuas com cintas de ferro no castelo, madeira com
+  maçaneta hoje, metal na nave.
+
+O que o mestre não diz vem da época (`ERA_LOOK`): o castelo de pedra com estandartes e tochas, a
+nave de metal com luminárias e cartazes. Lugares sem época ficam com o reboco claro de sempre. Os
+criados com época, antes de a aparência existir, usam a da época. O resumo do turno mostra a
+aparência ("paredes de pedra, chão de pedra; nas paredes: tapeçarias e estandartes, tochas e
+luminárias de parede"), para a narração bater com o 3D.
+
 ### Saídas e andares
 
 Porta `D`, elevador `E` e escada `Z` ficam na parede e são as saídas do local. Cada uma tem

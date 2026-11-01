@@ -1,6 +1,6 @@
 import { GRIPS, GRIP_IDS, POSES, POSE_IDS, gripOf, handFor } from './body';
 import { modelCatalog, portable, sizeLabel, type CatalogItem } from './catalog';
-import { ERAS, PACK_ERA, outOfEra } from './eras';
+import { DECOR_IDS, ERAS, ERA_LOOK, PACK_ERA, outOfEra } from './eras';
 import { MAX_FRAMES, snapshotScene } from './frames';
 import { LEGEND, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, tileOf, type LocationSpec } from './layout';
 import { OBJECT_LIBRARY, findObjectType, librarySummary, objectType, resolveType, typeChain } from './objects';
@@ -16,6 +16,7 @@ import type {
   DifficultyName,
   Era,
   Fact,
+  FloorStyle,
   Figure,
   Fixture,
   Grip,
@@ -36,6 +37,7 @@ import type {
   ThreadStatus,
   TileDef,
   Visibility,
+  WallMaterial,
   WorldState,
 } from './types';
 
@@ -1022,9 +1024,15 @@ export class GameEngine {
       legend?: Record<string, string | ObjectTypeInput>;
       /** Época do lugar, se não for a da campanha (viagem no tempo, um museu de outra era). */
       era?: Era;
+      walls?: WallMaterial;
+      wall_color?: string;
+      decor?: string[];
     },
   ): { location: Location; warnings: string[] } {
     if (!spec.layout && !spec.template) throw new EngineError('Informe layout (ASCII) ou template (saguao, corredor).');
+    const era = spec.era ?? this.state.era;
+    // Lugar fechado sem chão dito: o da época (pedra num castelo, metal numa nave).
+    if (!spec.floor && !spec.outdoor && era) spec = { ...spec, floor: ERA_LOOK[era].floor };
     // Layout pronto: o motor desenha; as saídas já saem com nome (rua, elevador, apartamentos).
     const template = spec.template ? buildTemplate(spec.template.name, spec.template, () => randInt(this.state, 0, 999_999) / 1_000_000) : null;
     const legend = this.resolveLegend(spec.legend);
@@ -1041,8 +1049,8 @@ export class GameEngine {
       exits.forEach((f, i) => (result.location.exits[f.id].label = template.label(f, i, exits)));
     }
     this.setExits(result.location, spec.exits ?? []);
-    const era = spec.era ?? this.state.era;
     if (era) result.location.era = era;
+    this.dress(result.location, spec, era);
     // Móvel de outra época sem visual desta: o 3D o mostra como é (uma geladeira no castelo).
     const odd = [...new Set(result.location.fixtures.map((f) => f.kind))].filter((k) => outOfEra(typeChain(this.state, k), era));
     if (odd.length) {
@@ -1052,6 +1060,22 @@ export class GameEngine {
       );
     }
     return { location: result.location, warnings: result.warnings };
+  }
+
+  /**
+   * A aparência de um lugar fechado: o material e a cor das paredes e o que as enfeita. O que o
+   * mestre não diz vem da época (o castelo de pedra com tapeçarias e tochas); sem época, como antes.
+   */
+  private dress(loc: Location, spec: { walls?: WallMaterial; wall_color?: string; decor?: string[] }, era: Era | undefined): void {
+    if (spec.wall_color !== undefined && !/^#[0-9a-f]{6}$/i.test(spec.wall_color)) {
+      throw new EngineError(`wall_color precisa ser uma cor #rrggbb (veio "${spec.wall_color}").`);
+    }
+    if (loc.outdoor) return;
+    const look = era ? ERA_LOOK[era] : null;
+    const material = spec.walls ?? look?.walls;
+    if (material) loc.walls = { material, ...(spec.wall_color ? { color: spec.wall_color.toLowerCase() } : {}) };
+    const decor = spec.decor ?? look?.decor;
+    if (decor) loc.decor = [...new Set(decor.filter((d) => DECOR_IDS.includes(d)))];
   }
 
   /** Época de onde algo está: a do lugar, ou a da campanha (com alguém fora de cena). */
@@ -1210,11 +1234,27 @@ export class GameEngine {
   }
 
   /** Luz ambiente (acender ou apagar as luzes, anoitecer), nome e descrição de um local. */
-  updateLocation(input: { location_id: string; light?: number; name?: string; description?: string; exits?: ExitInput[] }) {
+  updateLocation(input: {
+    location_id: string;
+    light?: number;
+    name?: string;
+    description?: string;
+    exits?: ExitInput[];
+    walls?: WallMaterial;
+    wall_color?: string;
+    floor?: FloorStyle;
+    decor?: string[];
+  }) {
     const loc = this.findLocation(input.location_id);
     const before = loc.light;
-    if (input.light === undefined && input.name === undefined && input.description === undefined && !input.exits?.length) {
-      throw new EngineError('Nada para mudar: informe light, name, description ou exits.');
+    const look = input.walls !== undefined || input.wall_color !== undefined || input.floor !== undefined || input.decor !== undefined;
+    if (input.light === undefined && input.name === undefined && input.description === undefined && !input.exits?.length && !look) {
+      throw new EngineError('Nada para mudar: informe light, name, description, exits ou a aparência (walls, wall_color, floor, decor).');
+    }
+    if (look) {
+      // Reforma: o que não muda fica como estava.
+      this.dress(loc, { walls: input.walls ?? loc.walls?.material ?? 'reboco', wall_color: input.wall_color ?? loc.walls?.color, decor: input.decor ?? loc.decor }, undefined);
+      if (input.floor) loc.floor = input.floor;
     }
     this.setExits(loc, input.exits ?? []);
     if (input.light !== undefined) {

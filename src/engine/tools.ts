@@ -2,14 +2,14 @@ import { z } from 'zod';
 import { GRIP_IDS, POSES, POSE_IDS } from './body';
 import { eraLooks, modelCatalog, portable, sizeLabel } from './catalog';
 import { EngineError, VISIBILITY_LABEL, type GameEngine } from './engine';
-import { ERAS, ERA_IDS } from './eras';
+import { DECOR, DECOR_IDS, ERAS, ERA_IDS, FLOOR_LABELS, WALL_MATERIALS } from './eras';
 import { legendSummary } from './layout';
 import { librarySummary } from './objects';
 import { TEMPLATES } from './templates';
 import { lightLabel } from './light';
 import { FEELING_LABELS, knowsName, perceptionOf, strangerLabel } from './perception';
 import { signed, truncate } from './text';
-import type { Era, Fact, Grip, ItemHolder } from './types';
+import type { Era, Fact, Grip, ItemHolder, WallMaterial } from './types';
 
 /**
  * A API que o modelo enxerga. Cada tool valida a entrada com zod, chama o
@@ -30,6 +30,18 @@ function tool<S extends z.ZodType>(def: ToolDef<S>): ToolDef<S> {
 const era = z
   .enum(ERA_IDS)
   .describe(`Época, que decide o visual de móveis, objetos e roupas no 3D: ${ERAS.map((e) => `${e.id} (${e.label})`).join('; ')}.`);
+
+const floorStyle = z
+  .enum(Object.keys(FLOOR_LABELS) as [keyof typeof FLOOR_LABELS, ...(keyof typeof FLOOR_LABELS)[]])
+  .describe(`Chão: ${Object.entries(FLOOR_LABELS).map(([k, v]) => `${k} (${v})`).join(', ')}.`);
+const wallMaterial = z
+  .enum(WALL_MATERIALS.map((m) => m.id) as [WallMaterial, ...WallMaterial[]])
+  .describe(`Paredes: ${WALL_MATERIALS.map((m) => `${m.id} (${m.label})`).join(', ')}.`);
+const wallColor = z.string().describe('Cor das paredes em #rrggbb, quando importa (reboco verde-água, papel de parede vinho); sem ela, a do material.');
+const decor = z
+  .array(z.enum(DECOR_IDS))
+  .max(4)
+  .describe(`O que enfeita as paredes, pendurado nos trechos livres: ${DECOR.map((d) => `${d.id} (${d.label})`).join(', ')}. [] = paredes nuas (uma cela, um depósito).`);
 
 /** Os visuais de gente da época, para o mestre escolher o look de quem criar. */
 function looksFor(value: Era | undefined): string[] {
@@ -404,7 +416,10 @@ export const TOOLS = [
         })
         .optional()
         .describe(`Layout pronto, em vez de desenhar: ${Object.entries(TEMPLATES).map(([k, v]) => `${k} (${v})`).join('; ')}.`),
-      floor: z.enum(['wood', 'tile', 'stone', 'carpet', 'grass', 'dirt']).optional(),
+      floor: floorStyle.optional(),
+      walls: wallMaterial.optional(),
+      wall_color: wallColor.optional(),
+      decor: decor.optional(),
       era: era.optional().describe('Só se este lugar for de outra época que a campanha (viagem no tempo); sem ela, a da campanha.'),
       outdoor: z.boolean().optional().describe('true para áreas abertas (pátio, rua, floresta): dispensa paredes no perímetro.'),
       light: z.number().optional().describe('Luz ambiente de 0 a 1: 1 dia claro ou luzes acesas (padrão), 0.5 penumbra, 0.1 noite, 0 breu.'),
@@ -809,14 +824,19 @@ export const TOOLS = [
   tool({
     name: 'update_location',
     description:
-      'Muda a luz ambiente de um local (acender ou apagar as luzes, anoitecer, queda de energia), o nome, a descrição ou as saídas. ' +
-      'light vai de 0 (breu) a 1 (dia claro ou luzes acesas); 0.5 é penumbra, 0.1 é noite com pouca luz.',
+      'Muda a luz ambiente de um local (acender ou apagar as luzes, anoitecer, queda de energia), o nome, a descrição, as saídas ' +
+      'ou a aparência (uma reforma, paredes pintadas, a decoração arrancada). light vai de 0 (breu) a 1 (dia claro ou luzes ' +
+      'acesas); 0.5 é penumbra, 0.1 é noite com pouca luz.',
     schema: z.object({
       location_id: z.string(),
       light: z.number().optional(),
       name: z.string().optional(),
       description: z.string().optional(),
       exits: z.array(exitInput).optional().describe('Nome e destino de portas, elevadores e escadas.'),
+      walls: wallMaterial.optional(),
+      wall_color: wallColor.optional(),
+      floor: floorStyle.optional(),
+      decor: decor.optional(),
       reason: z.string(),
     }),
     mutates: true,

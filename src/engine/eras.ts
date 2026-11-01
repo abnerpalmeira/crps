@@ -1,4 +1,4 @@
-import type { Era, ObjectType } from './types';
+import type { Era, FloorStyle, Location, ObjectType, WallMaterial } from './types';
 
 /** As épocas, na ordem da linha do tempo, com o que cada uma cobre (para o mestre escolher). */
 export const ERAS: { id: Era; label: string }[] = [
@@ -227,4 +227,128 @@ export function outOfEra(chain: ObjectType[], era: Era | undefined): boolean {
   if (!era || chain.some((t) => t.wall) || eraFixtureModel(chain, era)) return false;
   const own = chain.map((t) => t.era).find(Boolean) ?? 'atual';
   return own !== 'atemporal' && own !== era;
+}
+
+/** Materiais de parede, para o mestre escolher. */
+export const WALL_MATERIALS: { id: WallMaterial; label: string }[] = [
+  { id: 'reboco', label: 'reboco pintado' },
+  { id: 'pedra', label: 'pedra' },
+  { id: 'tijolo', label: 'tijolo aparente' },
+  { id: 'madeira', label: 'tábuas de madeira' },
+  { id: 'metal', label: 'painéis de metal' },
+  { id: 'concreto', label: 'concreto' },
+  { id: 'azulejo', label: 'azulejo' },
+  { id: 'papel', label: 'papel de parede' },
+];
+
+export const FLOOR_LABELS: Record<FloorStyle, string> = {
+  wood: 'madeira',
+  tile: 'ladrilho',
+  stone: 'pedra',
+  carpet: 'carpete',
+  grass: 'grama',
+  dirt: 'terra',
+  metal: 'metal',
+  marble: 'mármore',
+  concrete: 'concreto',
+};
+
+/** O que pode enfeitar as paredes; o 3D pendura cada um com o modelo da época do lugar. */
+export const DECOR: { id: string; label: string }[] = [
+  { id: 'quadros', label: 'quadros' },
+  { id: 'tapecarias', label: 'tapeçarias e estandartes' },
+  { id: 'luminarias', label: 'tochas e luminárias de parede' },
+  { id: 'armas', label: 'escudos e armas penduradas' },
+  { id: 'prateleiras', label: 'prateleiras' },
+  { id: 'cartazes', label: 'cartazes e mapas' },
+];
+
+export const DECOR_IDS = DECOR.map((d) => d.id) as [string, ...string[]];
+
+/** O lugar fechado de cada época quando o mestre não diz como ele é: paredes, chão e decoração. */
+export const ERA_LOOK: Record<Era, { walls: WallMaterial; floor: FloorStyle; decor: string[] }> = {
+  antiguidade: { walls: 'reboco', floor: 'stone', decor: ['tapecarias', 'luminarias'] },
+  medieval: { walls: 'pedra', floor: 'stone', decor: ['tapecarias', 'luminarias'] },
+  colonial: { walls: 'madeira', floor: 'wood', decor: ['quadros', 'luminarias'] },
+  seculo_xix: { walls: 'papel', floor: 'wood', decor: ['quadros', 'luminarias'] },
+  atual: { walls: 'reboco', floor: 'wood', decor: ['quadros'] },
+  futuro: { walls: 'metal', floor: 'metal', decor: ['luminarias', 'cartazes'] },
+};
+
+/** A folha da porta de cada época, escolhida olhando as miniaturas; sem ela, a de primitivas. */
+export const ERA_DOORS: Partial<Record<Era, string>> = {
+  antiguidade: 'ancientempire:SM_Bld_Door_05',
+  medieval: 'dungeon:SM_Env_Door_03',
+  colonial: 'pirate_isles_map:SM_Bld_Colonial_Door_01',
+  seculo_xix: 'horror_mansion:SM_Bld_Door_03',
+  atual: 'office:SM_Bld_Door_05',
+  futuro: 'scifi_city:SM_Prop_Door_03',
+};
+
+/** Modelo de cada decoração de parede por época, escolhido olhando as miniaturas. */
+export const ERA_DECOR: Partial<Record<Era, Partial<Record<string, string>>>> = {
+  antiguidade: {
+    tapecarias: 'ancientegypt:SM_Prop_Banner_01',
+    luminarias: 'ancientegypt:SM_Prop_Torch_04',
+    armas: 'ancientempire:SM_Wep_Shield_03',
+  },
+  medieval: {
+    quadros: 'fantasy_kingdom:SM_Prop_Picture_Frame_03',
+    tapecarias: 'fantasy_kingdom:SM_Prop_Flag_09',
+    luminarias: 'viking_realm:SM_Prop_Torch_01',
+    armas: 'maps_dark_fantasy_manor:SM_Prop_Sword_Display_01',
+    prateleiras: 'fantasy_kingdom:SM_Prop_Shelf_01',
+    cartazes: 'fantasy_kingdom:SM_Prop_Poster_10',
+  },
+  colonial: {
+    quadros: 'pirate_realm:SM_Prop_Painting_02',
+    luminarias: 'pirate_realm:SM_Prop_Wall_Torch_02',
+    prateleiras: 'pirate_realm:SM_Prop_Shelf_01',
+    cartazes: 'pirate_realm:SM_Prop_Map_01',
+  },
+  seculo_xix: {
+    quadros: 'horror_mansion:SM_Prop_Picture_Frame_01',
+    luminarias: 'horror_mansion:SM_Prop_Light_Wall_01',
+    prateleiras: 'horror_mansion:SM_Prop_Shelf_02',
+    cartazes: 'western:SM_Prop_Map_02',
+  },
+  atual: {
+    quadros: 'nightclubs:SM_Prop_Art_Frame_01',
+    luminarias: 'palm_city:SM_Prop_Light_Wall_02',
+    prateleiras: 'office:SM_Prop_Shelf_Wall_03',
+    cartazes: 'construction:SM_Prop_Poster_06',
+  },
+  futuro: {
+    tapecarias: 'scifiworlds:SM_Prop_Banner_01_D',
+    luminarias: 'scifiworlds:SM_Bld_Light_03',
+    prateleiras: 'scifi_city:SM_Prop_Shelf_Wall_Preset_02',
+    cartazes: 'scifi_city:SM_Sign_Ad_14',
+  },
+};
+
+/**
+ * O modelo de uma decoração na época: o dela; sem ele, o da época mais próxima, antes a mais
+ * antiga (numa casa de hoje, o escudo com espadas é peça antiga na parede).
+ */
+export function decorModel(kind: string, era: Era | undefined): string | null {
+  const at = ERA_IDS.indexOf(era ?? 'atual');
+  const order = ERA_IDS.map((e, i) => ({ e, d: Math.abs(i - at) + (i > at ? 0.5 : 0) })).sort((a, b) => a.d - b.d);
+  for (const { e } of order) {
+    const id = ERA_DECOR[e]?.[kind];
+    if (id) return id;
+  }
+  return null;
+}
+
+/**
+ * A aparência que vale para um lugar: a que ele guarda; sem ela, num lugar fechado de alguma época
+ * (criado antes de a aparência existir), a da época; sem época, nenhuma, e fica o visual de antes.
+ */
+export function locationLook(loc: Pick<Location, 'walls' | 'decor' | 'era' | 'outdoor'>): {
+  walls?: { material: WallMaterial; color?: string };
+  decor: string[];
+} {
+  if (loc.outdoor) return { decor: [] };
+  const look = loc.era ? ERA_LOOK[loc.era] : null;
+  return { walls: loc.walls ?? (look ? { material: look.walls } : undefined), decor: loc.decor ?? look?.decor ?? [] };
 }

@@ -339,6 +339,15 @@ async function catalogFixture(f: Fixture, chain: ObjectType[], id: string, fit =
   return { group, top, span: sw, area: { x0: -sw / 2, z0: room.shift - sd / 2, x1: sw / 2, z1: room.shift + sd / 2 } };
 }
 
+/** Um modelo do catálogo como peça avulsa (folha de porta, decoração de parede), pintado; null se não houver. */
+export async function catalogProp(id: string): Promise<{ obj: THREE.Object3D; size: [number, number, number] } | null> {
+  const meta = await modelMeta(id);
+  if (!meta || meta.kind !== 'prop') return null;
+  const obj = (await source(FILES + meta.file)).clone();
+  paintCatalog(obj, meta);
+  return { obj, size: meta.size };
+}
+
 const FEMN = /\b(aluna|professora|diretora|menina|garota|filha|m[ãa]e|senhora|esposa|enfermeira|m[ée]dica|secret[áa]ria|cozinheira|dona|mulher|moça|moca|jovem mulher|ela)\b/;
 const MASC = /\b(aluno|professor|diretor|menino|garoto|filho|pai|senhor|marido|enfermeiro|m[ée]dico|cozinheiro|dono|homem|rapaz|moço|moco|ele)\b/;
 

@@ -305,7 +305,10 @@ export interface Fixture {
   state: string;
 }
 
-export type FloorStyle = 'wood' | 'tile' | 'stone' | 'carpet' | 'grass' | 'dirt';
+export type FloorStyle = 'wood' | 'tile' | 'stone' | 'carpet' | 'grass' | 'dirt' | 'metal' | 'marble' | 'concrete';
+
+/** Material das paredes de um local fechado, que o 3D desenha com textura. */
+export type WallMaterial = 'reboco' | 'pedra' | 'tijolo' | 'madeira' | 'metal' | 'concreto' | 'azulejo' | 'papel';
 
 export interface Location {
   id: string;
@@ -325,6 +328,10 @@ export interface Location {
   legend?: Record<string, TileDef>;
   /** Época do lugar, que decide o visual dos móveis: a da campanha quando ele foi criado, ou outra. */
   era?: Era;
+  /** Paredes: o material e a cor (#rrggbb), se o mestre deu; sem elas, o reboco claro de antes. */
+  walls?: { material: WallMaterial; color?: string };
+  /** O que enfeita as paredes (quadros, tapeçarias, luminárias…), que o 3D pendura nos trechos livres. */
+  decor?: string[];
 }
 
 /**

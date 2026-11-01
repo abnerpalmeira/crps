@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { Character, Dir, Fixture, FloorStyle, Item, ObjectType } from '../engine/types';
+import type { Character, Dir, Fixture, FloorStyle, Item, ObjectType, WallMaterial } from '../engine/types';
 
 /** Modelos low-poly feitos de primitivas. Espaço do modelo: centro no chão, frente para +Z. */
 export const WALL_H = 2.4;
@@ -50,6 +50,9 @@ const FLOOR: Record<FloorStyle, [string, string]> = {
   carpet: ['#7b5a6b', '#755566'],
   grass: ['#6d9a4f', '#638f47'],
   dirt: ['#8a6a4a', '#7f6044'],
+  metal: ['#8b939c', '#7d858d'],
+  marble: ['#e6e1d8', '#d6d0c4'],
+  concrete: ['#a19d97', '#97938d'],
 };
 
 export function floorColor(style: FloorStyle, x: number, y: number): THREE.Color {
@@ -63,10 +66,205 @@ export function floorColor(style: FloorStyle, x: number, y: number): THREE.Color
 export const WALL_COLOR = '#e4dccd';
 const TRIM = '#8e7356';
 
+/** Cor de base e do rodapé de cada material de parede; a cor do mestre troca a de base. */
+const WALL_LOOK: Record<WallMaterial, { base: string; trim: string }> = {
+  reboco: { base: WALL_COLOR, trim: TRIM },
+  pedra: { base: '#8f8a80', trim: '#5f5b54' },
+  tijolo: { base: '#9a4f3a', trim: '#5a3b2a' },
+  madeira: { base: '#8b6040', trim: '#5a4030' },
+  metal: { base: '#8b939c', trim: '#3b4148' },
+  concreto: { base: '#a19d97', trim: '#6e6a64' },
+  azulejo: { base: '#d8e6e8', trim: '#9aa8aa' },
+  papel: { base: '#7a3b3b', trim: '#4a3424' },
+};
+
+/** Paredes de pedra, tijolo e madeira têm janela de madeira e vidro velho; as de metal, de nave. */
+const OLD_WALLS = new Set<WallMaterial>(['pedra', 'tijolo', 'madeira']);
+
+interface WallMats {
+  side: THREE.Material;
+  /** A cor lisa do material, para as peças pequenas (verga, peitoril), onde a textura sairia espremida. */
+  plain: THREE.Material;
+  cap: THREE.Material;
+  trim: THREE.Material;
+  frame: string;
+  glass: string;
+}
+
+const wallLooks = new Map<string, WallMats>();
+let walls: WallMats = legacyWalls();
+
+/** As paredes de antes: reboco claro e liso, rodapé de madeira, janela branca. */
+function legacyWalls(): WallMats {
+  return { side: mat(WALL_COLOR), plain: mat(WALL_COLOR), cap: mat(WALL_COLOR), trim: mat(TRIM), frame: '#f2efe8', glass: '#bfe3f2' };
+}
+
+/**
+ * As paredes do local que vai ser montado: o material, com textura, e a cor. Sem eles (local de
+ * antes das épocas), o reboco claro de sempre.
+ */
+export function setWallLook(look: { material: WallMaterial; color?: string } | undefined): void {
+  if (!look) {
+    walls = legacyWalls();
+    return;
+  }
+  const base = look.color ?? WALL_LOOK[look.material].base;
+  const key = `${look.material}|${base}`;
+  let m = wallLooks.get(key);
+  if (!m) {
+    const metal = look.material === 'metal';
+    m = {
+      side: new THREE.MeshStandardMaterial({ map: wallTexture(look.material, base), flatShading: true, roughness: metal ? 0.55 : 0.9, metalness: metal ? 0.25 : 0 }),
+      plain: mat(base),
+      cap: mat(new THREE.Color(base).offsetHSL(0, 0, -0.08)),
+      trim: mat(WALL_LOOK[look.material].trim),
+      frame: metal ? '#3b4148' : OLD_WALLS.has(look.material) ? '#5a4030' : '#f2efe8',
+      glass: metal ? '#7fd3e6' : OLD_WALLS.has(look.material) ? '#a9c7b5' : '#bfe3f2',
+    };
+    wallLooks.set(key, m);
+  }
+  walls = m;
+}
+
+/**
+ * Textura de um tile de parede (1 m de largura × 2,4 m de altura), desenhada no canvas: blocos de
+ * pedra, tijolos, tábuas, painéis de metal, concreto, azulejos, papel de parede com lambri, reboco.
+ * Os desenhos casam nas bordas de cima a baixo, então a parede corre sem emenda.
+ */
+function wallTexture(material: WallMaterial, base: string): THREE.CanvasTexture {
+  const [W, H] = [128, 308];
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+  let seed = hash(`${material}${base}`);
+  const rnd = () => {
+    seed = Math.imul(seed ^ (seed >>> 15), 2246822507) >>> 0;
+    return (seed % 1000) / 1000;
+  };
+  const shade = (k: number) => `#${new THREE.Color(base).offsetHSL(0, 0, k).getHexString()}`;
+  const dot = (x: number, y: number, r: number) => {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  ctx.fillStyle = base;
+  ctx.fillRect(0, 0, W, H);
+  if (material === 'pedra') {
+    // Blocos em fiadas desencontradas, na argamassa escura.
+    ctx.fillStyle = shade(-0.14);
+    ctx.fillRect(0, 0, W, H);
+    const [rows, bw] = [7, W / 2];
+    for (let r = 0; r < rows; r++) {
+      for (let c = -1; c < 3; c++) {
+        ctx.fillStyle = shade((rnd() - 0.5) * 0.12);
+        ctx.fillRect(c * bw + (r % 2 ? bw / 2 : 0) + 2, (r * H) / rows + 2, bw - 4, H / rows - 4);
+      }
+    }
+  } else if (material === 'tijolo') {
+    ctx.fillStyle = '#cfc6b8';
+    ctx.fillRect(0, 0, W, H);
+    const [rows, bw] = [26, W / 4];
+    for (let r = 0; r < rows; r++) {
+      for (let c = -1; c < 5; c++) {
+        ctx.fillStyle = shade((rnd() - 0.5) * 0.1);
+        ctx.fillRect(c * bw + (r % 2 ? bw / 2 : 0) + 1, (r * H) / rows + 1, bw - 2, H / rows - 2);
+      }
+    }
+  } else if (material === 'madeira') {
+    // Tábuas em pé, com a fresta escura e uns veios.
+    const pw = W / 5;
+    for (let i = 0; i < 5; i++) {
+      ctx.fillStyle = shade((rnd() - 0.5) * 0.1);
+      ctx.fillRect(i * pw, 0, pw, H);
+      ctx.fillStyle = shade(-0.18);
+      ctx.fillRect(i * pw, 0, 1.5, H);
+      ctx.fillStyle = shade(-0.06);
+      for (let k = 0; k < 3; k++) ctx.fillRect(i * pw + 4 + rnd() * (pw - 8), rnd() * H, 1, 30 + rnd() * 60);
+    }
+  } else if (material === 'metal') {
+    // Painéis com juntas e rebites.
+    ctx.fillStyle = shade(-0.2);
+    for (const y of [H / 3, (2 * H) / 3]) ctx.fillRect(0, y - 1, W, 2);
+    ctx.fillRect(0, 0, 2, H);
+    ctx.fillStyle = shade(0.12);
+    for (const y of [H / 3, (2 * H) / 3]) {
+      for (let x = 10; x < W; x += 24) {
+        dot(x, y - 6, 1.6);
+        dot(x, y + 6, 1.6);
+      }
+    }
+  } else if (material === 'concreto') {
+    for (let i = 0; i < 400; i++) {
+      ctx.fillStyle = shade((rnd() - 0.5) * 0.08);
+      ctx.fillRect(rnd() * W, rnd() * H, 2, 2);
+    }
+    ctx.fillStyle = shade(-0.08);
+    for (const y of [H / 4, H / 2, (3 * H) / 4]) ctx.fillRect(0, y, W, 1);
+    ctx.fillStyle = shade(-0.25);
+    for (const y of [H / 8, (5 * H) / 8]) for (const x of [W / 4, (3 * W) / 4]) dot(x, y, 2.5);
+  } else if (material === 'azulejo') {
+    const tw = W / 5;
+    ctx.fillStyle = shade(-0.12);
+    ctx.fillRect(0, 0, W, H);
+    for (let r = 0; r * tw < H; r++) {
+      for (let c = 0; c < 5; c++) {
+        ctx.fillStyle = shade((rnd() - 0.5) * 0.04);
+        ctx.fillRect(c * tw + 1, r * tw + 1, tw - 2, tw - 2);
+      }
+    }
+  } else if (material === 'papel') {
+    // Listras com florzinhas e, até 0,9 m, o lambri de madeira com dois quadros.
+    const wain = H * 0.62;
+    ctx.fillStyle = shade(0.05);
+    for (let x = 0; x < W; x += 16) ctx.fillRect(x, 0, 8, wain);
+    ctx.fillStyle = shade(0.14);
+    for (let y = 12, row = 0; y < wain - 8; y += 24, row++) for (let x = 8 + (row % 2) * 16; x < W; x += 32) dot(x, y, 2.2);
+    ctx.fillStyle = '#5a4030';
+    ctx.fillRect(0, wain, W, H - wain);
+    ctx.fillStyle = '#4a3424';
+    ctx.fillRect(0, wain, W, 4);
+    ctx.strokeStyle = '#4a3424';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(10, wain + 14, W / 2 - 16, H - wain - 26);
+    ctx.strokeRect(W / 2 + 6, wain + 14, W / 2 - 16, H - wain - 26);
+  } else {
+    // Reboco: manchas leves.
+    for (let i = 0; i < 300; i++) {
+      ctx.fillStyle = shade((rnd() - 0.5) * 0.05);
+      ctx.fillRect(rnd() * W, rnd() * H, 3, 3);
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/** Peça lisa na cor da parede (verga, peitoril). */
+function wallBox(w: number, h: number, d: number, x: number, y: number, z: number): THREE.Mesh {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), walls.plain);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  return m;
+}
+
+function trimBox(w: number, h: number, d: number, x: number, y: number, z: number): THREE.Mesh {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), walls.trim);
+  m.position.set(x, y, z);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  return m;
+}
+
 export function wallPiece(): THREE.Group {
   const g = new THREE.Group();
-  g.add(box(1, WALL_H, 1, WALL_COLOR, 0, WALL_H / 2, 0));
-  g.add(box(1.002, 0.14, 1.002, TRIM, 0, 0.07, 0));
+  // Faces de lado com a textura do material; em cima e embaixo, a cor um pouco mais escura.
+  const wall = new THREE.Mesh(new THREE.BoxGeometry(1, WALL_H, 1), [walls.side, walls.side, walls.cap, walls.cap, walls.side, walls.side]);
+  wall.position.y = WALL_H / 2;
+  wall.castShadow = true;
+  wall.receiveShadow = true;
+  g.add(wall, trimBox(1.002, 0.14, 1.002, 0, 0.07, 0));
   return g;
 }
 
@@ -185,27 +383,33 @@ function board(g: THREE.Group, length: number): void {
 }
 
 function windowPiece(g: THREE.Group, length: number): void {
-  g.add(box(length, 0.9, 1, WALL_COLOR, 0, 0.45, 0));
-  g.add(box(length, WALL_H - 2.1, 1, WALL_COLOR, 0, (2.1 + WALL_H) / 2, 0));
-  g.add(box(length * 1.002, 0.14, 1.002, TRIM, 0, 0.07, 0));
-  g.add(mesh(new THREE.BoxGeometry(length * 0.96, 1.2, 0.04), '#bfe3f2', 0, 1.5, 0, { transparent: true, opacity: 0.35, roughness: 0.1 }));
-  g.add(box(length, 0.06, 0.16, '#f2efe8', 0, 0.92, 0.42));
+  g.add(wallBox(length, 0.9, 1, 0, 0.45, 0));
+  g.add(wallBox(length, WALL_H - 2.1, 1, 0, (2.1 + WALL_H) / 2, 0));
+  g.add(trimBox(length * 1.002, 0.14, 1.002, 0, 0.07, 0));
+  g.add(mesh(new THREE.BoxGeometry(length * 0.96, 1.2, 0.04), walls.glass, 0, 1.5, 0, { transparent: true, opacity: 0.35, roughness: 0.1 }));
+  g.add(box(length, 0.06, 0.16, walls.frame, 0, 0.92, 0.42));
   for (let i = 0; i <= Math.max(1, Math.round(length)); i++) {
     const x = -length / 2 + (i * length) / Math.max(1, Math.round(length));
-    g.add(box(0.05, 1.2, 0.08, '#f2efe8', Math.max(-length / 2 + 0.025, Math.min(length / 2 - 0.025, x)), 1.5, 0));
+    g.add(box(0.05, 1.2, 0.08, walls.frame, Math.max(-length / 2 + 0.025, Math.min(length / 2 - 0.025, x)), 1.5, 0));
   }
 }
 
 function door(g: THREE.Group, length: number, color = '#9b6b43'): void {
-  g.add(box(length, WALL_H - 2.1, 1, WALL_COLOR, 0, (2.1 + WALL_H) / 2, 0));
-  for (const side of [-1, 1]) g.add(box(0.08, 2.1, 1, '#8e7356', side * (length / 2 - 0.04), 1.05, 0));
-  // Porta larga é dupla: uma folha presa em cada batente, as duas abertas para dentro.
+  g.add(wallBox(length, WALL_H - 2.1, 1, 0, (2.1 + WALL_H) / 2, 0));
+  for (const side of [-1, 1]) g.add(trimBox(0.08, 2.1, 1, side * (length / 2 - 0.04), 1.05, 0));
+  // Porta larga é dupla: uma folha presa em cada batente, as duas abertas para dentro. A folha da
+  // época (scene.dressRoom) troca a de primitivas quando o modelo carrega.
   const leaves = length >= 2 ? [-1, 1] : [-1];
   const span = (length - 0.18) / leaves.length;
   for (const side of leaves) {
     const hinge = new THREE.Group();
+    hinge.name = 'door-hinge';
+    hinge.userData = { side, span };
     hinge.position.set(side * (length / 2 - 0.08), 0, 0.45);
-    hinge.add(box(span, 2.0, 0.05, color, (-side * span) / 2, 1.0, 0), box(0.04, 0.04, 0.12, '#d9c27a', -side * (span - 0.12), 1.0, 0.04));
+    const leaf = new THREE.Group();
+    leaf.name = 'door-leaf';
+    leaf.add(box(span, 2.0, 0.05, color, (-side * span) / 2, 1.0, 0), box(0.04, 0.04, 0.12, '#d9c27a', -side * (span - 0.12), 1.0, 0.04));
+    hinge.add(leaf);
     hinge.rotation.y = side * 1.15;
     g.add(hinge);
   }
@@ -227,8 +431,8 @@ function elevator(g: THREE.Group, length: number): void {
 
 /** Vão da escada na parede: degraus que sobem para dentro, corrimão e a placa verde de saída. */
 function stairs(g: THREE.Group, length: number): void {
-  g.add(box(length, WALL_H - 2.1, 1, WALL_COLOR, 0, (2.1 + WALL_H) / 2, 0));
-  for (const side of [-1, 1]) g.add(box(0.08, 2.1, 1, TRIM, side * (length / 2 - 0.04), 1.05, 0));
+  g.add(wallBox(length, WALL_H - 2.1, 1, 0, (2.1 + WALL_H) / 2, 0));
+  for (const side of [-1, 1]) g.add(trimBox(0.08, 2.1, 1, side * (length / 2 - 0.04), 1.05, 0));
   const steps = 6;
   const rise = 0.17;
   for (let i = 0; i < steps; i++) {

@@ -2,14 +2,17 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { GESTURES, GRIPS, POSES, bodyPose, clipFor, gripOf, handsOf, mainGrip, variantIndex, type Act, type Grip, type Hand } from '../engine/body';
+import { ERA_DOORS, decorModel, locationLook } from '../engine/eras';
 import { isPassable, tileDef } from '../engine/layout';
 import { lightSources } from '../engine/light';
 import { typeChain } from '../engine/objects';
 import { lifeStatId, perceptionOf, strangerLabel, visionOf } from '../engine/perception';
 import type { Character, Fixture, Item, Location, ObjectType, WorldState } from '../engine/types';
 import { arrange, type Rect, type Spot } from './arrange';
+import { decorSpots, type DecorSpot } from './dressing';
 import { capitalize } from './format';
 import {
+  catalogProp,
   characterModel,
   fixtureModel,
   footprint,
@@ -34,8 +37,37 @@ import {
   mat,
   playerRing,
   setSeated,
+  setWallLook,
   wallPiece,
 } from './props';
+
+/** Tamanho máximo (m) e altura na parede de cada decoração: o centro, ou o topo na tapeçaria, que pende. */
+const DECOR_FIT: Record<string, { w: number; h: number; y: number; top?: boolean }> = {
+  quadros: { w: 0.8, h: 0.7, y: 1.55 },
+  tapecarias: { w: 0.7, h: 1.5, y: 2.25, top: true },
+  luminarias: { w: 0.35, h: 0.7, y: 1.8 },
+  armas: { w: 0.9, h: 0.9, y: 1.6 },
+  prateleiras: { w: 0.9, h: 0.6, y: 1.45 },
+  cartazes: { w: 0.55, h: 0.75, y: 1.5 },
+};
+
+/**
+ * Um modelo chato (porta, quadro, estandarte) de pé no plano x-y, com a parte fina em z: o que vem
+ * com o lado comprido em z gira um quarto. `keep` mantém as proporções (cabe em w × h); sem ele,
+ * estica para preencher w × h (a folha da porta no vão).
+ */
+function fitted2D(model: THREE.Object3D, size: [number, number, number], w: number, h: number, keep: boolean): THREE.Group {
+  const [mw, mh, md] = size;
+  const turned = mw < md;
+  const [across, thin] = turned ? [md, mw] : [mw, md];
+  const inner = model.clone();
+  if (turned) inner.rotation.y = Math.PI / 2;
+  const holder = new THREE.Group();
+  holder.add(inner);
+  if (keep) holder.scale.setScalar(Math.min(w / across, h / mh, 1.6));
+  else holder.scale.set(w / across, h / mh, Math.min(w / across, h / mh, 0.05 / Math.max(thin, 0.01)));
+  return holder;
+}
 
 export interface Pick {
   kind: 'character' | 'fixture' | 'item';
@@ -139,6 +171,8 @@ export class WorldView {
   private readonly clock = new THREE.Clock();
   private room = new THREE.Group();
   private walls: WallPart[] = [];
+  /** Decoração pendurada, com a parede dela: some quando a parede abaixa para a câmera ver o cômodo. */
+  private decor: { obj: THREE.Object3D; wall: THREE.Object3D }[] = [];
   private actors = new Map<string, Actor>();
   private items = new Map<string, THREE.Object3D>();
   private boards = new Map<string, { surface: THREE.Mesh; text: string; length: number }>();
@@ -338,6 +372,7 @@ export class WorldView {
     this.items.clear();
     this.boards.clear();
     this.walls = [];
+    this.decor = [];
     this.scene.remove(this.room);
     this.room.traverse((o) => {
       if (o instanceof THREE.Mesh) o.geometry.dispose();
@@ -349,6 +384,8 @@ export class WorldView {
   private buildRoom(world: WorldState | null, loc: Location | null): void {
     this.clearRoom();
     if (!loc) return;
+    // Paredes, vergas e janelas com o material e a cor do lugar.
+    setWallLook(locationLook(loc).walls);
     const interior = (x: number, y: number) => {
       const d = tileDef(loc, x, y);
       return d.kind !== 'void' && !d.wall;
@@ -407,7 +444,57 @@ export class WorldView {
         this.signs.set(f.id, sign);
       }
     }
+    if (world) void this.dressRoom(world, loc);
     this.frame(loc);
+  }
+
+  /**
+   * O que dá a cara da época ao cômodo, quando os modelos carregam: a folha da porta no lugar da de
+   * primitivas, e a decoração pendurada nas paredes (decorSpots), virada para dentro.
+   */
+  private async dressRoom(world: WorldState, loc: Location): Promise<void> {
+    const room = this.room;
+    const door = loc.era && !loc.outdoor ? ERA_DOORS[loc.era] : undefined;
+    const leaf = door ? await catalogProp(door) : null;
+    if (leaf && this.room === room) {
+      for (const f of loc.fixtures) {
+        if (!typeChain(world, f.kind).some((t) => t.id === 'door')) continue;
+        const hinges: THREE.Object3D[] = [];
+        this.room.getObjectByName(`fixture:${f.id}`)?.traverse((o) => o.name === 'door-hinge' && hinges.push(o));
+        for (const hinge of hinges) {
+          const { side, span } = hinge.userData as { side: number; span: number };
+          const old = hinge.getObjectByName('door-leaf');
+          if (old) hinge.remove(old);
+          const fitted = fitted2D(leaf.obj, leaf.size, span, 2.0, false);
+          fitted.name = 'door-leaf';
+          fitted.position.x = (-side * span) / 2;
+          hinge.add(fitted);
+        }
+      }
+    }
+    const loads = new Map<string, Promise<{ obj: THREE.Object3D; size: [number, number, number] } | null>>();
+    for (const spot of decorSpots(world, loc)) {
+      const id = decorModel(spot.kind, loc.era);
+      if (!id) continue;
+      if (!loads.has(id)) loads.set(id, catalogProp(id));
+      void loads.get(id)!.then((model) => {
+        if (model && this.room === room) this.hang(spot, model);
+      });
+    }
+  }
+
+  /** Pendura uma decoração no ponto de parede, encostada nela e virada para o cômodo. */
+  private hang(spot: DecorSpot, model: { obj: THREE.Object3D; size: [number, number, number] }): void {
+    const fit = DECOR_FIT[spot.kind] ?? DECOR_FIT.quadros;
+    const obj = fitted2D(model.obj, model.size, fit.w, fit.h, true);
+    const box = new THREE.Box3().setFromObject(obj);
+    const [h, depth] = [box.max.y - box.min.y, box.max.z - box.min.z];
+    const out = 0.5 + depth / 2 + 0.01;
+    obj.position.set(spot.x + spot.dx * out, fit.top ? fit.y - h : fit.y - h / 2, spot.y + spot.dy * out);
+    obj.rotation.y = Math.atan2(spot.dx, spot.dy);
+    this.room.add(obj);
+    const wall = this.walls.find((w) => w.obj.position.x === spot.x && w.obj.position.z === spot.y)?.obj;
+    if (wall) this.decor.push({ obj, wall });
   }
 
   /** Troca o boneco primitivo pelo personagem animado do catálogo, quando ele carrega e se houver. */
@@ -1057,6 +1144,7 @@ export class WorldView {
       const goal = w.normal && w.normal.dot(view) > 0.3 ? 0.08 : 1;
       w.obj.scale.y += (goal - w.obj.scale.y) * Math.min(1, dt * 8);
     }
+    for (const d of this.decor) d.obj.visible = d.wall.scale.y > 0.6;
     // A placa desce junto com a parede baixada, para ficar na saída e não flutuar sobre a sala.
     for (const s of this.signs.values()) s.position.y = 0.35 + 2.25 * (s.userData.wall as THREE.Object3D).scale.y;
     this.renderer.render(this.scene, this.camera);
