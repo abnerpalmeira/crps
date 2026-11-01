@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { ModelCatalog, setModelCatalog, type RepertoireItem } from '../src/engine/catalog';
+import { ModelCatalog, portableSize, setModelCatalog, type RepertoireItem } from '../src/engine/catalog';
 import { GameEngine } from '../src/engine/engine';
 import { runTool } from '../src/engine/tools';
 
@@ -106,6 +106,46 @@ describe('catálogo de modelos', () => {
     expect(created[0].model).toBe('elvenrealm:SM_Item_Letter_02 (envelope bege aberto com carta escrita), escolhido pelo nome');
     expect(created[0].other_models).toContain('casino:SM_Item_Playing_Card_01 (carta de baralho ás de espadas)');
     expect(created[1].model).toBeUndefined();
+  });
+
+  it('item é o que cabe na mão: a bacia de pedra sobre pedestal não vira a bacia de latão da criada', () => {
+    const rows: RepertoireItem[] = [
+      { id: 'SM_Env_Stone_Vessel_01', pack: 'dungeon', src: 'd/1.fbx', category: 'objeto', desc: 'bacia de pedra lascada sobre pedestal grosso', size: [1.438, 1.347, 1.245] },
+      { id: 'SM_Env_Basin_02', pack: 'dungeon', src: 'd/2.fbx', category: 'objeto', desc: 'bacia de pedra rachada' },
+      { id: 'SM_Prop_Brass_Bowl_01', pack: 'fantasy_village', src: 'f/1.fbx', category: 'objeto', desc: 'bacia rasa de latão', size: [0.42, 0.12, 0.42] },
+      { id: 'SM_Prop_BathTub_01', pack: 'fantasy_kingdom', src: 'f/2.fbx', category: 'objeto', desc: 'tina de banho de madeira', size: [0.8, 0.62, 1.7] },
+      { id: 'SM_Wep_Spear_01', pack: 'knights', src: 'k/1.fbx', category: 'arma', desc: 'lança de madeira com ponta de ferro', size: [0.1, 2.4, 0.1] },
+      { id: 'SM_Prop_Broom_01', pack: 'fantasy_village', src: 'f/3.fbx', category: 'objeto', desc: 'vassoura de palha', size: [0.3, 1.5, 0.1] },
+      { id: 'SM_Item_Bucket_01_Handle', pack: 'fantasy_kingdom', src: 'f/4.fbx', category: 'objeto', desc: 'alça curva de madeira do balde', size: [0.24, 0.18, 0.45] },
+      { id: 'SM_Prop_Bird_Bath_01', pack: 'dark_fortress', src: 'd/3.fbx', category: 'objeto', desc: 'pássaro de pedra numa bacia', size: [0.3, 0.3, 0.3] },
+      { id: 'SM_Item_Bucket_01', pack: 'fantasy_kingdom', src: 'f/5.fbx', category: 'objeto', desc: 'balde de madeira escura com aros', size: [0.41, 0.39, 0.4] },
+    ];
+    // Uma medida longa passa (lança, vassoura); duas grandes, não (a bacia de 1,4 m, a tina).
+    expect(portableSize([0.1, 2.4, 0.1], 'arma')).toBe(true);
+    expect(portableSize([0.3, 1.5, 0.1], 'objeto')).toBe(true);
+    expect(portableSize([1.438, 1.347, 1.245], 'objeto')).toBe(false);
+    expect(portableSize([0.8, 0.62, 1.7], 'objeto')).toBe(false);
+    const catalog = new ModelCatalog(rows);
+    const basins = catalog.suggest('Bacia de latão', 'bacia de latão com água morna').map((i) => i.id);
+    expect(basins[0]).toBe('fantasy_village:SM_Prop_Brass_Bowl_01');
+    expect(basins).not.toContain('dungeon:SM_Env_Stone_Vessel_01');
+    // A peça de outro modelo (a alça do balde) não é item, e a descrição que abre com o que se procura
+    // vem antes da que só o cita.
+    expect(catalog.suggest('Balde', '').map((i) => i.id)).toEqual(['fantasy_kingdom:SM_Item_Bucket_01']);
+    expect(catalog.suggest('Bacia', '')[0].id).toBe('fantasy_village:SM_Prop_Brass_Bowl_01');
+    // Sem medida, peça de cenário (SM_Env) não se carrega: para "bacia de pedra", só a de latão.
+    expect(catalog.suggest('Bacia de pedra', '').map((i) => i.id)).not.toContain('dungeon:SM_Env_Basin_02');
+    setModelCatalog(catalog);
+    const e = GameEngine.create('teste', 1);
+    e.createLocation({ id: 'rua', name: 'Rua', description: '', outdoor: true, layout: ['.....', '.....', '.....'] });
+    const big = runTool(e, 'create_items', {
+      items: [{ name: 'Bacia', description: '', holder: { x: 1, y: 1, location_id: 'rua' }, model: 'dungeon:SM_Env_Stone_Vessel_01' }],
+    });
+    expect(big.ok).toBe(false);
+    expect(big.content).toContain('1,4 × 1,3 × 1,2 m) não cabe na mão de ninguém');
+    const found = runTool(e, 'search_models', { query: 'bacia' }).content;
+    expect(found).toContain('dungeon:SM_Env_Stone_Vessel_01: bacia de pedra lascada sobre pedestal grosso (objeto, 1,4 × 1,3 × 1,2 m, não cabe na mão)');
+    expect(found).toContain('fantasy_village:SM_Prop_Brass_Bowl_01: bacia rasa de latão (objeto, 0,4 × 0,1 × 0,4 m)');
   });
 
   it('cama, carro e cápsula num espaço menor que o tamanho típico são recusados', () => {

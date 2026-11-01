@@ -32,7 +32,7 @@ def render(pack, rel, out):
     scene.render.resolution_x = scene.render.resolution_y = SIZE
     scene.render.image_settings.file_format = 'JPEG'
     scene.render.image_settings.quality = 85
-    bpy.ops.import_scene.fbx(filepath=os.path.join(ROOT, rel))
+    bpy.ops.import_scene.fbx(filepath=os.path.join(ROOT, rel), use_image_search=False)
     clean(scene)
     meshes = [o for o in scene.objects if o.type == 'MESH']
     if not meshes:

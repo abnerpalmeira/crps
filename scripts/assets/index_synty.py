@@ -9,7 +9,9 @@ há descrições de quem olhou as miniaturas (assets/synty/_catalogo/descricoes/
 partir das grades de sheets_synty.py), elas valem por cima: o que o modelo é (desc), a categoria
 corrigida e, para personagens e animais, o corpo (figure) e o visual (look); sensivel marca símbolo
 de ódio ou conteúdo sexual explícito, e sem_imagem, o que foi descrito só pelo nome porque a
-miniatura não saiu. Escreve assets/synty/repertorio.json, com um item por modelo, e
+miniatura não saiu. As medidas de measure_synty.py (assets/synty/_catalogo/medidas/*.jsonl) entram
+como size, largura, altura e profundidade em metros: é por elas que o jogo sabe o que cabe na mão.
+Escreve assets/synty/repertorio.json, com um item por modelo, e
 assets/synty/REPERTORIO.md, o resumo por categoria e pacote. Os dois ficam fora do git, junto
 dos arquivos-fonte, e são só texto: é o que pode chegar ao mestre.
 """
@@ -109,9 +111,26 @@ def seen():
     return out
 
 
+def measured():
+    """Medidas de measure_synty.py, pelo id do catálogo (pacote:Arquivo)."""
+    out = {}
+    folder = os.path.join(ROOT, '_catalogo', 'medidas')
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if not name.endswith('.jsonl'):
+            continue
+        with open(os.path.join(folder, name), encoding='utf-8') as f:
+            for line in f:
+                if line.strip():
+                    row = json.loads(line)
+                    if row.get('size'):
+                        out[row['id']] = row['size']
+    return out
+
+
 def main():
     items = []
     looked = seen()
+    sizes = measured()
     for pack in sorted(os.listdir(ROOT)):
         base = os.path.join(ROOT, pack)
         if not os.path.isdir(base) or pack.startswith('_'):
@@ -131,6 +150,8 @@ def main():
                 view = looked.get(rel)
                 if view:
                     item.update({k: view[k] for k in ('desc', 'category', 'figure', 'look', 'sensivel', 'sem_imagem') if view.get(k)})
+                if f'{pack}:{stem}' in sizes:
+                    item['size'] = sizes[f'{pack}:{stem}']
                 items.append(item)
 
     with open(os.path.join(ROOT, 'repertorio.json'), 'w', encoding='utf-8') as out:

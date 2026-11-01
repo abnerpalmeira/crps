@@ -16,7 +16,7 @@ const LIBRARY: ObjectType[] = [
   { id: 'bed', char: 'b', size: '1×2', label: 'cama', slug: 'cama', seat: true, bed: true, merge: true, facing: 'lengthwise', surface: 0.52, article: 'a' },
   { id: 'sofa', char: 'S', label: 'sofá', slug: 'sofa', seat: true, merge: true, facing: 'open_side', surface: 0.44, article: 'o' },
   { id: 'counter', char: 'C', label: 'balcão', slug: 'balcao', merge: true, facing: 'open_side', table: true, surface: 1.05, article: 'o' },
-  { id: 'crate', char: 'x', label: 'caixa', slug: 'caixa', surface: 0.62, actions: ['abrir', 'procurar algo'], article: 'a' },
+  { id: 'crate', char: 'x', label: 'caixa', slug: 'caixa', surface: 0.62, actions: ['abrir', 'procurar algo'], era: 'atemporal', article: 'a' },
   { id: 'elevator', char: 'E', label: 'elevador', slug: 'elevador', passable: true, wall: true, merge: true, facing: 'interior', exit: 'floors', article: 'o' },
   { id: 'stairs', char: 'Z', label: 'escada', slug: 'escada', passable: true, wall: true, facing: 'interior', exit: 'floors', article: 'a' },
 
@@ -49,7 +49,7 @@ const LIBRARY: ObjectType[] = [
 
   // Museu, palco, hospital.
   { id: 'display_case', size: '3×1', label: 'vitrine', merge: true, facing: 'open_side', surface: 1, height: 1.4, color: '#bfe3f2', actions: ['olhar de perto'], article: 'a' },
-  { id: 'pedestal', label: 'pedestal', surface: 1.05, height: 1.05, color: '#e4dccd', article: 'o' },
+  { id: 'pedestal', label: 'pedestal', surface: 1.05, height: 1.05, color: '#e4dccd', era: 'atemporal', article: 'o' },
   { id: 'painting', label: 'quadro na parede', wall: true, merge: true, facing: 'interior', color: '#b0873f', actions: ['olhar de perto'], article: 'o' },
   { id: 'statue', label: 'estátua', height: 2, color: '#c9c3b6', actions: ['olhar de perto'], article: 'a' },
   { id: 'rope_barrier', label: 'cordão de isolamento', height: 1, color: '#9c1f1f', article: 'o' },
@@ -59,34 +59,34 @@ const LIBRARY: ObjectType[] = [
   { id: 'hospital_bed', size: '1×2', label: 'cama hospitalar', seat: true, bed: true, merge: true, facing: 'lengthwise', surface: 0.6, height: 0.6, color: '#e6e6e6', article: 'a' },
 
   // Ficção científica.
-  { id: 'control_panel', size: '2×1', label: 'painel de controle', merge: true, facing: 'open_side', table: true, surface: 1, height: 1.1, color: '#3b4148', actions: ['usar o painel'], article: 'o' },
-  { id: 'workbench', size: '2×1', label: 'bancada de trabalho', merge: true, facing: 'open_side', table: true, surface: 0.95, height: 0.95, color: '#6b6f75', actions: ['consertar algo'], article: 'a' },
+  { id: 'control_panel', size: '2×1', label: 'painel de controle', merge: true, facing: 'open_side', table: true, surface: 1, height: 1.1, color: '#3b4148', actions: ['usar o painel'], era: 'futuro', article: 'o' },
+  { id: 'workbench', size: '2×1', label: 'bancada de trabalho', merge: true, facing: 'open_side', table: true, surface: 0.95, height: 0.95, color: '#6b6f75', actions: ['consertar algo'], era: 'futuro', article: 'a' },
   { id: 'hatch', label: 'escotilha', like: 'door', passable: true, wall: true, facing: 'interior', exit: 'door', color: '#8b939c', article: 'a' },
   { id: 'server_rack', size: '1×1', label: 'rack de servidores', merge: true, facing: 'open_side', height: 2, color: '#1f2329', actions: ['mexer nos servidores'], article: 'o' },
-  { id: 'cryo_pod', size: '2×3', label: 'cápsula', merge: true, facing: 'lengthwise', height: 2, color: '#cfe3f0', actions: ['abrir', 'entrar'], article: 'a' },
+  { id: 'cryo_pod', size: '2×3', label: 'cápsula', merge: true, facing: 'lengthwise', height: 2, color: '#cfe3f0', actions: ['abrir', 'entrar'], era: 'futuro', article: 'a' },
 
-  // Fantasia e época.
-  { id: 'barrel', label: 'barril', surface: 0.9, height: 0.9, color: '#8b6040', actions: ['abrir', 'procurar algo'], article: 'o' },
-  { id: 'chest', label: 'baú', facing: 'open_side', surface: 0.6, height: 0.6, color: '#7b5636', actions: ['abrir', 'procurar algo'], article: 'o' },
-  { id: 'throne', label: 'trono', seat: true, facing: 'open_side', height: 1.8, color: '#b0873f', article: 'o' },
-  { id: 'anvil', label: 'bigorna', surface: 0.8, height: 0.8, color: '#3b4148', actions: ['forjar'], article: 'a' },
-  { id: 'forge', size: '2×2', label: 'forja', merge: true, facing: 'open_side', height: 1.2, color: '#5a3a2a', actions: ['acender', 'forjar'], article: 'a' },
-  { id: 'cauldron', label: 'caldeirão', height: 0.8, color: '#2a2a2a', actions: ['mexer o caldeirão'], article: 'o' },
-  { id: 'hay_bale', label: 'fardo de feno', seat: true, surface: 0.8, height: 0.8, color: '#d8b35a', article: 'o' },
-  { id: 'well', size: '2×2', label: 'poço', merge: true, height: 1, color: '#8d8a84', actions: ['tirar água'], article: 'o' },
+  // Fantasia e época. `era` diz de quando é o visual padrão; sem ela, de hoje (eras.ts troca pelo da época).
+  { id: 'barrel', label: 'barril', surface: 0.9, height: 0.9, color: '#8b6040', actions: ['abrir', 'procurar algo'], era: 'atemporal', article: 'o' },
+  { id: 'chest', label: 'baú', facing: 'open_side', surface: 0.6, height: 0.6, color: '#7b5636', actions: ['abrir', 'procurar algo'], era: 'atemporal', article: 'o' },
+  { id: 'throne', label: 'trono', seat: true, facing: 'open_side', height: 1.8, color: '#b0873f', era: 'medieval', article: 'o' },
+  { id: 'anvil', label: 'bigorna', surface: 0.8, height: 0.8, color: '#3b4148', actions: ['forjar'], era: 'atemporal', article: 'a' },
+  { id: 'forge', size: '2×2', label: 'forja', merge: true, facing: 'open_side', height: 1.2, color: '#5a3a2a', actions: ['acender', 'forjar'], era: 'medieval', article: 'a' },
+  { id: 'cauldron', label: 'caldeirão', height: 0.8, color: '#2a2a2a', actions: ['mexer o caldeirão'], era: 'atemporal', article: 'o' },
+  { id: 'hay_bale', label: 'fardo de feno', seat: true, surface: 0.8, height: 0.8, color: '#d8b35a', era: 'atemporal', article: 'o' },
+  { id: 'well', size: '2×2', label: 'poço', merge: true, height: 1, color: '#8d8a84', actions: ['tirar água'], era: 'atemporal', article: 'o' },
   { id: 'gate', label: 'portão', like: 'door', passable: true, wall: true, merge: true, facing: 'interior', exit: 'door', color: '#5a4030', article: 'o' },
 
   // Ao ar livre.
-  { id: 'tree', label: 'árvore', height: 4, color: '#4f7a3a', actions: ['subir'], article: 'a' },
-  { id: 'bush', label: 'arbusto', height: 1, color: '#5f8f47', actions: ['se esconder'], article: 'o' },
-  { id: 'rock', label: 'pedra', surface: 0.6, height: 0.6, color: '#8d8a84', article: 'a' },
+  { id: 'tree', label: 'árvore', height: 4, color: '#4f7a3a', actions: ['subir'], era: 'atemporal', article: 'a' },
+  { id: 'bush', label: 'arbusto', height: 1, color: '#5f8f47', actions: ['se esconder'], era: 'atemporal', article: 'o' },
+  { id: 'rock', label: 'pedra', surface: 0.6, height: 0.6, color: '#8d8a84', era: 'atemporal', article: 'a' },
   { id: 'fence', size: '3×1', label: 'cerca', merge: true, height: 1, color: '#8b6040', article: 'a' },
   { id: 'street_lamp', label: 'poste de luz', height: 4, color: '#3b4148', article: 'o' },
   { id: 'trash_can', label: 'lixeira', height: 0.9, color: '#4f6d5a', actions: ['revirar o lixo'], article: 'a' },
   { id: 'fountain', size: '3×3', label: 'chafariz', merge: true, height: 1.2, color: '#c9c3b6', actions: ['beber água'], article: 'o' },
   { id: 'car', size: '2×4', label: 'carro', merge: true, facing: 'lengthwise', surface: 1.4, height: 1.4, color: '#9c3b3b', actions: ['entrar', 'dirigir'], article: 'o' },
   { id: 'tent', size: '2×2', label: 'barraca', merge: true, facing: 'open_side', height: 1.6, color: '#6b7f4a', actions: ['entrar'], article: 'a' },
-  { id: 'campfire', label: 'fogueira', height: 0.5, color: '#c46a2a', actions: ['acender', 'apagar', 'esquentar as mãos'], article: 'a' },
+  { id: 'campfire', label: 'fogueira', height: 0.5, color: '#c46a2a', actions: ['acender', 'apagar', 'esquentar as mãos'], era: 'atemporal', article: 'a' },
 ];
 
 export const OBJECT_LIBRARY: Record<string, ObjectType> = Object.fromEntries(LIBRARY.map((t) => [t.id, t]));

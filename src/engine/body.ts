@@ -251,13 +251,15 @@ export function handFor(item: Item, asked: Hand | undefined): Hand {
 }
 
 /**
- * A pose que o corpo mostra agora: num assento, sentado (deitado, se for cama); com a vida em 0,
+ * A pose que o corpo mostra agora: num assento, sentado (na cama, deitado, ou sentado na beirada
+ * com a pose sentado); com a vida em 0,
  * caído (salvo se já está deitado); senão a que o mestre deu, ou de pé.
  */
 export function bodyPose(world: WorldState, c: Character): string {
   if (c.seatId) {
     const seat = c.locationId ? world.locations[c.locationId]?.fixtures.find((f) => f.id === c.seatId) : undefined;
-    return seat && typeChain(world, seat.kind).some((t) => t.bed) ? 'deitado' : 'sentado';
+    // Na cama, deitado, salvo quem o mestre sentou na beirada.
+    return seat && typeChain(world, seat.kind).some((t) => t.bed) && c.pose !== 'sentado' ? 'deitado' : 'sentado';
   }
   const life = lifeStatId(world);
   if (life && (c.resources[life] ?? 1) <= 0 && !POSES[c.pose ?? '']?.ground) return 'caido';

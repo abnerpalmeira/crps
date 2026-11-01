@@ -367,8 +367,17 @@ export function buildLocation(spec: LocationSpec): LayoutResult {
     });
   }
 
-  if (!spec.outdoor && !fixtures.some((f) => f.exit)) {
+  const exits = fixtures.filter((f) => f.exit);
+  if (!spec.outdoor && !exits.length) {
     warnings.push(`Nenhuma porta ('D'), elevador ('E') ou escada ('Z'): personagens não terão por onde entrar ou sair.`);
+  }
+  // Comprido e estreito por dentro, como um corredor, com uma saída só: um beco sem saída.
+  const [inner, across] = [Math.max(w, h) - 2, Math.min(w, h) - 2];
+  if (!spec.outdoor && exits.length === 1 && inner >= 3 * across) {
+    warnings.push(
+      `Comprido e estreito como um corredor, com uma saída só (${exits[0].id.split('/').pop()}): quem entrar só volta por ela. ` +
+        'Se esse lugar tem de verdade outras saídas, desenhe-as (podem levar a lugares que ainda não existem); se é mesmo um beco, deixe assim.',
+    );
   }
   if (errors.length) return { ok: false, errors, warnings };
 

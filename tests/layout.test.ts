@@ -29,6 +29,13 @@ describe('buildLocation', () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it('avisa do corredor com uma saída só, que vira beco sem saída', () => {
+    const closed = buildLocation(spec(['###########', '#.........#', 'D.........#', '#.........#', '###########']));
+    expect(closed.warnings.join(' ')).toMatch(/uma saída só \(porta-1\)/);
+    const open = buildLocation(spec(['###########', '#.........#', 'D.........D', '#.........#', '###########']));
+    expect(open.warnings).toEqual([]);
+  });
+
   it('recusa caracteres fora da legenda', () => {
     const result = buildLocation(spec(['#####', '#.?.#', '#####']));
     expect(result.ok).toBe(false);

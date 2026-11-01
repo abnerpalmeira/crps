@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import { GESTURES, GRIPS, POSES, bodyPose, clipFor, gripOf, handsOf, mainGrip, variantIndex, type Act, type Grip, type Hand } from '../engine/body';
-import { tileDef } from '../engine/layout';
+import { isPassable, tileDef } from '../engine/layout';
 import { lightSources } from '../engine/light';
 import { typeChain } from '../engine/objects';
 import { lifeStatId, perceptionOf, strangerLabel, visionOf } from '../engine/perception';
@@ -386,7 +386,7 @@ export class WorldView {
       obj.name = `fixture:${f.id}`;
       tagPick(obj, { kind: 'fixture', id: f.id });
       this.room.add(obj);
-      void this.upgradeFixture(obj, f, chain);
+      void this.upgradeFixture(obj, f, chain, loc.era);
       if (f.wall) {
         const [dx, dy] = DIR_VEC[f.facing];
         this.walls.push({ obj, normal: new THREE.Vector2(-dx, -dy) });
@@ -556,10 +556,10 @@ export class WorldView {
     }, bow ? 250 : 70);
   }
 
-  /** Troca as primitivas do móvel pelo modelo do catálogo, quando ele carrega e se houver. */
-  private async upgradeFixture(obj: THREE.Group, f: Fixture, chain: ObjectType[]): Promise<void> {
+  /** Troca as primitivas do móvel pelo modelo do catálogo (o da época do lugar), quando ele carrega e se houver. */
+  private async upgradeFixture(obj: THREE.Group, f: Fixture, chain: ObjectType[], era: Location['era']): Promise<void> {
     const room = this.room;
-    const model = await fixtureModel(f, chain);
+    const model = await fixtureModel(f, chain, era);
     if (!model || this.room !== room) return;
     for (const child of [...obj.children]) {
       child.traverse((o) => {
@@ -642,6 +642,7 @@ export class WorldView {
       // carregar, um pouco abaixo do meio do espaço da cama (que cresce para o pé no layout antigo).
       const top = this.surfaces.get(seat.id) ?? chain.map((t) => t.surface).find((v) => v !== undefined) ?? 0.5;
       const center = new THREE.Vector3(seat.x + (seat.w - 1) / 2, top, seat.y + (seat.h - 1) / 2);
+      if (bodyPose(world, c) === 'sentado') return this.bedEdge(loc, seat, center, yaw);
       const head = this.areas.get(seat.id)?.z0;
       const ahead = head !== undefined ? head + 0.95 : 0.3 + footprint(seat, chain).shift;
       return { pos: center.add(new THREE.Vector3(ahead * Math.sin(yaw), 0, ahead * Math.cos(yaw))), yaw, seated: false };
@@ -659,6 +660,27 @@ export class WorldView {
     const back = kinds.map(seatOffset).find((v) => v !== null) ?? (kinds.includes('desk') ? -0.3 : kinds.includes('sofa') ? -0.1 : 0);
     pos.add(new THREE.Vector3(back * Math.sin(yaw), 0, back * Math.cos(yaw)));
     return { pos, yaw, seated: true };
+  }
+
+  /**
+   * Sentado na beirada da cama: no meio do lado comprido, virado para fora, do lado livre que dá
+   * para o meio do quarto. Senta como numa cadeira, na altura do colchão.
+   */
+  private bedEdge(loc: Location, seat: Fixture, center: THREE.Vector3, yaw: number): { pos: THREE.Vector3; yaw: number; seated: boolean } {
+    const area = this.areas.get(seat.id);
+    const half = area ? (area.x1 - area.x0) / 2 : 0.45;
+    const mid = area ? (area.z0 + area.z1) / 2 : 0;
+    const along = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw));
+    const sides = [yaw + Math.PI / 2, yaw - Math.PI / 2].map((a) => ({ a, dir: new THREE.Vector3(Math.sin(a), 0, Math.cos(a)) }));
+    const room = (s: (typeof sides)[number]) => {
+      const out = center.clone().addScaledVector(s.dir, half + 0.5);
+      return isPassable(loc, Math.round(out.x), Math.round(out.z));
+    };
+    // Dos lados livres, o que dá para o meio do quarto.
+    const middle = new THREE.Vector3((loc.width - 1) / 2 - center.x, 0, (loc.height - 1) / 2 - center.z);
+    const side = [...sides].sort((a, b) => Number(room(b)) - Number(room(a)) || b.dir.dot(middle) - a.dir.dot(middle))[0];
+    const pos = new THREE.Vector3(center.x, 0, center.z).addScaledVector(along, mid).addScaledVector(side.dir, Math.max(0, half - 0.15));
+    return { pos, yaw: side.a, seated: true };
   }
 
   /**
@@ -929,7 +951,7 @@ export class WorldView {
         .map((c) => {
           const p = this.placement(world, c, loc).pos.sub(center).applyAxisAngle(UP, -yaw);
           // Deitado, o corpo ocupa a cama de ponta a ponta numa faixa no meio; sentado, o assento.
-          return bed ? { x0: p.x - 0.28, z0: area.z0, x1: p.x + 0.28, z1: area.z1 } : around(p.x, p.z, 0.3);
+          return bed && bodyPose(world, c) === 'deitado' ? { x0: p.x - 0.28, z0: area.z0, x1: p.x + 0.28, z1: area.z1 } : around(p.x, p.z, 0.3);
         });
       // A carteira tem o tampo na frente de quem senta.
       const mid = { x: (area.x0 + area.x1) / 2, z: (area.z0 + area.z1) / 2 + (f.kind === 'desk' ? 0.16 : 0) };

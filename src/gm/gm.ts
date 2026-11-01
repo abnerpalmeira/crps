@@ -34,8 +34,11 @@ export interface GameMasterOptions {
   effortTurn?: Effort;
   /** Roda o verificador de consistência depois de cada narração (padrão: sim). */
   verify?: boolean;
-  /** Prompt do mestre (padrão: SYSTEM_PROMPT, sem os visuais do catálogo 3D). */
-  system?: string;
+  /**
+   * Prompt do mestre (padrão: SYSTEM_PROMPT, sem os visuais do catálogo 3D). Como função, sai do
+   * mundo: os visuais são os da época dele, e na criação (setup) a época ainda não existe.
+   */
+  system?: string | ((world: WorldState, setup: boolean) => string);
   maxSteps?: number;
 }
 
@@ -61,7 +64,7 @@ export class GameMaster {
       engine.log('system', `Premissa: ${engine.state.premise}`);
       emit({ type: 'status', text: 'Montando o mundo…' });
       emit({ type: 'state', world: engine.snapshot() });
-      await this.runTurn(engine, setupMessage(engine.state.premise), this.opts.effortSetup ?? 'medium', engine.state.premise, emit);
+      await this.runTurn(engine, setupMessage(engine.state.premise), this.opts.effortSetup ?? 'medium', engine.state.premise, emit, [], [], true);
     });
   }
 
@@ -118,8 +121,10 @@ export class GameMaster {
     emit: Emit,
     done: string[] = [],
     gestures: string[] = [],
+    setup = false,
   ): Promise<void> {
-    const session = this.opts.provider.startSession({ system: this.opts.system ?? SYSTEM_PROMPT, tools: toolSpecs(), userMessage, effort });
+    const system = typeof this.opts.system === 'function' ? this.opts.system(engine.state, setup) : (this.opts.system ?? SYSTEM_PROMPT);
+    const session = this.opts.provider.startSession({ system, tools: toolSpecs(), userMessage, effort });
     const changes = [...done];
     let result = await this.loop(engine, session, emit, changes);
 
@@ -138,7 +143,7 @@ export class GameMaster {
         emit({ type: 'narration_reset' });
         session.addUserText(verifierFeedback(issues));
         const corrected = await this.loop(engine, session, emit, changes);
-        if (corrected.text) result = corrected;
+        if (corrected.text) result = { ...corrected, text: dropPreamble(corrected.text) };
       }
     }
 
@@ -238,6 +243,15 @@ export class GameMaster {
       return null;
     }
   }
+}
+
+/** Recado do mestre sobre a correção ("segue a narração corrigida"), que o jogador não deve ler. */
+const PREAMBLE = /narra[çc][ãa]o (corrigida|final|reescrita|completa)|segue a narra|verificador|corrigida deste turno/i;
+
+/** Tira da narração corrigida um primeiro parágrafo que fala da correção em vez de contar a história. */
+export function dropPreamble(text: string): string {
+  const [first, ...rest] = text.split(/\n\s*\n/);
+  return rest.length && PREAMBLE.test(first) ? rest.join('\n\n').trim() : text;
 }
 
 /**

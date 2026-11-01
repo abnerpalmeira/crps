@@ -46,7 +46,7 @@ def reset():
 
 def import_fbx(rel):
     before = set(bpy.data.objects)
-    bpy.ops.import_scene.fbx(filepath=os.path.join(src_root, rel))
+    bpy.ops.import_scene.fbx(filepath=os.path.join(src_root, rel), use_image_search=False)
     return [o for o in bpy.data.objects if o not in before]
 
 

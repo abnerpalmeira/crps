@@ -41,6 +41,11 @@ export function truncate(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
 }
 
+/** Número com sinal: +2, -1, 0. */
+export function signed(n: number): string {
+  return n > 0 ? `+${n}` : String(n);
+}
+
 export const DIR_VEC: Record<Dir, Pos> = {
   N: { x: 0, y: -1 },
   E: { x: 1, y: 0 },

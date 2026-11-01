@@ -1,8 +1,9 @@
 import { GRIPS, GRIP_IDS, POSES, POSE_IDS, gripOf, handFor } from './body';
-import { modelCatalog, type CatalogItem } from './catalog';
+import { modelCatalog, portable, sizeLabel, type CatalogItem } from './catalog';
+import { ERAS, PACK_ERA, outOfEra } from './eras';
 import { MAX_FRAMES, snapshotScene } from './frames';
 import { LEGEND, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, tileOf, type LocationSpec } from './layout';
-import { OBJECT_LIBRARY, findObjectType, librarySummary, objectType, resolveType } from './objects';
+import { OBJECT_LIBRARY, findObjectType, librarySummary, objectType, resolveType, typeChain } from './objects';
 import { DEFAULT_VISION, sightOf, type Sight } from './perception';
 import { parseDice, pickMany, randInt, rollDice } from './rng';
 import { analyzeSpeech } from './speech';
@@ -13,6 +14,7 @@ import type {
   Clock,
   Dir,
   DifficultyName,
+  Era,
   Fact,
   Figure,
   Fixture,
@@ -156,6 +158,7 @@ function migrate(state: WorldState): WorldState {
     c.perks ??= [];
     c.conditions ??= [];
     c.thoughts ??= null;
+    c.feelings ??= {};
     for (const r of rules.resources) c.resources[r.id] ??= r.max;
     c.knows ??= ids.filter((id) => id !== c.id);
     if (!c.voices) {
@@ -698,6 +701,7 @@ export class GameEngine {
     dice?: string;
     difficulties?: Partial<Record<DifficultyName, number>>;
     notes?: string;
+    era?: Era;
   }): Ruleset {
     if (Object.keys(this.state.characters).length) {
       throw new EngineError('As regras já estão em uso por personagens; para mudar no meio da campanha, use extend_ruleset.');
@@ -737,6 +741,7 @@ export class GameEngine {
       this.state.ruleset = previous;
       throw err;
     }
+    if (input.era) this.state.era = input.era;
     return rules;
   }
 
@@ -755,12 +760,14 @@ export class GameEngine {
     speech_modes?: Record<string, SpeechMode>;
     senses?: Record<string, number>;
     reaches?: Record<string, number>;
+    /** A história foi para outra época (viagem no tempo): os lugares novos e os itens novos seguem ela. */
+    era?: Era;
     reason: string;
   }) {
     const rules = this.state.ruleset;
     const characters = Object.values(this.state.characters);
     const added: {
-      kind: 'atributo' | 'recurso' | 'perk' | 'condição' | 'visibilidade' | 'modo de fala' | 'sentido' | 'alcance' | 'visão';
+      kind: 'atributo' | 'recurso' | 'perk' | 'condição' | 'visibilidade' | 'modo de fala' | 'sentido' | 'alcance' | 'visão' | 'época';
       id: string;
       name: string;
       visibility?: Visibility;
@@ -840,9 +847,13 @@ export class GameEngine {
       def.visibility = visibility;
       added.push({ kind: 'visibilidade', id: def.id, name: def.name, visibility });
     }
+    if (input.era && input.era !== this.state.era) {
+      this.state.era = input.era;
+      added.push({ kind: 'época', id: input.era, name: ERAS.find((e) => e.id === input.era)!.label });
+    }
     if (!added.length) {
       throw new EngineError(
-        'Nada para estender: informe attributes, resources, perks, conditions, visibility, speech_modes, senses, sight_channels, vision ou reaches.',
+        'Nada para estender: informe attributes, resources, perks, conditions, visibility, speech_modes, senses, sight_channels, vision, reaches ou era.',
       );
     }
     if (rules.attributes.length > 10 || rules.resources.length > 8) {
@@ -1009,6 +1020,8 @@ export class GameEngine {
       template?: TemplateOptions & { name: TemplateName };
       exits?: ExitInput[];
       legend?: Record<string, string | ObjectTypeInput>;
+      /** Época do lugar, se não for a da campanha (viagem no tempo, um museu de outra era). */
+      era?: Era;
     },
   ): { location: Location; warnings: string[] } {
     if (!spec.layout && !spec.template) throw new EngineError('Informe layout (ASCII) ou template (saguao, corredor).');
@@ -1028,7 +1041,35 @@ export class GameEngine {
       exits.forEach((f, i) => (result.location.exits[f.id].label = template.label(f, i, exits)));
     }
     this.setExits(result.location, spec.exits ?? []);
+    const era = spec.era ?? this.state.era;
+    if (era) result.location.era = era;
+    // Móvel de outra época sem visual desta: o 3D o mostra como é (uma geladeira no castelo).
+    const odd = [...new Set(result.location.fixtures.map((f) => f.kind))].filter((k) => outOfEra(typeChain(this.state, k), era));
+    if (odd.length) {
+      result.warnings.push(
+        `Sem visual da época (${era}): ${odd.map((k) => objectType(this.state, k).label).join(', ')} aparece como é hoje. Se não existe nessa ` +
+          'época, troque por um tipo dela; se existe, defina o tipo na legenda com model (busque com search_models).',
+      );
+    }
     return { location: result.location, warnings: result.warnings };
+  }
+
+  /** Época de onde algo está: a do lugar, ou a da campanha (com alguém fora de cena). */
+  eraAt(holder: ItemHolder): Era | undefined {
+    const place = this.holderPlace(holder);
+    return (place && this.state.locations[place.locationId]?.era) ?? this.state.era;
+  }
+
+  /**
+   * Visual de personagem de outra época que a campanha: vale (um viajante do tempo), mas o mestre
+   * fica sabendo. Os da lista padrão, sem pacote, são de hoje.
+   */
+  lookEraNote(c: Character): string | null {
+    const era = this.state.era;
+    if (!era || !c.look) return null;
+    const own = c.look.includes(':') ? PACK_ERA[c.look.split(':')[0]] : 'atual';
+    if (!own || own === era) return null;
+    return `${c.name}: o visual ${c.look} é de outra época (${own}) e a campanha é ${era}. Se não for de propósito, troque com update_character look por um da época.`;
   }
 
   /** O tipo de um objeto: da biblioteca ou criado nesta campanha. */
@@ -1086,6 +1127,12 @@ export class GameEngine {
       throw new EngineError(`"${id}" é ${item.category}, não personagem: o visual (look) precisa ser um personagem do catálogo.`);
     }
     if (use !== 'look' && item.category === 'personagem') throw new EngineError(`"${id}" é um personagem: gente entra com create_characters e look.`);
+    if (use === 'item' && !portable(item)) {
+      throw new EngineError(
+        `"${id}" (${item.desc ?? item.category}${item.size ? `, ${sizeLabel(item.size)}` : ''}) não cabe na mão de ninguém, e item é o que se carrega. ` +
+          'Busque um menor com search_models (ela mostra o tamanho); se a coisa não se carrega mesmo, faça dela um móvel na legenda do local.',
+      );
+    }
     return item;
   }
 
@@ -1253,6 +1300,7 @@ export class GameEngine {
       seatId: null,
       knows: [],
       voices: {},
+      feelings: {},
     };
     if (!input.offscreen) {
       const locId = input.location_id ?? this.player?.locationId ?? this.lastLocationId();
@@ -1365,6 +1413,28 @@ export class GameEngine {
       added.push({ who: a.id, knows: b.id });
     }
     return { added };
+  }
+
+  /**
+   * O que um NPC sente por alguém: grau de -3 a +3 (a boa vontade com a pessoa) e o porquê.
+   * Grau 0 sem texto apaga. O que o personagem do jogador sente, quem diz é o jogador.
+   */
+  setFeelings(entries: { who: string; toward: string; degree: number; text: string }[]) {
+    const changed: { who: string; toward: string; degree: number; before: number | null }[] = [];
+    for (const entry of entries) {
+      const c = this.findCharacter(entry.who);
+      const t = this.findCharacter(entry.toward);
+      if (c.isPlayer) throw new EngineError(`O que ${c.name} sente, quem diz é o jogador: registre só o que os NPCs sentem.`);
+      if (c.id === t.id) throw new EngineError(`${c.name} não pode sentir algo por si mesmo aqui: isso vai em personality ou thoughts.`);
+      const degree = Math.round(entry.degree);
+      if (!(degree >= -3 && degree <= 3)) throw new EngineError(`O grau vai de -3 a +3 (veio ${entry.degree}).`);
+      const text = entry.text.trim();
+      const before = c.feelings[t.id]?.degree ?? null;
+      if (degree === 0 && !text) delete c.feelings[t.id];
+      else c.feelings[t.id] = { degree, text };
+      changed.push({ who: c.id, toward: t.id, degree, before });
+    }
+    return { changed };
   }
 
   /** Depois da narração: quem ouviu um conhecido falar passa a saber quem é, mesmo no escuro. */
@@ -1566,7 +1636,7 @@ export class GameEngine {
     const author = input.written_by ? this.findCharacter(input.written_by).id : null;
     // Sem modelo, o mais parecido do catálogo pelo nome e pela descrição: um item sem visual é uma
     // caixinha no 3D. O mestre vê qual foi e troca se não combinar.
-    const model = input.model ?? modelCatalog()?.suggest(input.name, input.description, 1)[0]?.id;
+    const model = input.model ?? modelCatalog()?.suggest(input.name, input.description, 1, this.eraAt(holder))[0]?.id;
     if (holder.kind === 'character' && holder.id === this.state.playerId && this.state.turn > 0) {
       this.conjureFor(this.state.characters[holder.id], `"${input.name}"`);
     }
@@ -1728,8 +1798,10 @@ export class GameEngine {
     target_id?: string;
     reach?: string | number;
     needs_sight?: boolean;
+    goodwill?: boolean;
   }) {
     const c = this.findCharacter(input.character_id);
+    if (input.goodwill && !input.target_id) throw new EngineError('goodwill precisa de target_id: é a boa vontade do alvo com quem tenta.');
     let opponent: { id: string; name: string; distance: number; reach: string; sight: Sight } | null = null;
     if (input.target_id) {
       const t = this.findCharacter(input.target_id);
@@ -1764,8 +1836,10 @@ export class GameEngine {
     const vision = this.state.ruleset.vision;
     const sightPenalty =
       !opponent || input.needs_sight === false ? 0 : opponent.sight === 'vulto' ? vision.dimPenalty : opponent.sight === 'nada' ? vision.blindPenalty : 0;
+    // Pedir, convencer, acalmar ou enganar depende do que o alvo sente por quem tenta.
+    const feelingBonus = opponent && input.goodwill ? (this.state.characters[opponent.id].feelings[c.id]?.degree ?? 0) : 0;
     const total =
-      rolls.reduce((a, b) => a + b, 0) + dice.bonus + (c.attributes[attrId] ?? 0) + skillValue + modifier + perkBonus - sightPenalty;
+      rolls.reduce((a, b) => a + b, 0) + dice.bonus + (c.attributes[attrId] ?? 0) + skillValue + modifier + perkBonus - sightPenalty + feelingBonus;
     const margin = total - target;
     const success = margin >= 0;
     const degree = margin >= 4 ? 'sucesso pleno' : success ? 'sucesso' : margin <= -4 ? 'falha grave' : 'falha';
@@ -1779,6 +1853,7 @@ export class GameEngine {
       perk_bonus: perkBonus,
       perks: perks.map((p) => p.name),
       sight_penalty: sightPenalty,
+      feeling_bonus: feelingBonus,
       dice: this.state.ruleset.dice,
       rolls,
       total,
@@ -2000,6 +2075,7 @@ export class GameEngine {
       perks: this.perksOf(c).map((p) => ({ id: p.id, name: p.name, description: p.description })),
       conditions: this.conditionLabels(c),
       thoughts: c.thoughts,
+      feelings: Object.entries(c.feelings).map(([id, f]) => ({ toward: id, name: this.state.characters[id]?.name ?? id, degree: f.degree, text: f.text })),
       location: c.locationId,
       position: c.pos,
       seated_at: c.seatId,

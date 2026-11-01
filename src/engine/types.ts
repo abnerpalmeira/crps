@@ -116,6 +116,18 @@ export type Figure = 'adulto' | 'adulta' | 'menino' | 'menina';
 /** `sketch` = criado com o mínimo; `full` = aprofundado quando ficou relevante. */
 export type DetailLevel = 'sketch' | 'full';
 
+/**
+ * Época de uma campanha ou de um lugar, que decide o visual no 3D: móveis, objetos e roupas. Em
+ * ordem (eras.ts): na falta de modelo da própria época, a vizinha serve melhor que uma distante.
+ */
+export type Era = 'antiguidade' | 'medieval' | 'colonial' | 'seculo_xix' | 'atual' | 'futuro';
+
+/** O que alguém sente por uma pessoa: a boa vontade com ela, de -3 a +3, e o porquê numa frase. */
+export interface Feeling {
+  degree: number;
+  text: string;
+}
+
 export interface Character {
   id: string;
   name: string;
@@ -160,6 +172,11 @@ export interface Character {
   knows: string[];
   /** Conhecidos que ele ouviu falar onde está (id de quem falou → local): sabe quem é mesmo sem ver. */
   voices: Record<string, string>;
+  /**
+   * O que o NPC sente por cada pessoa (id → sentimento). Como os pensamentos, só o mestre vê, ou
+   * quem percebe mentes. O personagem do jogador não tem: o que ele sente, quem diz é o jogador.
+   */
+  feelings: Record<string, Feeling>;
 }
 
 /** Como um item é empunhado (body.ts): decide a mão, o encaixe no 3D e as animações de quem o segura. */
@@ -239,6 +256,8 @@ export interface ObjectType {
   like?: string;
   /** Modelo do catálogo 3D (`pacote:Arquivo`) que o mestre escolheu para o visual. */
   model?: string;
+  /** Época do visual padrão (o modelo da biblioteca); sem ela, de hoje. Atemporal serve em qualquer uma. */
+  era?: Era | 'atemporal';
   /** O que dá para fazer com ele além do que vem das propriedades (sentar, deitar): "tocar", "abrir". */
   actions?: string[];
 }
@@ -304,6 +323,8 @@ export interface Location {
   exits: Record<string, Exit>;
   /** Caracteres extras do layout deste local (além da legenda fixa), cada um com seu tipo. */
   legend?: Record<string, TileDef>;
+  /** Época do lugar, que decide o visual dos móveis: a da campanha quando ele foi criado, ou outra. */
+  era?: Era;
 }
 
 /**
@@ -391,4 +412,6 @@ export interface WorldState {
   counters: Record<string, number>;
   /** Tipos de objeto criados pelo mestre nesta campanha (os da biblioteca ficam no código). */
   objectTypes: Record<string, ObjectType>;
+  /** Época da campanha (define_ruleset); sem ela, como antes: o visual de hoje, sem filtro. */
+  era?: Era;
 }

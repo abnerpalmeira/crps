@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { GameEngine } from '../src/engine/engine';
 import { EXAMPLE_CLASSROOM } from '../src/engine/tools';
-import { GameMaster, type GmEvent } from '../src/gm/gm';
+import { GameMaster, dropPreamble, type GmEvent } from '../src/gm/gm';
+import { SYSTEM_PROMPT, turnMessage, verifierPrompt } from '../src/gm/prompts';
+import { compileBrief } from '../src/engine/brief';
 import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, Verdict } from '../src/gm/provider';
 
 /** Provedor roteirizado: cada sessão (turno) consome uma lista de respostas do "modelo". */
@@ -127,6 +129,62 @@ describe('GameMaster', () => {
     expect(events.filter((e) => e.type === 'narration')).toEqual([
       { type: 'narration', text: 'Você escreve 28/10 no quadro, e o giz range.', turn: 1 },
     ]);
+  });
+
+  it('a narração corrigida chega ao jogador sem o recado sobre a correção', async () => {
+    const provider = new FakeProvider(
+      [
+        worldBuildingSteps(),
+        [
+          say('Você escreve a data no quadro.'),
+          tools(call('t5', 'update_fixture', { fixture_id: 'sala/quadro-1', text: '28/10' })),
+          say('O quadro agora tem a data. Segue a narração corrigida deste turno.\n\nVocê escreve 28/10 no quadro, e o giz range.'),
+        ],
+      ],
+      [{ consistent: true, issues: [] }, { consistent: false, issues: ['Escrita no quadro sem update_fixture.'] }],
+    );
+    const gm = new GameMaster({ provider });
+    const { engine } = await setUpWorld(provider, gm);
+    const events: GmEvent[] = [];
+    await gm.play(engine, 'Escrevo a data no quadro.', (e) => events.push(e));
+
+    expect(provider.sessions[1].userTexts[0]).toContain('comece direto pela história');
+    expect(events.filter((e) => e.type === 'narration')).toEqual([
+      { type: 'narration', text: 'Você escreve 28/10 no quadro, e o giz range.', turn: 1 },
+    ]);
+    // Parágrafo de história fica, mesmo sem recado nenhum antes dele.
+    expect(dropPreamble('Lúcia se vira.\n\nO vento sobe.')).toBe('Lúcia se vira.\n\nO vento sobe.');
+  });
+
+  it('o prompt do mestre sai do mundo: na criação, sem a época; nos turnos, com a dela', async () => {
+    const provider = new FakeProvider([worldBuildingSteps(), [say('A turma se ajeita.')]]);
+    const gm = new GameMaster({ provider, system: (world, setup) => (setup ? 'CRIAÇÃO' : `TURNO ${world.era ?? 'sem época'}`) });
+    const { engine } = await setUpWorld(provider, gm);
+    engine.state.era = 'atual';
+    await gm.play(engine, 'Olho a turma.', () => {});
+    expect(provider.options.map((o) => o.system)).toEqual(['CRIAÇÃO', 'TURNO atual']);
+  });
+
+  it('o prompt manda os NPCs agirem e os lugares novos terem as saídas que teriam', () => {
+    expect(SYSTEM_PROMPT).toContain('# Os outros agem');
+    expect(SYSTEM_PROMPT).toContain('Ameaça de NPC vira ação');
+    expect(SYSTEM_PROMPT).toContain('Lugar novo nasce com as saídas que teria');
+  });
+
+  it('o mestre vê o que cada NPC quer, é lembrado de fazê-los agir e o verificador cobra a passividade', () => {
+    const e = GameEngine.create('teste', 3);
+    e.createLocation({ id: 'sala', name: 'Sala', description: '', layout: EXAMPLE_CLASSROOM });
+    e.createCharacter({ name: 'Rita', role: 'aluna', appearance: '', is_player: true, location_id: 'sala', position: { x: 2, y: 2 } });
+    e.createCharacter({ name: 'Abel', role: 'inspetor', appearance: '', location_id: 'sala', position: { x: 4, y: 2 } });
+    e.updateCharacter({ character_id: 'abel', personality: 'Rígido e cansado.', goals: 'Manter a ordem até o sinal.' });
+    const brief = compileBrief(e, { recentTurns: 0 });
+    // O jeito do NPC guia como ele reage; o do personagem do jogador fica com o jogador.
+    expect(brief).toContain('jeito: "Rígido e cansado."');
+    expect(brief).toContain('quer: "Manter a ordem até o sinal."');
+    expect(SYSTEM_PROMPT).toContain('Cada um reage como ele mesmo');
+    expect(turnMessage(brief, 'Saio correndo da sala.')).toContain('quem ameaçou cumpre se o jogador insistiu');
+    expect(verifierPrompt({ state: brief, changes: [], input: '', narration: '' })).toContain('passividade: o jogador agride alguém, foge');
+    expect(SYSTEM_PROMPT).toContain('não assiste parado a uma agressão');
   });
 
   it('desfaz o turno inteiro quando a API falha no meio', async () => {

@@ -104,7 +104,9 @@ export function performMenuAct(engine: GameEngine, act: MenuAct): MenuOutcome {
         const exit = f ? engine.state.locations[f.locationId]?.exits?.[f.id] : undefined;
         // Porta que já leva a um lugar só: o motor leva; a que não leva a nada ainda, o mestre decide.
         if (!f || !exit || f.exit !== 'door' || exit.to.length !== 1 || !engine.state.locations[exit.to[0]]) {
-          return delegate('para onde a saída leva é com você: crie o destino se preciso e mova com move_character (to.location_id e via)');
+          return delegate(
+            'para onde a saída leva é com você: crie o destino se preciso, com as saídas que ele teria de verdade, e mova com move_character (to.location_id e via)',
+          );
         }
         run('move_character', { character_id: me().id, to: { location_id: exit.to[0] }, via: f.id });
         break;

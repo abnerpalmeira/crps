@@ -2,9 +2,10 @@ import { POSES, bodyPose, handsOf } from './body';
 import { itemPlace } from './reading';
 import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { LEGEND } from './layout';
+import { typeChain } from './objects';
 import { lightAt, lightLabel, lightSources } from './light';
-import { perceives, perceptionOf, strangerLabel, visionOf, type Perception } from './perception';
-import { formatClock, truncate } from './text';
+import { FEELING_LABELS, feelingsHere, perceives, perceptionOf, strangerLabel, visionOf, type Perception } from './perception';
+import { formatClock, signed, truncate } from './text';
 import type { Character, DifficultyName, Location, PerkDef, Visibility } from './types';
 
 const MARKERS = '123456789AEFGHIJKLMNOPQRUVXYZ'.split('');
@@ -43,6 +44,25 @@ function acquaintances(c: Character, present: Character[]): string {
   const known = others.filter((o) => c.knows.includes(o.id));
   if (known.length === others.length) return '; conhece todos aqui';
   return known.length ? `; conhece aqui: ${known.map((o) => o.name.split(' ')[0]).join(', ')}` : '; não conhece ninguém aqui';
+}
+
+/**
+ * O que o NPC sente por quem está aqui, se o jogador percebe (lendo a mente dele) e por quem ainda
+ * falta registrar: toda reação parte do sentimento, então o mestre precisa ver o buraco.
+ */
+function feelingsLine(engine: GameEngine, view: Perception, c: Character, present: Character[]): string {
+  const here = feelingsHere(engine.state, c);
+  const list = here.map(
+    ({ target, feeling }) =>
+      `por ${target.name.split(' ')[0]} ${signed(feeling.degree)} (${FEELING_LABELS[feeling.degree]}${feeling.text ? `: "${truncate(feeling.text, 100)}"` : ''})`,
+  );
+  const feels = list.length ? `; sente${view.canSeeThoughts(c.id) ? ' (o jogador percebe)' : ''}: ${list.join(', ')}` : '';
+  const others = present.filter((o) => o.id !== c.id);
+  const missing = others.filter((o) => !c.feelings[o.id]);
+  if (!missing.length) return feels;
+  if (missing.length === others.length && others.length > 1) return `${feels}; falta sentimento por todos aqui`;
+  const names = missing.slice(0, 4).map((o) => o.name.split(' ')[0]).join(', ');
+  return `${feels}; falta sentimento por: ${names}${missing.length > 4 ? ` e mais ${missing.length - 4}` : ''}`;
 }
 
 function shortId(loc: Location, id: string): string {
@@ -176,6 +196,10 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     const people = present.map((c) => {
       sceneIds.add(c.id);
       const mind = c.thoughts ? `; pensa${view.canSeeThoughts(c.id) ? ' (o jogador percebe)' : ''}: "${truncate(c.thoughts, 160)}"` : '';
+      // O jeito e o que o NPC quer guiam como ele reage em cena (o personagem do jogador, quem decide é o jogador).
+      const manner = !c.isPlayer && c.personality ? `; jeito: "${truncate(c.personality, 140)}"` : '';
+      const wants = !c.isPlayer && c.goals ? `; quer: "${truncate(c.goals, 120)}"` : '';
+      const feels = c.isPlayer ? '' : feelingsLine(engine, view, c, present);
       const conditions = engine.conditionLabels(c);
       const light = c.pos ? lightLabel(lightAt(s, loc.id, c.pos, sources)) : 'claro';
       const sight = c.isPlayer || !s.playerId ? 'nitido' : view.sight(c.id);
@@ -187,9 +211,11 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
         acquaintances(c, present);
       const pose = bodyPose(s, c);
       const aim = c.poseTarget ? ` (${c.poseTarget.includes('/') ? shortId(loc, c.poseTarget) : c.poseTarget})` : '';
+      const seat = c.seatId ? loc.fixtures.find((f) => f.id === c.seatId) : undefined;
+      const onBed = seat ? typeChain(s, seat.kind).some((t) => t.bed) : false;
       const where = c.seatId
-        ? `${pose === 'deitado' ? 'deitado(a)' : 'sentado(a)'} em ${shortId(loc, c.seatId)}`
-        : `${POSES[pose].label}${aim}`;
+        ? `${pose === 'deitado' ? 'deitado(a) em' : onBed ? 'sentado(a) na beirada de' : 'sentado(a) em'} ${shortId(loc, c.seatId)}`
+        : `${pose === 'sentado' ? 'sentado(a) no chão' : POSES[pose].label}${aim}`;
       const hands = handsOf(s, c.id);
       const held = [...new Set([hands.direita, hands.esquerda])].filter((i) => i !== null);
       const holding = held.length ? `; na mão: ${held.map((i) => `${i.name} [${i.id}]`).join(', ')}` : '';
@@ -198,7 +224,7 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       return (
         `- ${markers.get(c.id) ?? '?'} ${c.name} [${c.id}]${c.isPlayer ? ' (VOCÊ, jogador)' : ''}: ${c.role}; ${where} (${c.pos?.x},${c.pos?.y}), olhando ${c.facing}${holding}; ` +
         `${c.detail === 'sketch' ? 'esboço' : 'completo'}; traços: ${c.traits.join(', ') || '—'}${res ? `; ${res}` : ''}` +
-        `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${senses}${mind}`
+        `${perks.length ? `; perks: ${perks.join(', ')}` : ''}${senses}${manner}${mind}${feels}${wants}`
       );
     });
     out.push(`\nPersonagens aqui:\n${people.join('\n') || '(ninguém)'}`);
@@ -243,7 +269,7 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
     const perks = engine.perksOf(p);
     out.push(
       `Perks: ${perks.map((perk) => `${perk.name} (${describePerk(perk)})`).join('; ') || 'nenhum'}. ` +
-        'O jogador só percebe os valores ocultos que os perks mostram e os pensamentos marcados com "(o jogador percebe)"; não revele os outros na narração.',
+        'O jogador só percebe os valores ocultos que os perks mostram e os pensamentos e sentimentos marcados com "(o jogador percebe)"; não revele os outros na narração.',
     );
     if (p.thoughts && p.locationId) {
       const minds = engine.charactersIn(p.locationId).filter((c) => !c.isPlayer && perceives(s, c.id, p.id, 'mente', 0));

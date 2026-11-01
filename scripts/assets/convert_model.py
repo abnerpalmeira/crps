@@ -157,7 +157,7 @@ def main():
     src, pack, kind, outdir, key = sys.argv[sys.argv.index('--') + 1:]
     bpy.ops.wm.read_factory_settings(use_empty=True)
     scene = bpy.context.scene
-    bpy.ops.import_scene.fbx(filepath=os.path.join(ROOT, src))
+    bpy.ops.import_scene.fbx(filepath=os.path.join(ROOT, src), use_image_search=False)
     clean(scene)
     # Câmeras e luzes do arquivo não vão para o jogo; os nós vazios ficam até o móvel ser soltado
     # deles, porque às vezes são eles que levam a escala (o esqueleto do cavalo pendura num vazio).

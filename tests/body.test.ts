@@ -198,7 +198,8 @@ describe('gestos na narração', () => {
     expect(SYSTEM_PROMPT).toContain('maos_ao_alto');
     expect(SYSTEM_PROMPT).toContain('ataca (soco, golpe, tiro ou flecha, pelo que empunha)');
     expect(SYSTEM_PROMPT).toContain('{id:gesto>alvo}');
-    expect(SYSTEM_PROMPT).toContain('levantar é update_character com pose de_pe');
+    expect(SYSTEM_PROMPT).toContain('Levantar é update_character com pose de_pe');
+    expect(SYSTEM_PROMPT).toContain('sentada na beirada com update_character pose sentado depois de ir para ela');
   });
 
   it('o verificador cobra postura, passos e gestos da tabela sem marca', () => {

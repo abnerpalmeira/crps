@@ -1,8 +1,8 @@
 import { actLabel, actionsFor, type ActionOption } from '../engine/actions';
 import { lightAt, lightLabel, lightSources } from '../engine/light';
-import { perceptionOf, strangerLabel } from '../engine/perception';
+import { FEELING_LABELS, feelingsHere, perceptionOf, strangerLabel } from '../engine/perception';
 import { findByName, hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
-import { chebyshev, formatClock, hhmm } from '../engine/text';
+import { chebyshev, formatClock, hhmm, signed } from '../engine/text';
 import type { Character, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 import type { CostEvent } from '../gm/pricing';
@@ -568,6 +568,13 @@ export class Ui {
         const visible = stats.filter((s) => view.canSeeStat(s.id, c.id)).map((s) => s.text);
         if (visible.length && sight === 'nitido') body.append(el('p', 'muted', visible.join(' · ')));
         if (c.thoughts && view.canSeeThoughts(c.id)) body.append(el('p', 'thought', `💭 ${c.thoughts}`));
+        // Quem lê a mente percebe também o que ele sente por quem está ali (o mesmo recorte do resumo do mestre).
+        if (view.canSeeThoughts(c.id)) {
+          for (const { target, feeling } of feelingsHere(world, c)) {
+            const who = target.isPlayer ? 'por você' : withPor(shownAs(world, target));
+            body.append(el('p', 'thought', `Sente ${who}: ${FEELING_LABELS[feeling.degree]}${feeling.text ? ` (${feeling.text})` : ''}`));
+          }
+        }
         // Bastidores: tudo o que o mestre sabe sobre o NPC.
         const box = el('div', 'backstage-only');
         const perks = c.perks.flatMap((id) => world.ruleset.perks.filter((p) => p.id === id).map((p) => p.name));
@@ -575,6 +582,8 @@ export class Ui {
         box.append(el('p', 'hint', `Ficha (bastidores): ${stats.map((s) => s.text).join(' · ')}`));
         if (perks.length) box.append(el('p', 'hint', `Perks (bastidores): ${perks.join(', ')}`));
         if (c.thoughts) box.append(el('p', 'hint', `Pensa (bastidores): ${c.thoughts}`));
+        const feelings = Object.entries(c.feelings).map(([id, f]) => `${world.characters[id]?.name ?? id} ${signed(f.degree)}${f.text ? ` (${f.text})` : ''}`);
+        if (feelings.length) box.append(el('p', 'hint', `Sente (bastidores): ${feelings.join(' · ')}`));
         if (secrets.length) box.append(el('p', 'hint', `Sabe (bastidores): ${secrets.map((f) => f.text).join(' · ')}`));
         body.append(box);
       }
@@ -792,6 +801,12 @@ export class Ui {
     }
     journal.replaceChildren(...parts);
   }
+}
+
+/** "por" junto do artigo de quem vem depois: pelo homem de terno, pela moça, por Ana. */
+function withPor(who: string): string {
+  const m = /^(o|a|os|as) (.+)$/i.exec(who);
+  return m ? `pel${m[1].toLowerCase()} ${m[2]}` : `por ${who}`;
 }
 
 /** Como o jogador chama alguém agora: o nome, se sabe quem é; senão, o que vê dele. */

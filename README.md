@@ -161,6 +161,7 @@ Princípios que o motor impõe:
 | `create_location` | Local a partir de layout ASCII |
 | `create_characters` | Personagens em lote (`seat: "random"` senta em assento livre) |
 | `introduce` | Quem conhece quem: sabe o nome e reconhece o rosto e a voz |
+| `set_feelings` | O que cada NPC sente por alguém: grau de -3 a +3 e o porquê |
 | `create_items` | Itens no inventário, na mão, sobre um móvel ou no chão, com modelo 3D e jeito de empunhar |
 | `random` | Sorteios (intervalo, lista ou dados) |
 | `skill_check` | Teste resolvido pelo motor |
@@ -334,6 +335,33 @@ quem o jogador conhece e como o identifica agora, e o verificador aponta narraç
 nome quem ele não conhece ou não identifica. Saves de antes do grafo carregam com todos se
 conhecendo, como era, e com as vozes da última narração.
 
+### Sentimentos
+
+O que um NPC sente por alguém fica no motor (`Character.feelings`). É um grau de -3 a +3, que
+mede a boa vontade com a pessoa (aversão, hostilidade, antipatia, indiferença, simpatia, afeição,
+devoção), e o porquê numa frase ("às vezes o confunde com o filho que perdeu"). O mestre registra
+com `set_feelings` na criação do mundo o que cada NPC sente por quem conhece de perto (num grupo
+grande, só as relações que se destacam). No jogo, registra quando um acontecimento muda isso, em
+quem sofreu e em quem viu. O personagem do jogador não tem sentimentos registrados: o que ele
+sente, quem diz é o jogador.
+
+É a base da reação dos NPCs em qualquer cenário. Quem assiste a uma agressão reage pelo que sente
+por quem agiu e por quem sofreu, e a personalidade diz como. O resumo aponta por quem cada NPC
+ainda não tem sentimento ("falta sentimento por: Lúcia, Caio", ou "por todos aqui"), e o mestre
+decide e registra antes de narrar; indiferença (grau 0) conta como registro. Estados como medo ou
+sanidade não são do motor: só pesam quando as regras da campanha os medem.
+
+O resumo do turno mostra, para cada NPC em cena, o que ele sente por quem está ali, ao lado do
+jeito, do que pensa e do que quer; o resto fica na ficha (`inspect`). Como os pensamentos, só o
+mestre vê. O jogador percebe quando lê a mente do NPC, e então o clique também mostra.
+
+Pedir, convencer, acalmar, seduzir ou enganar alguém vai em `skill_check` com `goodwill: true`,
+e o motor soma o grau do que o alvo sente por quem tenta. O chip só mostra essa parcela a quem lê
+a mente do alvo. O verificador aponta a narração em que o sentimento de alguém muda sem registro,
+em que um NPC trata alguém ao contrário do que sente, sem motivo, ou em que um NPC reage a quem
+agiu ou a quem sofreu enquanto o resumo ainda marca que falta sentimento por essa pessoa. Nesse
+último caso, a correção registra o que falta e a história pode ficar como estava.
+
 ### Modelos 3D (Synty)
 
 O palco usa modelos low-poly da Synty (pacotes POLYGON e de animação) quando eles estão
@@ -409,6 +437,16 @@ tudo no repertório.
   modelo ganham o mesmo palpite só no visual (`/api/models/guess`). O pacote de rascunho da Synty
   (`prototype`: blocos laranja, bilhetes de 50 cm escritos BUG e WIP) só entra no palpite quando
   nenhum outro pacote tem algo parecido; na busca do mestre, aparece como os outros.
+- **O que cabe na mão:** o `scripts/assets/measure_synty.py` mede objetos, armas e acessórios no
+  Blender (largura, altura e profundidade em metros), e o `index_synty.py` junta as medidas ao
+  repertório (`size`). Item é o que se carrega: nada passa de 1,6 m (2,6 m numa arma, como uma
+  lança), e só uma medida passa de 0,9 m (uma vassoura, um remo). Sem medida, decide o prefixo da
+  Synty: peça de cenário, construção e veículo não se carregam. O palpite de modelo de um item só
+  escolhe o que cabe na mão, o motor recusa um modelo grande demais que o mestre informe, e
+  `search_models` mostra o tamanho e marca o que "não cabe na mão". No 3D, um item de campanha
+  antiga com modelo grande demais (uma bacia de pedra de 1,4 m na mão da criada) fica com a
+  primitiva. Os scripts importam os FBX sem a busca de texturas do Blender, que varria pastas do
+  usuário atrás da imagem que faltava.
 - **Dois corpos não ocupam o mesmo lugar:** cada item no chão ou num móvel procura o ponto livre
   mais perto do seu no tampo do modelo ([src/client/arrange.ts](src/client/arrange.ts)), desviando
   de quem está ali (deitado na cama de ponta a ponta, sentado no assento, de pé no tile) e dos
@@ -431,7 +469,9 @@ O corpo de cada personagem no 3D segue o motor, em três camadas descritas como 
   cruzados, encostado, ao telefone, bêbado, em guarda, mirando… O mestre muda com
   `update_character` (`pose`, e `pose_target` para mirar ou apontar para alguém ou algo, em
   qualquer ângulo). Andar desfaz a pose. Sentar e deitar vêm do assento e da cama, e quem fica
-  com a vida em 0 cai sozinho (o 3D toca a queda). Pose que não se faz sentado (de pé,
+  com a vida em 0 cai sozinho (o 3D toca a queda). Na cama, a pose `sentado` senta a pessoa na
+  beirada, virada para o lado livre do quarto; sem assento, `sentado` é no chão, e o resumo do
+  turno diz qual dos dois. Pose que não se faz sentado (de pé,
   ajoelhado, em guarda) levanta quem está num assento ou na cama para o lado do móvel; as que
   se fazem sentado (pensativo, ao telefone, de braços cruzados) o deixam lá. O retrato do turno
   guarda a pose, então o replay mostra o corpo como estava.
@@ -487,7 +527,9 @@ Se o layout tiver erro (caractere desconhecido, chão encostando no exterior, re
 desconectadas, móvel sem corredor), a tool devolve os erros com coordenadas e o modelo
 corrige. Objeto comprido num espaço menor que o tamanho típico também é erro: uma cama de um
 tile só (`b`) viraria miniatura no 3D, e a mensagem diz o desenho certo (`bb`, ou `b` em duas
-linhas). O mesmo vale para o carro (2×4) e a cápsula (2×3).
+linhas). O mesmo vale para o carro (2×4) e a cápsula (2×3). Um local comprido e estreito como um
+corredor com uma saída só passa, com um aviso para o mestre conferir se o lugar tem mesmo uma
+saída só: ele desenha as saídas que o lugar teria de verdade, e um beco coerente fica como está.
 
 ### Objetos como dado
 
@@ -510,6 +552,29 @@ tipo novo herda do parecido (`like`) o que não for informado, inclusive o visua
 campanha (`WorldState.objectTypes`) para os outros locais. No 3D, o tipo usa os modelos do
 catálogo (`fixtures` em `synty.json`, com variantes escolhidas pelo id do objeto). Sem modelo, ele
 usa os do tipo parecido e, por fim, uma primitiva com a cor e a altura do tipo.
+
+### Épocas
+
+A campanha tem uma época (`WorldState.era`), que o mestre informa em `define_ruleset` a partir da
+premissa e muda com `extend_ruleset` quando a história vai para outra (uma viagem no tempo). São
+seis, em ordem: `antiguidade`, `medieval` (inclui a fantasia medieval, vikings e samurais),
+`colonial` (navegações e piratas), `seculo_xix` (faroeste e era vitoriana), `atual` e `futuro`. Cada
+local guarda a época que tinha ao ser criado, ou outra, se `create_location` informar `era`. Saves
+de antes delas ficam sem época e com o visual de hoje, como eram.
+
+A época decide o visual no 3D (`src/engine/eras.ts`):
+- **Pacotes:** cada pacote do catálogo tem a sua; natureza, bichos e peças genéricas servem em
+  qualquer uma.
+- **Móveis:** uma tabela escolhida olhando as miniaturas dá o modelo de cada tipo por época (a cama
+  medieval é de madeira, a do século XIX é de ferro). O modelo que o mestre deu a um tipo vale mais;
+  sem modelo da época, fica o da biblioteca, e `create_location` avisa quando ele destoa (uma
+  televisão num castelo).
+- **Itens:** o modelo escolhido pelo nome prefere a época do lugar onde o item está; um de época
+  vizinha vale um pouco menos, e um distante, bem menos. `search_models` ordena do mesmo jeito.
+- **Personagens:** o mestre recebe a lista de visuais da época. Na criação do mundo, ela vem no
+  resultado de `define_ruleset`; depois, no prompt. A época atual usa os visuais que vêm com o
+  jogo, e as outras usam os do catálogo, alternando pacotes e corpos. Um visual de outra época
+  vale, porque pode ser um viajante do tempo, mas o motor avisa.
 
 ### Saídas e andares
 

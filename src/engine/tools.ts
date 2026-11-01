@@ -1,14 +1,15 @@
 import { z } from 'zod';
 import { GRIP_IDS, POSES, POSE_IDS } from './body';
-import { modelCatalog } from './catalog';
+import { eraLooks, modelCatalog, portable, sizeLabel } from './catalog';
 import { EngineError, VISIBILITY_LABEL, type GameEngine } from './engine';
+import { ERAS, ERA_IDS } from './eras';
 import { legendSummary } from './layout';
 import { librarySummary } from './objects';
 import { TEMPLATES } from './templates';
 import { lightLabel } from './light';
-import { knowsName, perceptionOf, strangerLabel } from './perception';
-import { truncate } from './text';
-import type { Fact, Grip, ItemHolder } from './types';
+import { FEELING_LABELS, knowsName, perceptionOf, strangerLabel } from './perception';
+import { signed, truncate } from './text';
+import type { Era, Fact, Grip, ItemHolder } from './types';
 
 /**
  * A API que o modelo enxerga. Cada tool valida a entrada com zod, chama o
@@ -24,6 +25,15 @@ interface ToolDef<S extends z.ZodType = z.ZodType> {
 
 function tool<S extends z.ZodType>(def: ToolDef<S>): ToolDef<S> {
   return def;
+}
+
+const era = z
+  .enum(ERA_IDS)
+  .describe(`Época, que decide o visual de móveis, objetos e roupas no 3D: ${ERAS.map((e) => `${e.id} (${e.label})`).join('; ')}.`);
+
+/** Os visuais de gente da época, para o mestre escolher o look de quem criar. */
+function looksFor(value: Era | undefined): string[] {
+  return eraLooks(value).map((l) => `${l.id} (${l.figure}): ${l.look}`);
 }
 
 /** Fatos que o personagem do jogador não conhece aparecem só nos bastidores (🤫). */
@@ -270,12 +280,15 @@ export const TOOLS = [
         .optional()
         .describe('Padrão para 2d6: fácil 7, normal 9, difícil 11, muito difícil 13.'),
       notes: z.string().optional(),
+      era: era.optional().describe(`${era.description} Informe sempre: é a época da premissa.`),
     }),
     mutates: true,
     run(engine, input) {
       const r = engine.defineRuleset(input);
       const shown = r.attributes.filter((a) => a.visibility !== 'hidden').map((a) => a.name);
-      return { content: r, summary: `📜 Regras: ${r.name} (${shown.join(', ')})` };
+      // A lista de visuais da época chega aqui, antes de criar os personagens.
+      const looks = input.era ? looksFor(input.era) : [];
+      return { content: { ...r, ...(looks.length ? { looks } : {}) }, summary: `📜 Regras: ${r.name} (${shown.join(', ')})` };
     },
   }),
 
@@ -315,11 +328,16 @@ export const TOOLS = [
           blind_penalty: z.number().int().optional().describe('Penalidade contra alvo que não se vê (padrão 3).'),
         })
         .optional(),
+      era: era.optional().describe('Nova época da campanha, quando a história vai para outra (viagem no tempo): vale para os lugares e itens novos.'),
       reason: z.string(),
     }),
     mutates: true,
     run(engine, input) {
       const r = engine.extendRuleset(input);
+      if (r.added.some((a) => a.kind === 'época')) {
+        const looks = looksFor(engine.state.era);
+        return { content: { ...r, ...(looks.length ? { looks } : {}) }, summary: `📜 Regras ampliadas: época ${engine.state.era}` };
+      }
       const label = (a: (typeof r.added)[number]) =>
         a.kind === 'visibilidade' ? `${a.name} agora ${VISIBILITY_LABEL[a.visibility!]}` : `${a.kind} ${a.name}`;
       // Perks e condições do catálogo e regras ocultas não aparecem para o jogador.
@@ -345,13 +363,19 @@ export const TOOLS = [
       limit: z.number().int().min(1).max(20).optional().describe('Quantos devolver (padrão 8).'),
     }),
     mutates: false,
-    run(_engine, input) {
+    run(engine, input) {
       const catalog = modelCatalog();
       if (!catalog) {
         return { content: 'Catálogo de modelos indisponível: use os tipos da biblioteca e a lista de visuais.', summary: '🔍 Catálogo 3D indisponível' };
       }
-      const found = catalog.search(input.query, input);
-      const lines = found.map((i) => `${i.id}: ${i.desc ?? ''}${i.look ? ` · ${i.figure}: ${i.look}` : ''} (${i.category})`);
+      // Os da época da campanha (e os atemporais) vêm antes.
+      const found = catalog.search(input.query, { ...input, era: engine.state.era });
+      // O tamanho ajuda a escolher, e o que não cabe na mão não serve de item.
+      const lines = found.map(
+        (i) =>
+          `${i.id}: ${i.desc ?? ''}${i.look ? ` · ${i.figure}: ${i.look}` : ''} (${i.category}${i.size ? `, ${sizeLabel(i.size)}` : ''}` +
+          `${['objeto', 'arma', 'acessorio'].includes(i.category) && !portable(i) ? ', não cabe na mão' : ''})`,
+      );
       return { content: lines.length ? lines : 'Nada parecido; tente outras palavras.', summary: `🔍 Modelos: ${input.query} (${found.length})` };
     },
   }),
@@ -381,6 +405,7 @@ export const TOOLS = [
         .optional()
         .describe(`Layout pronto, em vez de desenhar: ${Object.entries(TEMPLATES).map(([k, v]) => `${k} (${v})`).join('; ')}.`),
       floor: z.enum(['wood', 'tile', 'stone', 'carpet', 'grass', 'dirt']).optional(),
+      era: era.optional().describe('Só se este lugar for de outra época que a campanha (viagem no tempo); sem ela, a da campanha.'),
       outdoor: z.boolean().optional().describe('true para áreas abertas (pátio, rua, floresta): dispensa paredes no perímetro.'),
       light: z.number().optional().describe('Luz ambiente de 0 a 1: 1 dia claro ou luzes acesas (padrão), 0.5 penumbra, 0.1 noite, 0 breu.'),
       exits: z.array(exitInput).optional().describe('Nome e destino das saídas (porta, elevador, escada); sem destino, ele é ligado na primeira passagem.'),
@@ -429,8 +454,9 @@ export const TOOLS = [
         }
       });
       if (!created.length) throw new EngineError(`Nenhum personagem criado: ${JSON.stringify(errors)}`);
+      const notes = created.map((c) => engine.lookEraNote(engine.state.characters[c.id])).filter(Boolean);
       return {
-        content: { created, errors },
+        content: { created, errors, ...(notes.length ? { notes } : {}) },
         summary: `🧑 ${created.length} personagem(ns)${errors.length ? `, ${errors.length} com erro` : ''}: ${created
           .map((c) => shownName(engine, c.id))
           .slice(0, 6)
@@ -469,6 +495,39 @@ export const TOOLS = [
   }),
 
   tool({
+    name: 'set_feelings',
+    description:
+      'Registra o que um NPC sente por alguém: o grau, de -3 a +3, mede a boa vontade com a pessoa (-3 aversão, -2 hostilidade, ' +
+      '-1 antipatia, 0 indiferença, 1 simpatia, 2 afeição, 3 devoção), e text diz o que ele sente e por quê numa frase, onde cabem ' +
+      'medo, desprezo, confiança ou ciúme (o que ele vai fazer fica em thoughts). Na criação do mundo, registre o que cada NPC sente ' +
+      'por quem conhece de perto, inclusive pelo personagem do jogador (num grupo grande, só as relações que se destacam); no jogo, ' +
+      'quando um acontecimento muda isso (um tapa, um favor, uma traição, um gesto de carinho), em quem sofreu e em quem viu, um ou ' +
+      'dois pontos por vez, pelo jeito da pessoa. Como os pensamentos, só você vê. Grau 0 com text vazio apaga.',
+    schema: z.object({
+      feelings: z
+        .array(
+          z.object({
+            who: z.string().describe('O NPC que sente (id ou nome).'),
+            toward: z.string().describe('Por quem (id ou nome).'),
+            degree: z.number().int().min(-3).max(3),
+            text: z.string().describe('O que sente e por quê, numa frase: "às vezes o confunde com o filho que perdeu".'),
+          }),
+        )
+        .min(1)
+        .max(40),
+    }),
+    mutates: true,
+    run(engine, input) {
+      const r = engine.setFeelings(input.feelings);
+      const name = (id: string) => engine.state.characters[id].name.split(' ')[0];
+      const list = r.changed.map(
+        (x) => `${name(x.who)} → ${name(x.toward)} ${signed(x.degree)}${x.before !== null && x.before !== x.degree ? ` (era ${signed(x.before)})` : ''}`,
+      );
+      return { content: r, summary: `🤫 Sentimentos: ${list.join(', ')}` };
+    },
+  }),
+
+  tool({
     name: 'create_items',
     description:
       'Cria itens em lote: no inventário de alguém, na mão (holder com hand), sobre um móvel ou no chão. Todo objeto que importe ' +
@@ -485,7 +544,7 @@ export const TOOLS = [
       // Modelo que o motor escolheu (o mestre não informou): diz qual foi e o que mais serviria.
       const picked = (i: (typeof created)[number], k: number) => {
         if (input.items[k].model || !i.model || !catalog) return {};
-        const options = catalog.suggest(i.name, i.description, 4);
+        const options = catalog.suggest(i.name, i.description, 4, engine.eraAt(i.holder));
         return {
           model: `${i.model} (${catalog.get(i.model)?.desc ?? ''}), escolhido pelo nome`,
           other_models: options.slice(1).map((m) => `${m.id} (${m.desc ?? ''})`),
@@ -536,7 +595,8 @@ export const TOOLS = [
       'Resolve uma ação incerta com consequências. O motor rola os dados e decide sucesso ou falha; narre de acordo com o ' +
       'resultado, nunca o contradiga. Use quando o resultado não for óbvio; ações triviais não precisam de teste. Ação com ' +
       'alvo (empurrar, atacar, tocar, arremessar, examinar de perto): informe target_id e reach; o motor recusa se o alvo ' +
-      'estiver longe demais e penaliza sozinho quem age contra um alvo que não vê bem (escuro, cegueira).',
+      'estiver longe demais e penaliza sozinho quem age contra um alvo que não vê bem (escuro, cegueira). Pedir, convencer, ' +
+      'acalmar, seduzir ou enganar alguém vai com goodwill: o motor soma o que o alvo sente por quem tenta.',
     schema: z.object({
       character_id: z.string(),
       attribute: z.string().describe('Id ou nome de um atributo do ruleset.'),
@@ -550,18 +610,25 @@ export const TOOLS = [
         .optional()
         .describe('Alcance da ação com alvo: chave de reaches (toque, corpo_a_corpo, arremesso, visao…) ou tiles. Padrão: visao.'),
       needs_sight: z.boolean().optional().describe('false para ações com alvo que não dependem de ver (telepatia). Padrão true.'),
+      goodwill: z
+        .boolean()
+        .optional()
+        .describe('true quando o resultado depende da boa vontade do alvo: soma o grau do que ele sente por quem tenta (-3 a +3). Intimidar e forçar não contam.'),
     }),
     mutates: true,
     run(engine, input) {
       const r = engine.skillCheck(input);
+      const view = perceptionOf(engine.state, engine.state.playerId);
       const label = `🎲 ${shownName(engine, r.character_id)} · ${r.attribute.name}${r.skill ? ` + ${r.skill.id}` : ''} (${r.reason})`;
-      // Atributo que o jogador não vê (de um NPC, ou oculto): só os dados e o resultado.
-      if (!perceptionOf(engine.state, engine.state.playerId).canSeeStat(r.attribute.id, r.character_id)) {
+      // Atributo que o jogador não vê (de um NPC, ou oculto), ou o que o alvo sente sem que ele perceba: só os dados e o resultado.
+      const feeling = r.feeling_bonus && r.against ? { id: r.against.id, bonus: r.feeling_bonus } : null;
+      if (!view.canSeeStat(r.attribute.id, r.character_id) || (feeling && !view.canSeeThoughts(feeling.id))) {
         return { content: r, summary: `${label}: ${r.rolls.join('+')} → ${r.degree}` };
       }
       const parts = [r.attribute.value, r.skill?.value ?? 0, r.modifier].filter((v) => v !== 0).map((v) => (v > 0 ? ` +${v}` : ` ${v}`));
       if (r.perk_bonus) parts.push(` ${r.perk_bonus > 0 ? '+' : ''}${r.perk_bonus} (${r.perks.join(', ')})`);
       if (r.sight_penalty) parts.push(` -${r.sight_penalty} (${r.against?.sight === 'nada' ? 'sem ver o alvo' : 'alvo num vulto'})`);
+      if (feeling) parts.push(` ${signed(feeling.bonus)} (${FEELING_LABELS[feeling.bonus]} de ${shownName(engine, feeling.id, true)})`);
       return { content: r, summary: `${label}: ${r.rolls.join('+')}${parts.join('')} = ${r.total} vs ${r.target} → ${r.degree}` };
     },
   }),
@@ -640,7 +707,8 @@ export const TOOLS = [
       for (const id of r.attributes) (view.canSeeStat(id, c.id) ? shown : hidden).push(id);
       for (const x of r.resources) (view.canSeeStat(x.id, c.id) ? shown : hidden).push(`${x.id} ${x.before}→${x.after}/${x.max}`);
       const summary = shown.length ? `✏️ ${shownName(engine, c.id)}: ${shown.join(', ')}` : `🤫 ${c.name}: ${hidden.join(', ') || 'sem mudanças'}`;
-      return { content: r, summary };
+      const note = r.changed.includes('look') ? engine.lookEraNote(c) : null;
+      return { content: note ? { ...r, note } : r, summary };
     },
   }),
 

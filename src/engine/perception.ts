@@ -1,7 +1,7 @@
 import { conditionDefsOf, grantsOf, perkDefsOf } from './effects';
 import { lightAt, type LightSource } from './light';
 import { chebyshev } from './text';
-import type { Character, Figure, PerkDef, PerkGrant, Pos, SpeechMode, VisionRules, WorldState } from './types';
+import type { Character, Feeling, Figure, PerkDef, PerkGrant, Pos, SpeechMode, VisionRules, WorldState } from './types';
 
 /** Quanto alguém enxerga de algo: nítido, só um vulto, ou nada. */
 export type Sight = 'nitido' | 'vulto' | 'nada';
@@ -50,6 +50,29 @@ export function recognitionOf(world: WorldState, viewerId: string, targetId: str
   const viewer = world.characters[viewerId];
   const at = viewer?.voices?.[targetId];
   return at && at === viewer.locationId && at === world.characters[targetId]?.locationId ? 'voz' : null;
+}
+
+/** O grau de um sentimento em palavras: a boa vontade com a pessoa, de -3 a +3. */
+export const FEELING_LABELS: Record<number, string> = {
+  [-3]: 'aversão',
+  [-2]: 'hostilidade',
+  [-1]: 'antipatia',
+  0: 'indiferença',
+  1: 'simpatia',
+  2: 'afeição',
+  3: 'devoção',
+};
+
+/**
+ * O que alguém sente por quem está no mesmo local que ele. É o recorte que o resumo do mestre
+ * mostra e o que percebe quem lê a mente dele.
+ */
+export function feelingsHere(world: WorldState, c: Character): { target: Character; feeling: Feeling }[] {
+  if (!c.locationId) return [];
+  return Object.entries(c.feelings ?? {}).flatMap(([id, feeling]) => {
+    const target = world.characters[id];
+    return target && target.locationId === c.locationId ? [{ target, feeling }] : [];
+  });
 }
 
 /** Id do recurso universal de vida (o mestre pode tê-lo chamado de "hp", por exemplo). */

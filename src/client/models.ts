@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import type { Character, Figure, Fixture, Grip, Item, ObjectType } from '../engine/types';
+import { portableSize } from '../engine/catalog';
+import { eraFixtureModel } from '../engine/eras';
+import type { Character, Era, Figure, Fixture, Grip, Item, ObjectType } from '../engine/types';
 import type { Rect } from './arrange';
 
 /**
@@ -251,9 +253,15 @@ export interface FixtureModel {
   area: Rect;
 }
 
-export async function fixtureModel(f: Fixture, chain: ObjectType[]): Promise<FixtureModel | null> {
-  const chosen = chain.find((t) => t.model)?.model;
-  const picked = chosen ? await catalogFixture(f, chain, chosen) : null;
+/**
+ * O modelo de um móvel: o que o mestre deu ao tipo; senão o da época do lugar (eras.ts); senão o
+ * da biblioteca (public/models). null = fica a primitiva.
+ */
+export async function fixtureModel(f: Fixture, chain: ObjectType[], era?: Era): Promise<FixtureModel | null> {
+  const own = chain.find((t) => t.model)?.model;
+  const chosen = own ?? eraFixtureModel(chain, era);
+  // O da época faz o papel de um móvel da biblioteca: cabe no espaço dele, mesmo sendo construção.
+  const picked = chosen ? await catalogFixture(f, chain, chosen, !own) : null;
   if (picked) return picked;
   const kinds = chain.length ? chain.map((t) => t.id) : [f.kind];
   const cat = await loadCatalog();
@@ -306,7 +314,7 @@ export async function fixtureModel(f: Fixture, chain: ObjectType[]): Promise<Fix
  * bem menor que o espaço cresce até ocupá-lo: os pacotes "simple" vêm em miniatura (o cavalo tem
  * 43 cm).
  */
-async function catalogFixture(f: Fixture, chain: ObjectType[], id: string): Promise<FixtureModel | null> {
+async function catalogFixture(f: Fixture, chain: ObjectType[], id: string, fit = false): Promise<FixtureModel | null> {
   const meta = await modelMeta(id);
   if (!meta || meta.kind !== 'prop') return null;
   const obj = (await source(FILES + meta.file)).clone();
@@ -315,7 +323,7 @@ async function catalogFixture(f: Fixture, chain: ObjectType[], id: string): Prom
   // O lado comprido do modelo vai no lado comprido do espaço (o cavalo deitado num 2×1).
   const turned = room.w !== room.d && room.w > room.d !== meta.size[0] > meta.size[2];
   const [w, h, d] = turned ? [meta.size[2], meta.size[1], meta.size[0]] : meta.size;
-  const free = meta.category === 'ambiente' || meta.category === 'construcao';
+  const free = !fit && (meta.category === 'ambiente' || meta.category === 'construcao');
   const fill = Math.min((room.w * 0.98) / w, (room.d * 0.98) / d);
   const scale = free ? Math.min(1, 12 / h) : meta.category === 'animal' && fill > 1.5 ? fill : Math.min(1, fill);
   obj.scale.setScalar(scale);
@@ -324,7 +332,11 @@ async function catalogFixture(f: Fixture, chain: ObjectType[], id: string): Prom
   group.position.z = room.shift;
   group.add(obj);
   const [sw, sd] = [w * scale, d * scale];
-  return { group, top: h * scale, span: sw, area: { x0: -sw / 2, z0: room.shift - sd / 2, x1: sw / 2, z1: room.shift + sd / 2 } };
+  // Assento e cama: senta-se e deita-se na altura do tipo; o encosto, a cabeceira e o dossel passam
+  // do topo, e quem deita no topo do modelo flutua acima do colchão.
+  const rest = chain.some((t) => t.seat || t.bed) ? chain.map((t) => t.surface).find((v) => v !== undefined) : undefined;
+  const top = Math.min(h * scale, rest ?? Infinity);
+  return { group, top, span: sw, area: { x0: -sw / 2, z0: room.shift - sd / 2, x1: sw / 2, z1: room.shift + sd / 2 } };
 }
 
 const FEMN = /\b(aluna|professora|diretora|menina|garota|filha|m[ãa]e|senhora|esposa|enfermeira|m[ée]dica|secret[áa]ria|cozinheira|dona|mulher|moça|moca|jovem mulher|ela)\b/;
@@ -492,7 +504,8 @@ function heldPrimitive(grip: Grip): ItemModel {
 export async function heldModel(item: Item, grip: Grip): Promise<ItemModel> {
   const id = await itemModelId(item);
   const meta = id ? await modelMeta(id, true) : null;
-  if (!meta || meta.kind !== 'held' || !meta.bbox) return heldPrimitive(grip);
+  // Modelo que não cabe na mão (escolhido antes da regra, em campanhas antigas): fica a primitiva.
+  if (!meta || meta.kind !== 'held' || !meta.bbox || !portableSize(meta.size, meta.category)) return heldPrimitive(grip);
   const model = (await source(FILES + meta.file)).clone();
   paintCatalog(model, meta);
   const [lo, hi] = meta.bbox.map((v) => new THREE.Vector3(...v));
@@ -553,7 +566,7 @@ export async function heldModel(item: Item, grip: Grip): Promise<ItemModel> {
 export async function groundModel(item: Item): Promise<THREE.Object3D | null> {
   const id = await itemModelId(item);
   const meta = id ? await modelMeta(id) : null;
-  if (!meta || meta.kind !== 'prop') return null;
+  if (!meta || meta.kind !== 'prop' || !portableSize(meta.size, meta.category)) return null;
   const model = (await source(FILES + meta.file)).clone();
   paintCatalog(model, meta);
   const [w, h, d] = meta.size;

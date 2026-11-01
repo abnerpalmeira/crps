@@ -60,6 +60,8 @@ describe('corpo do personagem no 3D', () => {
     expect(prompt.startsWith(SYSTEM_PROMPT)).toBe(true);
     expect(prompt).toContain('# Visual dos personagens');
     expect(prompt).toContain('- mother_2 (adulta): mulher de cabelo castanho preso, vestido roxo sem mangas com listras amarelas');
-    expect(systemPrompt([])).toBe(SYSTEM_PROMPT);
+    // Sem catálogo, sem a seção; na criação do mundo, a lista da época chega com define_ruleset.
+    expect(systemPrompt(null)).toBe(SYSTEM_PROMPT);
+    expect(systemPrompt([])).toContain('A lista dos visuais da época chega no resultado de define_ruleset.');
   });
 });

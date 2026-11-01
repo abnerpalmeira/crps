@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { WorkloadIdentityError } from '@anthropic-ai/sdk/lib/credentials/types';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ModelCatalog, setModelCatalog, type RepertoireItem } from '../engine/catalog';
+import { ModelCatalog, eraLooks, modelCatalog, setBaseLooks, setModelCatalog, type RepertoireItem } from '../engine/catalog';
 import { GameEngine } from '../engine/engine';
 import { ClaudeProvider, DEFAULT_MODEL } from './claude';
 import { GameMaster } from './gm';
@@ -41,7 +41,7 @@ export function loadModelCatalog(path = join('assets', 'synty', 'repertorio.json
   }
 }
 
-/** Visuais do catálogo 3D convertido (public/models), se houver, para o mestre escolher. */
+/** Visuais de hoje que vêm convertidos com o jogo (public/models), se houver, para o mestre escolher. */
 export function lookOptions(path = join('public', 'models', 'catalog.json')): LookOption[] {
   try {
     const catalog = JSON.parse(readFileSync(path, 'utf8')) as { characters?: Record<string, { figure: string; look?: string }> };
@@ -54,6 +54,11 @@ export function lookOptions(path = join('public', 'models', 'catalog.json')): Lo
 /** Mestre com o modelo escolhido na interface, o de CRPS_MODEL ou o padrão, nessa ordem. */
 export function createGameMaster(opts: { model?: string } = {}): GameMaster {
   const model = opts.model || process.env.CRPS_MODEL || DEFAULT_MODEL;
+  // Visuais: os de hoje que vêm com o jogo e os do catálogo para as outras épocas. Sem nenhum
+  // (a demo offline, uma máquina sem os modelos), o prompt fica sem a seção.
+  const base = isOffline() ? [] : lookOptions();
+  setBaseLooks(base);
+  const looks = base.length > 0 || (!isOffline() && modelCatalog() !== null);
   return new GameMaster({
     provider: isOffline()
       ? new OfflineProvider()
@@ -61,7 +66,7 @@ export function createGameMaster(opts: { model?: string } = {}): GameMaster {
     effortSetup: effortFromEnv('CRPS_EFFORT_SETUP', 'medium'),
     effortTurn: effortFromEnv('CRPS_EFFORT_TURN', 'low'),
     verify: process.env.CRPS_VERIFY !== '0',
-    system: systemPrompt(isOffline() ? [] : lookOptions()),
+    system: (world, setup) => systemPrompt(!looks ? null : setup ? [] : eraLooks(world.era)),
   });
 }
 

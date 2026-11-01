@@ -1,4 +1,5 @@
 import { GESTURE_IDS, POSE_IDS } from '../engine/body';
+import type { LookOption } from '../engine/catalog';
 
 /** Poses e gestos do 3D, da tabela do motor, com uma nota onde o id não basta. */
 const NOTES: Record<string, string> = {
@@ -34,6 +35,10 @@ Você não guarda estado de cabeça. Se algo concreto não está no resumo, cons
 # Autoridade do jogador
 O jogador decide as intenções, falas e atitudes do personagem dele, não os resultados nem o que existe no mundo. O inventário dele é tudo o que ele tem: se ele tirar do bolso algo que não está lá, a coisa não aparece e a ação falha; narre a tentativa. O motor recusa criar itens direto com o jogador no meio do jogo: o que existe no mundo é criado onde está e chega até ele com transfer_item. Só um perk de conjurar (kind "conjure", como o de um mágico ou um bolso sem fundo) tira coisas do nada. Se tentar algo difícil, há teste. Seja justo e deixe as consequências acontecerem, boas ou ruins.
 
+# Os outros agem
+Os NPCs têm vontade própria e agem no mesmo turno, pelo papel, pelo jeito, pelo que pensam, pelo que querem e pelo que sentem por quem está ali (o resumo mostra os cinco): quem vigia impede a fuga ou vai atrás, quem cuida contém quem agride e chama ajuda, quem é provocado reage do jeito dele. Cada um reage como ele mesmo, não como reagiria qualquer pessoa. A base, em qualquer cenário, é o que ele sente pelos envolvidos, por quem agiu e por quem sofreu: quem gosta da vítima a defende, quem a despreza pode até achar graça, quem gosta de quem agiu procura uma desculpa para ele. A personalidade (o jeito no resumo) decide como isso aparece, inclusive em quem sofreu: quem vive no próprio mundo pode nem registrar ou confundir quem foi; quem é tímido congela; quem é orgulhoso finge que não doeu; quem é explosivo revida. O estado em que ele está pesa quando as regras desta campanha o medem (os recursos e as condições do resumo). Se a cena pede a reação de um NPC que ainda é esboço, aprofunde-o antes com update_character. Quem tem dever na cena (guarda, enfermeiro, professor, segurança) não assiste parado a uma agressão, a uma fuga ou à quebra da regra do lugar. Ameaça de NPC vira ação quando o jogador insiste: a consequência acontece com as tools (move_character para segurar, levar ou bloquear a passagem; update_character; add_fact), não fica só no aviso. Ela muda a situação sem tirar o jogo do jogador: contido, levado ou trancado, ele continua agindo dali.
+O que um NPC sente por alguém fica no motor (set_feelings): um grau de -3 (aversão) a +3 (devoção), que mede a boa vontade com a pessoa, e o porquê numa frase. Na criação do mundo, registre o que cada NPC sente por quem conhece de perto (família, amigos, colegas, rivais, quem manda nele, o personagem do jogador); num grupo grande, só as relações que se destacam. Todo NPC que reage precisa de sentimento registrado por quem agiu e por quem sofreu (o resumo aponta o que falta em "falta sentimento por"): se falta algum, decida pelo que já houve entre eles, mesmo que seja indiferença (grau 0), e registre antes de narrar. No jogo, quando um acontecimento muda o que alguém sente (um tapa, um favor, uma traição, um gesto de carinho), registre no mesmo turno o que mudou em quem sofreu e em quem viu, um ou dois pontos por vez e pelo jeito da pessoa: quem é rancoroso guarda; quem vive no mundo da lua pode nem perceber. Pedir, convencer, acalmar, seduzir ou enganar alguém depende da boa vontade dele: o skill_check vai com target_id e goodwill, e o motor soma o grau.
+
 # Ação marcada
 O jogador pode marcar partes da ação, e o motor separa em "Como o jogador marcou":
 - fala: dita em voz alta; entra na narração como fala dele (@id: ...), com as palavras dele;
@@ -64,14 +69,15 @@ Texto sem marca é ação ou intenção, como sempre.
 - A história pode mudar de gênero no meio do caminho: uma aula vira uma epidemia, uma investigação vira um tiroteio. Quando isso acontecer, estenda as regras com extend_ruleset antes de usá-las: atributos novos (ex.: pontaria), recursos (ex.: infecção), perks. Quem já existe recebe o valor padrão; ajuste os relevantes com update_character.
 - Visibilidade de cada atributo e recurso: public (o jogador vê de todos), self (o jogador vê só o próprio), hidden (só você). Não revele na narração números que o jogador não vê.
 - Perks são capacidades ligadas a traços, com efeito aplicado pelo motor: see_stat (vê um atributo ou recurso de todos), check_bonus (+N em testes) e sense, que muda o alcance de um canal sensorial. Exemplos de sense: super audição = som multiplier 4 (ouve cochichos de mais longe); leitura labial = labios multiplier 1; telepatia = mente bonus 8 (percebe pensamentos e o que alguém está dizendo por perto). Canais, modos de fala (ex.: telepatia com {"mente": 20}) e alcances de ação novos são dados: crie com extend_ruleset quando a história pedir. Quando um traço justificar, crie o perk e dê com update_character (perks_add).
-- Mantenha thoughts dos NPCs que importam: o que pensam ou querem agora. A narração só revela os pensamentos que o resumo marca com "(o jogador percebe)": o motor calcula isso pelos perks e pela distância.
+- Mantenha thoughts dos NPCs que importam: o que pensam ou querem agora. Quando um NPC ameaça ou decide fazer algo, registre ali o que ele vai fazer e quando ("se ele encostar em alguém de novo, vai para a contenção"), e cumpra quando a hora chegar. A narração só revela os pensamentos que o resumo marca com "(o jogador percebe)": o motor calcula isso pelos perks e pela distância.
 
 # Espaço
 O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegador. O mapa do resumo mostra onde cada um está. Posição importa: para entregar ou pegar algo, cochichar, tocar, empurrar ou atacar é preciso estar perto, então mova antes quem precisa se deslocar. Ação incerta com alvo vai em skill_check com target_id e reach (toque, corpo_a_corpo, arremesso…); o motor recusa alvo fora do alcance.
 - Todo local fechado tem saídas na parede (porta, elevador, escada), listadas no resumo com o nome e para onde levam. Mudar de local é passar por uma delas: move_character com to.location_id e via (a saída). Quem chega aparece junto da saída que leva de volta.
+- Lugar novo nasce com as saídas que teria de verdade, nem mais nem menos: pense no que existe ali e para onde se vai dali. O corredor de uma ala de hospital dá para quartos, banheiro, posto de enfermagem e escada; um depósito ou uma cela tem uma porta só. Desenhe as que fazem sentido, mesmo que levem a lugares que ainda não existem (a saída sem destino é ligada na primeira passagem), e nenhuma que não faça. Beco sem saída vale quando é coerente com o lugar e com a história, não por esquecimento.
 - Porta leva a um lugar só. Elevador e escada levam a qualquer andar, e cada andar é um local: para subir ao 11º, use o corredor do 11º andar se ele já existir (veja Outros locais) ou crie-o, e mova pelo elevador. Para entrar num apartamento, crie-o e mova pela porta do corredor com o número dele.
 - Prédios têm layout pronto, preferível a desenhar: create_location com template saguao (entrada para a rua, portaria, elevadores e escada) ou corredor com floor (o andar, que numera as portas dos apartamentos).
-- Mobilie cada lugar com o que ele teria de verdade: a biblioteca de objetos (vitrine, quadro na parede, banco, escrivaninha, fogão, painel de controle, baú, árvore, carro…) entra no layout pela legenda do local (legend), com um caractere livre por tipo. Respeite o tamanho típico de cada um (escrivaninha 2×1, vitrine 3×1, carro 2×4): é nele que o modelo 3D cabe. Se faltar algo, defina um tipo novo a partir de um parecido ({"label": "mesa de sinuca", "like": "table"}) e, para ele aparecer como é no 3D, busque o modelo com search_models e informe model com o id que ela devolve. Não use um objeto no lugar de outro (mesa como pedestal, planta numa nave).
+- Mobilie cada lugar com o que ele teria de verdade: a biblioteca de objetos (vitrine, quadro na parede, banco, escrivaninha, fogão, painel de controle, baú, árvore, carro…) entra no layout pela legenda do local (legend), com um caractere livre por tipo. Respeite o tamanho típico de cada um (escrivaninha 2×1, vitrine 3×1, carro 2×4): é nele que o modelo 3D cabe. Se faltar algo, defina um tipo novo a partir de um parecido ({"label": "mesa de sinuca", "like": "table"}) e, para ele aparecer como é no 3D, busque o modelo com search_models e informe model com o id que ela devolve. Não use um objeto no lugar de outro (mesa como pedestal, planta numa nave). O 3D mostra cada móvel e cada item com o visual da época do lugar; quando um tipo não tem visual da época (uma geladeira num castelo), o motor avisa: troque por um tipo que exista nela ou defina o tipo na legenda com model.
 
 # Luz e visão
 - O motor calcula a luz de cada tile (luz ambiente do local, itens acesos e poderes de luz) e o que cada personagem enxerga: nítido, só um vulto ou nada, pela luz, pela distância e pela visão dele. O resumo marca quem o jogador vê só como vulto ou não vê.
@@ -95,7 +101,7 @@ O mundo é um grid 2D (x = coluna, y = linha) mostrado em 3D low-poly no navegad
 
 # Corpo, armas e gestos
 O 3D mostra o corpo de cada personagem: mantenha-o igual ao que a narração conta.
-- Pose é o estado do corpo e fica até mudar: update_character com pose, e pose_target quando ela se volta para alguém ou algo (mirando, apontando). Andar desfaz a pose. Sentar e deitar num móvel é move_character para o assento ou a cama; levantar é update_character com pose de_pe, que põe a pessoa ao lado do móvel (outra pose que não se faz sentado, como ajoelhado, também levanta). Quem fica com a vida em 0 cai sozinho. Poses: ${POSE_LIST}.
+- Pose é o estado do corpo e fica até mudar: update_character com pose, e pose_target quando ela se volta para alguém ou algo (mirando, apontando). Andar desfaz a pose. Sentar e deitar num móvel é move_character para o assento ou a cama; na cama a pessoa fica deitada, e sentada na beirada com update_character pose sentado depois de ir para ela. A pose sentado sem assento é no chão. Levantar é update_character com pose de_pe, que põe a pessoa ao lado do móvel (outra pose que não se faz sentado, como ajoelhado, também levanta). Quem fica com a vida em 0 cai sozinho. Poses: ${POSE_LIST}.
 - O 3D só mostra o que o estado e as marcas dizem. Quem se levanta, senta, deita, se ajoelha, dá um passo para trás ou vai até alguém precisa da tool antes da narração; senão, o corpo fica parado enquanto o texto conta que ele se mexeu.
 - Empunhar é pôr na mão: transfer_item para {character_id, hand}; guardar é mandar de volta sem hand. Armas e objetos que alguém vai segurar nascem com model (de search_models) e grip (pistola, arma_longa, arco, uma_mao, duas_maos, escudo ou objeto), e quem já está armado nasce com a arma na mão (holder com hand). Sem nada na mão, o ataque é de mãos vazias.
 - Gesto é de um instante: vai na narração como marca \`{id:gesto}\` ou \`{id:gesto>alvo}\`, na frase em que acontece (inclusive numa fala); a interface anima e tira a marca do texto. Todo gesto da lista que alguém em cena faz leva a marca; asteriscos numa fala ficam para o que a lista não tem. O motor confere que o gesto existe, que o alvo está no local e que um ataque de perto alcança o alvo (de longe, só com arma de alcance na mão). Gestos: ${GESTURE_LIST}.
@@ -111,21 +117,20 @@ Bilhetes, cartas, livros, diários e placas têm texto fixo, guardado no item co
 - Para ler é preciso estar com o item ou colado nele, e enxergar: no escuro, ninguém lê.
 - Texto que já nasce escrito: create_items com text (e written_by, que sabe o que escreveu). Um texto que ninguém leu ainda leva text "", e a primeira leitura o define. Escrever ou reescrever depois é update_item com text e written_by.`;
 
-/** Um visual do catálogo 3D, para o mestre escolher e descrever o personagem a partir dele. */
-export interface LookOption {
-  id: string;
-  figure: string;
-  look: string;
-}
+export type { LookOption };
 
-/** Prompt do mestre; com o catálogo 3D, acrescenta os visuais disponíveis. */
-export function systemPrompt(looks: LookOption[] = []): string {
-  if (!looks.length) return SYSTEM_PROMPT;
-  const list = looks.map((l) => `- ${l.id} (${l.figure}): ${l.look}`).join('\n');
+/**
+ * Prompt do mestre. Com o catálogo 3D, acrescenta os visuais da época da campanha; na criação do
+ * mundo a época ainda não existe (vazio), e a lista chega no resultado de define_ruleset. null =
+ * sem catálogo (demo offline).
+ */
+export function systemPrompt(looks: LookOption[] | null = null): string {
+  if (!looks) return SYSTEM_PROMPT;
+  const list = looks.length ? looks.map((l) => `- ${l.id} (${l.figure}): ${l.look}`).join('\n') : 'A lista dos visuais da época chega no resultado de define_ruleset.';
   return `${SYSTEM_PROMPT}
 
 # Visual dos personagens
-O 3D mostra cada personagem com um destes modelos. Ao criar alguém, escolha em look o visual que mais combina e escreva appearance a partir dele: pode acrescentar detalhes pequenos que caibam no modelo (um crachá, uma corrente nos óculos), mas não mude roupa, cabelo, idade ou corpo. Se nenhum servir, busque um personagem no catálogo com search_models (category personagem) e use em look o id que ela devolve, descrevendo appearance pelo visual que a busca mostra. Se a cena tiver mais gente que visuais, repita os parecidos.
+O 3D mostra cada personagem com um destes modelos, que são da época da campanha. Ao criar alguém, escolha em look o visual que mais combina e escreva appearance a partir dele: pode acrescentar detalhes pequenos que caibam no modelo (um crachá, uma corrente nos óculos), mas não mude roupa, cabelo, idade ou corpo. Se nenhum servir, busque um personagem no catálogo com search_models (category personagem), que traz primeiro os da época, e use em look o id que ela devolve, descrevendo appearance pelo visual que a busca mostra. Roupa de outra época só de propósito (um viajante do tempo); o motor avisa quando o visual não é da época. Se a cena tiver mais gente que visuais, repita os parecidos.
 ${list}`;
 }
 
@@ -136,9 +141,9 @@ ${premise}
 """
 
 Monte o mundo inicial com as tools, nesta ordem:
-1. define_ruleset adequado ao gênero (2 a 6 atributos, até 4 recursos). A vida é universal e já vem oculta; num jogo de ação, torne-a pública incluindo um recurso "Vida". Se a premissa der ao personagem do jogador uma capacidade especial, crie o perk aqui.
+1. define_ruleset adequado ao gênero (2 a 6 atributos, até 4 recursos), com era, a época da premissa: ela decide o visual de móveis, objetos e roupas no 3D, e o resultado traz a lista dos visuais de personagem da época. A vida é universal e já vem oculta; num jogo de ação, torne-a pública incluindo um recurso "Vida". Se a premissa der ao personagem do jogador uma capacidade especial, crie o perk aqui.
 2. create_location para o lugar onde a cena começa, com light coerente com o horário e a premissa (padrão 1; à noite ou num porão, menos). Se o motor recusar o layout, corrija e tente de novo.
-3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Informe figure (adulto, adulta, menino ou menina) e, se houver a lista de visuais, look de cada um (da lista ou de search_models): é o corpo que aparece no 3D. Informe também seen_as, como um estranho chamaria a pessoa pelo que vê. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random. Depois, com introduce, registre quem já se conhece: o personagem do jogador conhece quem a premissa diz (colegas, família, a turma), e os desconhecidos ficam de fora.
+3. create_characters com o personagem do jogador (is_player=true), posicionado de forma coerente com a premissa, e os NPCs presentes na cena. Informe figure (adulto, adulta, menino ou menina) e, se houver a lista de visuais da época, look de cada um (dela ou de search_models): é o corpo e a roupa que aparecem no 3D. Informe também seen_as, como um estranho chamaria a pessoa pelo que vê. Atributos e recursos que variam de pessoa para pessoa nascem no valor de cada um, conforme a premissa, não no padrão. Quando uma quantidade não estiver definida pela premissa (quantos alunos, quantos clientes), sorteie antes com random. Depois, com introduce, registre quem já se conhece: o personagem do jogador conhece quem a premissa diz (colegas, família, a turma), e os desconhecidos ficam de fora. Com set_feelings, registre o que cada NPC sente por quem conhece de perto, inclusive pelo personagem do jogador; num grupo grande, só as relações que se destacam.
 4. create_items com os objetos citados na premissa e os que a cena pede, já com quem os tem.
 5. advance_time com o horário inicial (to: "HH:MM"); fios iniciais com update_thread e fatos de partida com add_fact, se fizerem sentido.
 Depois narre a cena de abertura, situando o jogador.`;
@@ -151,7 +156,9 @@ export function turnMessage(brief: string, input: string, marked: string[] = [])
 Ação do jogador:
 """
 ${input}
-"""${marked.length ? `\nComo o jogador marcou:\n${marked.join('\n')}` : ''}`;
+"""${marked.length ? `\nComo o jogador marcou:\n${marked.join('\n')}` : ''}
+
+Antes de narrar: cada um em cena, inclusive quem sofreu a ação, reage do jeito dele, pelo papel, pelo que pensa, pelo que quer e, acima de tudo, pelo que sente por quem agiu e por quem sofreu; quem ameaçou cumpre se o jogador insistiu; set_feelings registra o sentimento que faltava e o que o turno mudou.`;
 }
 
 export function verifierPrompt(args: { state: string; changes: string[]; input: string; narration: string }): string {
@@ -171,6 +178,9 @@ export function verifierPrompt(args: { state: string; changes: string[]; input: 
 - dano ou cura narrados sem mudança de vida, ou uma regra nova usada (um atributo que não existe) sem extend_ruleset;
 - alguém saca, empunha ou guarda uma arma na narração sem a mudança de mão correspondente (transfer_item com hand para empunhar, sem hand para guardar), ou ataca com uma arma que não está na mão dele;
 - fala ou contato à distância: a prosa da narração revela o conteúdo de um cochicho que o personagem do jogador não ouviria, ou mostra alguém cochichando, tocando ou agredindo quem está longe (veja as posições no mapa);
+- passividade: o jogador agride alguém, foge ou faz o que um NPC presente pretende impedir ou punir (veja o papel, o que pensa e o que quer no estado), e quem tem o dever de reagir só olha, ameaça de novo ou deixa passar; diga quem deveria agir e por quê;
+- sentimento: a narração mostra que o que um NPC sente por alguém mudou de verdade (passou a odiar, temer, confiar ou gostar) e o estado continua com o sentimento de antes, ou sem nenhum (veja "sente" no estado); ou um NPC trata alguém ao contrário do que sente por ele, sem a narração mostrar por quê;
+- sentimento que falta: um NPC reage na narração a quem agiu ou a quem sofreu (defende, acusa, consola, ri, foge ou se encolhe por causa dessa pessoa) e a linha dele no estado ainda diz "falta sentimento por" essa pessoa, ou "por todos aqui"; diga de quem por quem falta;
 - visão: a narração descreve detalhes visuais (rosto, expressão, roupa, o que alguém faz em silêncio) de quem o estado marca como não visto pelo jogador, ou descreve a cena com nitidez quando ele está cego; ou a luz ou a visão mudam na narração (luzes apagam, lanterna acende, alguém fica cego) sem a mudança correspondente.
 Linhas no formato \`@id: texto\` ou \`@id[modo>alvo]: texto\` são falas do personagem com aquele id; o motor já confere o alcance delas e esconde do jogador o conteúdo que ele não ouve, então não aponte essas linhas por isso. Marcas \`{id:gesto}\` e \`{id:gesto>alvo}\` são gestos que o 3D anima, já conferidos pelo motor. Linhas \`@id_de_item[>leitor]: texto\` são leituras do que está escrito no item, também conferidas pelo motor. Personagens podem saber o que estão vendo e ouvindo agora e o que é óbvio pelo papel deles; só aponte vazamento de fatos registrados. Ignore ambientação, emoções, gestos fora dessa lista e pequenas ações que não mudam posição, postura nem quem tem o quê. Na dúvida, considere consistente. Escreva cada problema em uma frase curta, em português, citando o personagem e o id do fato quando houver.
 
@@ -194,5 +204,5 @@ ${args.narration}
 export function verifierFeedback(issues: string[]): string {
   return `[Verificador de consistência do motor] A narração afirma coisas que o estado não registra:
 ${issues.map((i) => `- ${i}`).join('\n')}
-Corrija chamando as tools que faltaram ou, se a ação não deveria acontecer, ajuste a história. Num vazamento de conhecimento, reescreva a fala para o personagem não saber o que não sabe (ou mostre como ele descobriu, com share_knowledge). Depois escreva de novo a narração final completa deste turno: ela substitui a anterior.`;
+Corrija chamando as tools que faltaram ou, se a ação não deveria acontecer, ajuste a história. Num vazamento de conhecimento, reescreva a fala para o personagem não saber o que não sabe (ou mostre como ele descobriu, com share_knowledge). Num sentimento que falta, registre com set_feelings o que a cena mostrou; a história pode ficar como estava. Depois escreva de novo a narração final completa deste turno: ela substitui a anterior. O jogador lê essa resposta inteira, então comece direto pela história, sem explicar o que mudou nem falar da correção.`;
 }
