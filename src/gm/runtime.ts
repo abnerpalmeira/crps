@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { ModelCatalog, eraLooks, modelCatalog, setBaseLooks, setModelCatalog, type RepertoireItem } from '../engine/catalog';
 import { GameEngine } from '../engine/engine';
+import { JevChecker, LlmChecker, ShadowChecker, type Checker } from './checker';
 import { ClaudeProvider, DEFAULT_MODEL } from './claude';
 import { GameMaster } from './gm';
+import { JEV_KEY_ENV, JevClient } from './jev';
 import { SERVICES, modelChoice, serviceOf } from './models';
 import { OpenAICompatibleProvider, ProviderHttpError } from './openai';
 import { systemPrompt, type LookOption } from './prompts';
@@ -26,13 +28,13 @@ export function loadEnv(file = '.env'): void {
 }
 
 /**
- * Relê no .env só as chaves dos serviços (VENICE_API_KEY…); o servidor chama a cada pedido de
- * estado, então a chave posta ou trocada com ele no ar já vale. A que veio do ambiente continua.
+ * Relê no .env só as chaves dos serviços (VENICE_API_KEY, a do Jev…); o servidor chama a cada pedido
+ * de estado, então a chave posta ou trocada com ele no ar já vale. A que veio do ambiente continua.
  */
 export function reloadServiceKeys(file = '.env'): void {
   if (!existsSync(file)) return;
   const vars = parseEnv(readFileSync(file, 'utf8')) as Record<string, string | undefined>;
-  for (const { keyEnv } of Object.values(SERVICES)) {
+  for (const keyEnv of [...Object.values(SERVICES).map((s) => s.keyEnv), JEV_KEY_ENV]) {
     const value = vars[keyEnv];
     if (value === undefined || (process.env[keyEnv] !== undefined && !fileKeys.has(keyEnv))) continue;
     process.env[keyEnv] = value;
@@ -110,13 +112,33 @@ export function createGameMaster(opts: { model?: string } = {}): GameMaster {
   const base = isOffline() ? [] : lookOptions();
   setBaseLooks(base);
   const looks = base.length > 0 || (!isOffline() && modelCatalog() !== null);
+  const provider = isOffline() ? new OfflineProvider() : providerFor(model, process.env.CRPS_VERIFIER_MODEL);
   return new GameMaster({
-    provider: isOffline() ? new OfflineProvider() : providerFor(model, process.env.CRPS_VERIFIER_MODEL),
+    provider,
     effortSetup: effortFromEnv('CRPS_EFFORT_SETUP', 'medium'),
     effortTurn: effortFromEnv('CRPS_EFFORT_TURN', 'low'),
     verify: process.env.CRPS_VERIFY !== '0',
+    // Na demo offline quem confere é o roteiro, sem rede.
+    checker: isOffline() ? undefined : checkerFor(provider),
     system: (world, setup) => systemPrompt(!looks ? null : setup ? [] : eraLooks(world.era)),
   });
+}
+
+/**
+ * Quem confere a narração (CRPS_VERIFY): "jev" é o código e o Jev, com o modelo de reserva; "llm", só
+ * o modelo; "ambos" roda os dois, o jogo segue o modelo e os dois vereditos vão para
+ * conferencias.jsonl, para comparar. Sem valor, é "jev", que sem a chave confere pelo modelo.
+ */
+export function checkerFor(provider: ModelProvider, mode = process.env.CRPS_VERIFY, dir = process.env.CRPS_SAVES ?? 'saves'): Checker {
+  const llm = new LlmChecker(provider);
+  if (mode === 'llm') return llm;
+  if (mode === 'ambos') {
+    return new ShadowChecker(llm, new JevChecker(new JevClient()), (entry) => {
+      mkdirSync(dir, { recursive: true });
+      appendFileSync(join(dir, 'conferencias.jsonl'), `${JSON.stringify(entry)}\n`);
+    });
+  }
+  return new JevChecker(new JevClient(), llm);
 }
 
 /** Mensagem legível para erros da API e do restante do turno. */

@@ -2,13 +2,15 @@ import { compileBrief } from '../engine/brief';
 import type { GameEngine } from '../engine/engine';
 import { describeInput, hasMarks, parsePlayerInput } from '../engine/input';
 import { analyzeActs } from '../engine/body';
+import { dropRepeated } from '../engine/checks';
 import { performMenuAct } from '../engine/perform';
 import { analyzeReading } from '../engine/reading';
 import { analyzeSpeech, playerNarration, type SpeechLine } from '../engine/speech';
 import { runTool, toolSpecs, type ToolResult } from '../engine/tools';
 import type { WorldState } from '../engine/types';
+import { LlmChecker, type CheckInput, type Checker } from './checker';
 import type { CostEvent } from './pricing';
-import { OPTIONS_REQUEST, SYSTEM_PROMPT, setupMessage, turnMessage, verifierFeedback, verifierPrompt } from './prompts';
+import { OPTIONS_REQUEST, SYSTEM_PROMPT, setupMessage, turnMessage, verifierFeedback } from './prompts';
 import type { Effort, ModelProvider, ModelSession, Usage, Verdict } from './provider';
 
 /** Eventos que o servidor transmite ao cliente (NDJSON) e a CLI imprime. */
@@ -33,6 +35,8 @@ export interface GameMasterOptions {
   effortTurn?: Effort;
   /** Roda o verificador de consistência depois de cada narração (padrão: sim). */
   verify?: boolean;
+  /** Quem confere a narração (padrão: o modelo do mestre, com o verificador de sempre). */
+  checker?: Checker;
   /**
    * Prompt do mestre (padrão: SYSTEM_PROMPT, sem os visuais do catálogo 3D). Como função, sai do
    * mundo: os visuais são os da época dele, e na criação (setup) a época ainda não existe.
@@ -59,16 +63,16 @@ export class GameMaster {
 
   /** Monta o mundo inicial a partir da premissa, num motor recém-criado. */
   async setup(engine: GameEngine, emit: Emit): Promise<void> {
-    await this.atomically(engine, emit, async () => {
+    await this.atomically(engine, emit, async (before) => {
       engine.log('system', `Premissa: ${engine.state.premise}`);
       emit({ type: 'status', text: 'Montando o mundo…' });
       emit({ type: 'state', world: engine.snapshot() });
-      await this.runTurn(engine, setupMessage(engine.state.premise), this.opts.effortSetup ?? 'medium', engine.state.premise, emit, [], [], true);
+      await this.runTurn(engine, setupMessage(engine.state.premise), this.opts.effortSetup ?? 'medium', engine.state.premise, emit, [], [], true, before);
     });
   }
 
   async play(engine: GameEngine, input: string, emit: Emit): Promise<void> {
-    await this.atomically(engine, emit, async () => {
+    await this.atomically(engine, emit, async (before) => {
       engine.beginTurn();
       // O que o jogador pensa neste turno vira estado: só quem percebe mentes fica sabendo.
       const segments = parsePlayerInput(input);
@@ -95,15 +99,15 @@ export class GameMaster {
       const gestures = menu
         .filter((o) => o.act.verb === 'gesto' && o.act.target && player)
         .map((o) => `{${player!.id}:${o.act.target}${o.act.other ? `>${o.act.other}` : ''}}`);
-      await this.runTurn(engine, turnMessage(brief, input, marked), this.opts.effortTurn ?? 'low', verified, emit, changes, gestures);
+      await this.runTurn(engine, turnMessage(brief, input, marked), this.opts.effortTurn ?? 'low', verified, emit, changes, gestures, false, before);
     });
   }
 
   /** Se a API cair no meio do turno, o mundo volta ao que era antes dele. */
-  private async atomically(engine: GameEngine, emit: Emit, run: () => Promise<void>): Promise<void> {
+  private async atomically(engine: GameEngine, emit: Emit, run: (before: WorldState) => Promise<void>): Promise<void> {
     const before = engine.toJSON();
     try {
-      await run();
+      await run(JSON.parse(before) as WorldState);
     } catch (err) {
       engine.state = JSON.parse(before);
       emit({ type: 'state', world: engine.snapshot() });
@@ -111,7 +115,10 @@ export class GameMaster {
     }
   }
 
-  /** `changes` traz o que o motor já fez antes do mestre (ações do menu); `gestures`, marcas que a narração precisa ter. */
+  /**
+   * `changes` traz o que o motor já fez antes do mestre (ações do menu); `gestures`, marcas que a
+   * narração precisa ter; `before`, o mundo antes do turno, para a conferência ver o que mudou.
+   */
   private async runTurn(
     engine: GameEngine,
     userMessage: string,
@@ -121,6 +128,7 @@ export class GameMaster {
     done: string[] = [],
     gestures: string[] = [],
     setup = false,
+    before: WorldState = JSON.parse(engine.toJSON()) as WorldState,
   ): Promise<void> {
     const system = typeof this.opts.system === 'function' ? this.opts.system(engine.state, setup) : (this.opts.system ?? SYSTEM_PROMPT);
     const session = this.opts.provider.startSession({ system, tools: toolSpecs(), userMessage, effort });
@@ -137,7 +145,7 @@ export class GameMaster {
       ];
       if (this.opts.verify !== false) emit({ type: 'status', text: 'Conferindo a narração…' });
       // O verificador vê também as ações sugeridas: elas não podem usar nome nem fato que o jogador não sabe.
-      const verdict = this.opts.verify !== false ? await this.check(engine, changes, input, result.text, emit) : null;
+      const verdict = this.opts.verify !== false ? await this.check({ engine, before, changes, input, narration: result.text }, emit) : null;
       if (verdict) emit({ type: 'verify', ...verdict });
       if (speechIssues.length) emit({ type: 'verify', consistent: false, issues: speechIssues });
       const issues = [...speechIssues, ...(verdict && !verdict.consistent ? verdict.issues : [])];
@@ -159,6 +167,8 @@ export class GameMaster {
     const reading = analyzeReading(engine.state, text);
     const outside = [...speech.issues, ...analyzeActs(engine.state, text), ...reading.issues];
     if (outside.length) emit({ type: 'status', text: `Falas, gestos e leituras ainda fora das regras: ${outside.join(' ')}` });
+    // A fala pronta que repete o que a pessoa acabou de dizer na narração sai: o jogador já ouviu.
+    for (const c of Object.values(engine.state.characters)) dropRepeated(c, speech.lines.filter((l) => l.speakerId === c.id).map((l) => l.text));
     this.recordSpeech(engine, speech.lines);
     engine.hearVoices(speech.lines);
     // Quem leu passa a saber o texto; a primeira leitura de um texto ainda não escrito o define.
@@ -236,12 +246,12 @@ export class GameMaster {
     return { text: reserve, verifiable: false };
   }
 
-  private async check(engine: GameEngine, changes: string[], input: string, narration: string, emit: Emit): Promise<Verdict | null> {
+  private async check(input: CheckInput, emit: Emit): Promise<Verdict | null> {
     try {
-      const state = compileBrief(engine, { recentTurns: 0 });
-      const { verdict, usage } = await this.opts.provider.verify(verifierPrompt({ state, changes, input, narration }));
-      if (usage) emit({ type: 'usage', usage });
-      return verdict;
+      const r = await (this.opts.checker ?? new LlmChecker(this.opts.provider)).check(input);
+      for (const usage of r.usages) emit({ type: 'usage', usage });
+      if (r.note) emit({ type: 'status', text: r.note });
+      return r.verdict;
     } catch (err) {
       emit({ type: 'status', text: `Verificador indisponível (${err instanceof Error ? err.message : String(err)}); seguindo sem checagem.` });
       return null;

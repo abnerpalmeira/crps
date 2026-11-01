@@ -23,16 +23,23 @@ const PRICES: Record<string, Price> = {
   'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   'venice/deepseek-v4-1-flash-uncensored': { input: 0.33, output: 1.32, cacheRead: 0.00825, cacheWrite: 0.33 },
   offline: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  // O Jev, que confere a narração, cobra só a entrada (docs.typesafe.ai/models, nov/2026).
+  jev: { input: 0.042, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
+
+/** O preço do modelo; toda versão do Jev ("jev-1.14.0") tem o mesmo. */
+function priceFor(model: string): Price | undefined {
+  return PRICES[model] ?? (model.startsWith('jev-') ? PRICES.jev : undefined);
+}
 
 /** Preço de entrada e saída (US$ por milhão de tokens), para o seletor de modelo. */
 export function priceOf(model: string): { input: number; output: number } | null {
-  const p = PRICES[model];
+  const p = priceFor(model);
   return p ? { input: p.input, output: p.output } : null;
 }
 
 export function usageCost(u: Usage): number | null {
-  const p = PRICES[u.model];
+  const p = priceFor(u.model);
   if (!p) return null;
   return (u.inputTokens * p.input + u.outputTokens * p.output + u.cacheReadTokens * p.cacheRead + u.cacheWriteTokens * p.cacheWrite) / 1e6;
 }

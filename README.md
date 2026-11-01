@@ -11,7 +11,7 @@ jogador: "escrevo a data no quadro com o giz"
   → o motor compila o contexto do turno (cena, mapa, fichas, fios, fatos, últimos eventos)
   → o modelo chama tools ⇄ o motor valida, aplica, rola os dados
   → o modelo narra a partir dos resultados e sugere três ações
-  → um verificador compara narração × mudanças e, se precisar, pede correção
+  → a conferência compara narração × mudanças (o código e o Jev) e, se precisar, pede correção
   → a narração aparece já conferida, e as três ações viram botões
   → o 3D e os painéis mostram o novo estado
 ```
@@ -64,7 +64,8 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 | `VENICE_BASE_URL` | `https://api.venice.ai/api/v1` | Outra URL para a Venice (um proxy) |
 | `CRPS_EFFORT_SETUP` | `medium` | Esforço na criação do mundo |
 | `CRPS_EFFORT_TURN` | `low` | Esforço nos turnos; suba se o mestre esquecer de chamar tools |
-| `CRPS_VERIFY` | `1` | `0` desliga o verificador |
+| `TYPESAFE_API_KEY` | | Chave do Jev, que confere a narração; sem ela, quem confere é o modelo |
+| `CRPS_VERIFY` | `jev` | `jev`: o código e o Jev conferem, com o modelo de reserva; `llm`: só o modelo; `ambos`: os dois, com o jogo seguindo o modelo e os vereditos em `conferencias.jsonl`; `0` desliga |
 | `CRPS_PROVIDER` | `claude` | `offline` usa o roteiro fixo |
 | `CRPS_SAVES` | `saves` | Pasta dos saves |
 | `CRPS_API_PORT` | `8787` | Porta da API (o Vite encaminha `/api` para ela) |
@@ -135,6 +136,51 @@ e isso é perto de 40% do custo do turno.
 O fallback no servidor, o `cache_control` e o `eager_input_streaming` são só do Claude. Outro
 serviço compatível entra em `SERVICES`, com o preço em `pricing.ts` e o modelo em `MODEL_CHOICES`.
 
+### Conferência com o Jev
+
+O verificador era uma segunda chamada a um modelo de texto, que lia o estado e a narração e
+raciocinava. No DeepSeek, isso levava de 22% a 33% do custo de cada turno, e alguns segundos. Hoje
+a conferência tem duas camadas, e o veredito continua o mesmo, com as frases que o mestre recebe
+para corrigir:
+
+- **O código confere o que é exato** (`src/engine/checks.ts`): o nome de quem o jogador não conhece,
+  escrito na narração, nas ações sugeridas ou numa fala pronta. Ele também tira das falas do turno
+  as que repetem o que o NPC acabou de dizer na narração, porque o jogador já ouviu.
+- **O Jev julga o resto.** O Jev, da TypeSafe, é um modelo que só decide: responde perguntas
+  tipadas (escolha, nota, sim ou não) com probabilidades, em paralelo, por US$ 0,042 o milhão de
+  tokens de entrada, sem cobrar a saída.
+  - **Uma pergunta atômica por coisa.** Cada pessoa de quem a narração fala, cada item citado e cada
+    fala pronta nova ganham perguntas próprias: muda de lugar? em que corpo fica? que gesto faz?
+    usa ou descobre um fato que não sabe? trata o jogador ao contrário do que sente?
+  - **O motor cruza as respostas** com o que o turno mudou (`src/engine/diff.ts`, o mundo antes e
+    depois): quem a narração faz andar e não andou, ou quem descobre um fato e continua sem saber.
+  - **Dois pedidos.** Um vai só com a narração. O outro leva a ação do jogador, para o que depende
+    dela (passividade, objeto do nada, pensamento ouvido); separados, o Jev não toma o que o
+    jogador escreveu pelo que a narração conta.
+  - **Só confiança alta vira problema.** Sim conta a partir de 0,8; uma escolha, com confiança 0,5;
+    um fato, com 0,6 somando os parecidos. Na dúvida, a narração passa.
+
+O cliente fica em `src/gm/jev.ts`, e as perguntas em `src/gm/checker.ts`. Sem a chave, ou com o Jev
+fora do ar, quem julga é o modelo, como antes; as checagens do código valem sempre. Com
+`CRPS_VERIFY=ambos`, os dois conferem cada turno, o jogo segue o modelo, e os dois vereditos, com
+custo e tempo, vão para `saves/conferencias.jsonl`, para comparar.
+
+Na avaliação (nov/2026), foram 14 cenas pequenas, em português, cada uma com os problemas
+esperados. A conferência achou os 10 esperados, e os 4 a mais também eram erros pelas regras: um
+gesto sem marca, o jogador ouvindo um segredo sem registro. Cada conferência custou uns
+US$ 0,0002 e levou uns 0,2 s.
+
+Depois veio um jogo real com o DeepSeek em `ambos`: um mundo e cinco turnos num restaurante em
+Tóquio. O modelo levou de 8 a 103 s por conferência, até US$ 0,023, e chegou a 76% do custo de um
+turno. O Jev levou de 0,3 a 0,5 s, por uns US$ 0,0006. Os dois acharam os mesmos erros de regra:
+o gesto sem marca e a garçonete que muda de lugar sem move_character. O Jev achou também um pote
+que surgiu na narração sem existir no estado, e uma fala pronta com uma reserva que a garçonete
+não sabia, um turno antes do modelo. As falsas acusações do jogo saíram com a redação das
+perguntas:
+- quem só vê um cochicho de longe não fica sabendo do que foi dito;
+- um tapa na mesa não é o gesto de ataque;
+- um rabisco no caderno não é um texto escrito para alguém ler.
+
 ## Arquitetura
 
 ```
@@ -152,8 +198,12 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   frames.ts     falas `@id[modo>alvo]:` → passos do replay; retratos da cena por turno
   free.ts       ações livres no grid (andar, conversar com as falas prontas), sem o mestre
   lines.ts      falas prontas dos NPCs: a próxima que toca e quem tem novidade
+  diff.ts       o que o turno mudou no mundo (antes × depois), para a conferência
+  checks.ts     conferências só de código: nomes indevidos e falas que repetem a narração
 src/gm/       o mestre
-  gm.ts         loop do turno, eventos, verificador e rollback se a API falhar
+  gm.ts         loop do turno, eventos, conferência e rollback se a API falhar
+  checker.ts    quem confere a narração: o código e o Jev, o modelo, ou os dois em paralelo
+  jev.ts        cliente do Jev (TypeSafe), que responde perguntas tipadas
   provider.ts   interface do provedor de modelo
   claude.ts     implementação com o SDK da Anthropic
   openai.ts     serviços compatíveis com a API de chat da OpenAI (Venice)
@@ -309,6 +359,7 @@ Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e
   marcados como "Livre".
 - **Regras:** o verificador confere as falas prontas como a narração: nome que o jogador não
   conhece (salvo quem se apresenta na fala), fato contado sem o id dele, contradição com o estado.
+  A fala do turno que repete o que o NPC acabou de dizer na narração sai no fim do turno.
 
 As ações livres ficam em [src/engine/free.ts](src/engine/free.ts), e o servidor as recebe em
 `POST /api/act`.
@@ -750,6 +801,22 @@ Falta:
 - **Mais vida própria:** NPCs que andam pelo lugar entre os turnos, pela agenda e pelo que querem,
   e conversas entre eles que o jogador ouve se estiver perto.
 - Cada narração fica mais longa, com as falas prontas, mas o jogador chama o mestre menos vezes.
+
+### O mestre com o Jev
+
+A conferência foi a primeira fase (veja [Conferência com o Jev](#conferência-com-o-jev)). A ideia é
+o código manter as regras e montar as opções, o Jev decidir entre elas, e um modelo de texto só
+escrever. As próximas fases, uma de cada vez, depois de medir a anterior:
+
+- **Texto do jogador sem o mestre:** o Jev lê o que o jogador escreve (intenção, com quem fala, de
+  quem fala, alvo, objeto). As ações físicas com confiança alta viram ação livre, e uma pergunta a
+  um NPC é respondida pela fala pronta que o Jev escolher. Se nenhuma servir, o turno vai ao mestre.
+- **NPCs decididos pelo Jev:** a iniciativa vira sim ou não por NPC ("viria agora?"), a fala pronta
+  é escolhida entre as dele, e no turno do mestre o Jev decide como cada um reage e o que conta,
+  entre os fatos que ele sabe.
+- **O escritor:** o turno comum vira motor → Jev → motor → uma chamada sem tools que escreve a
+  narração, as falas e as três ações → conferência. O loop com as tools fica para criar o mundo e
+  para o que o Jev não decide com confiança, e é ele que custará moedas.
 
 ### Outros
 

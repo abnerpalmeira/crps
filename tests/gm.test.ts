@@ -4,6 +4,7 @@ import { EXAMPLE_CLASSROOM } from '../src/engine/tools';
 import { GameMaster, dropPreamble, splitOptions, type GmEvent } from '../src/gm/gm';
 import { OPTIONS_REQUEST, SYSTEM_PROMPT, turnMessage, verifierPrompt } from '../src/gm/prompts';
 import { compileBrief } from '../src/engine/brief';
+import type { CheckInput, Checker } from '../src/gm/checker';
 import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, Verdict } from '../src/gm/provider';
 
 /** Provedor roteirizado: cada sessão (turno) consome uma lista de respostas do "modelo". */
@@ -129,6 +130,30 @@ describe('GameMaster', () => {
     expect(events.filter((e) => e.type === 'narration')).toEqual([
       { type: 'narration', text: 'Você escreve 28/10 no quadro, e o giz range.', turn: 1, options: [] },
     ]);
+  });
+
+  it('a conferência recebe o mundo de antes do turno e a narração crua, e o problema dela pede correção', async () => {
+    const provider = new FakeProvider([worldBuildingSteps(), [say('Você vai até a janela.\n>> Olho para fora.'), say('Você vai até a janela e olha o pátio.')]]);
+    const seen: CheckInput[] = [];
+    const verdicts: Verdict[] = [
+      { consistent: true, issues: [] },
+      { consistent: false, issues: ['O jogador anda sem move_character.'] },
+    ];
+    const checker: Checker = {
+      check: async (input) => {
+        seen.push(input);
+        return { verdict: verdicts.shift() ?? null, usages: [] };
+      },
+    };
+    const gm = new GameMaster({ provider, checker });
+    const { engine } = await setUpWorld(provider, gm);
+    const where = { ...engine.player!.pos! };
+    await gm.play(engine, 'Vou até a janela.', () => {});
+
+    expect(seen[1].before.characters.kenji.pos).toEqual(where);
+    expect(seen[1].narration).toBe('Você vai até a janela.\n>> Olho para fora.');
+    expect(provider.sessions[1].userTexts[0]).toContain('O jogador anda sem move_character.');
+    expect(provider.verifyPrompts).toHaveLength(0);
   });
 
   it('a narração corrigida chega ao jogador sem o recado sobre a correção', async () => {
