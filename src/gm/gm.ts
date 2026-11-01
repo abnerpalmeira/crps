@@ -3,13 +3,14 @@ import type { GameEngine } from '../engine/engine';
 import { describeInput, hasMarks, parsePlayerInput } from '../engine/input';
 import { analyzeActs } from '../engine/body';
 import { dropRepeated } from '../engine/checks';
-import { answer, freeAct } from '../engine/free';
+import { answer, freeAct, type FreeAct, type FreeOutcome } from '../engine/free';
 import { performMenuAct } from '../engine/perform';
 import { analyzeReading } from '../engine/reading';
 import { analyzeSpeech, playerNarration, type SpeechLine } from '../engine/speech';
 import { runTool, toolSpecs, type ToolResult } from '../engine/tools';
 import type { WorldState } from '../engine/types';
 import { LlmChecker, type CheckInput, type Checker } from './checker';
+import { REACTION_TEXT, type NpcDecider, type Reaction } from './decider';
 import type { CostEvent } from './pricing';
 import { OPTIONS_REQUEST, SYSTEM_PROMPT, setupMessage, turnMessage, verifierFeedback } from './prompts';
 import type { Effort, ModelProvider, ModelSession, Usage, Verdict } from './provider';
@@ -43,6 +44,8 @@ export interface GameMasterOptions {
   checker?: Checker;
   /** Quem lê o texto do jogador antes do turno, para resolver no grid o que não precisa do mestre. */
   reader?: InputReader;
+  /** Quem decide pelos NPCs: a fala que cabe, quem toma a iniciativa e, no turno, como reage quem o jogador procura. */
+  decider?: NpcDecider;
   /**
    * Prompt do mestre (padrão: SYSTEM_PROMPT, sem os visuais do catálogo 3D). Como função, sai do
    * mundo: os visuais são os da época dele, e na criação (setup) a época ainda não existe.
@@ -77,10 +80,21 @@ export class GameMaster {
     });
   }
 
+  /** Ação livre pedida pelo grid (o clique no chão, "Conversar"), com quem decide pelos NPCs. */
+  async free(engine: GameEngine, act: FreeAct): Promise<FreeOutcome & { usages: Usage[] }> {
+    const usages: Usage[] = [];
+    const hooks = this.opts.decider?.hooks(engine, (usage) => usages.push(usage)) ?? {};
+    return { ...(await freeAct(engine, act, hooks)), usages };
+  }
+
   async play(engine: GameEngine, input: string, emit: Emit): Promise<void> {
-    if (this.opts.reader && (await this.tryFree(engine, input, emit))) return;
+    const read = this.opts.reader ? await this.tryFree(engine, input, emit) : { done: false, addressee: null };
+    if (read.done) return;
+    // Quem o jogador procura: o Jev decide como reage e o que conta, e o mestre narra isso.
+    const reaction = read.addressee && this.opts.decider ? await this.react(engine, input, read.addressee, emit) : null;
     await this.atomically(engine, emit, async (before) => {
       engine.beginTurn();
+      const decided = reaction ? this.applyReaction(engine, reaction) : [];
       // O que o jogador pensa neste turno vira estado: só quem percebe mentes fica sabendo.
       const segments = parsePlayerInput(input);
       const player = engine.player;
@@ -106,7 +120,7 @@ export class GameMaster {
       const gestures = menu
         .filter((o) => o.act.verb === 'gesto' && o.act.target && player)
         .map((o) => `{${player!.id}:${o.act.target}${o.act.other ? `>${o.act.other}` : ''}}`);
-      await this.runTurn(engine, turnMessage(brief, input, marked), this.opts.effortTurn ?? 'low', verified, emit, changes, gestures, false, before);
+      await this.runTurn(engine, turnMessage(brief, input, marked, decided), this.opts.effortTurn ?? 'low', verified, emit, changes, gestures, false, before);
     });
   }
 
@@ -115,23 +129,44 @@ export class GameMaster {
    * passar por uma porta conhecida, ou perguntar a alguém algo que uma fala pronta dele já responde.
    * O leitor (o Jev) escolhe entre as opções do motor; na dúvida, ou se o motor recusar, segue o turno.
    */
-  private async tryFree(engine: GameEngine, input: string, emit: Emit): Promise<boolean> {
+  private async tryFree(engine: GameEngine, input: string, emit: Emit): Promise<{ done: boolean; addressee: string | null }> {
     emit({ type: 'status', text: 'Lendo o que você escreveu…' });
     try {
-      const { plan, usages } = await this.opts.reader!.read(engine, input);
+      const { plan, usages, addressee } = await this.opts.reader!.read(engine, input);
       for (const usage of usages) emit({ type: 'usage', usage });
-      if (!plan) return false;
-      const outcome = plan.kind === 'act' ? freeAct(engine, plan.act) : answer(engine, plan.npcId, plan.line, plan.said);
+      if (!plan) return { done: false, addressee: addressee ?? null };
+      const hooks = this.opts.decider?.hooks(engine, (usage) => emit({ type: 'usage', usage })) ?? {};
+      const outcome = plan.kind === 'act' ? await freeAct(engine, plan.act, hooks) : await answer(engine, plan.npcId, plan.line, plan.said, hooks);
       // O que o motor fez antes de recusar (ir até lá) aconteceu e fica, e o mestre continua dali.
       if (outcome.entries.length) {
         emit({ type: 'free', entries: outcome.entries });
         emit({ type: 'state', world: engine.snapshot() });
       }
-      return outcome.ok;
+      return { done: outcome.ok, addressee: null };
     } catch (err) {
       emit({ type: 'status', text: `Não deu para resolver sem o mestre (${err instanceof Error ? err.message : String(err)}).` });
-      return false;
+      return { done: false, addressee: null };
     }
+  }
+
+  /** A decisão do Jev para quem o jogador procura; se ele falhar, o mestre decide sozinho. */
+  private async react(engine: GameEngine, input: string, npcId: string, emit: Emit): Promise<Reaction | null> {
+    try {
+      return await this.opts.decider!.react(engine, input, npcId, (usage) => emit({ type: 'usage', usage }));
+    } catch (err) {
+      emit({ type: 'status', text: `Sem a decisão do Jev para quem você procura (${err instanceof Error ? err.message : String(err)}); o mestre decide.` });
+      return null;
+    }
+  }
+
+  /** Registra o fato que a pessoa conta e devolve a decisão como o mestre a lê na mensagem do turno. */
+  private applyReaction(engine: GameEngine, r: Reaction): string[] {
+    const npc = engine.state.characters[r.npcId];
+    const me = engine.player;
+    if (!npc || !me) return [];
+    if (r.fact) engine.shareKnowledge({ fact_id: r.fact.id, to: [me.id], from: npc.id, how: 'contou na conversa' });
+    const tells = r.fact ? ` e conta ao jogador ${r.fact.id} («${r.fact.text.slice(0, 200)}»)` : r.how === 'coopera' ? ', sem contar nada que o jogador ainda não saiba' : '';
+    return [`${npc.name} ${REACTION_TEXT[r.how]}${tells}.`];
   }
 
   /** Se a API cair no meio do turno, o mundo volta ao que era antes dele. */

@@ -20,6 +20,8 @@ export type ReadPlan =
 export interface ReadResult {
   plan: ReadPlan | null;
   usages: Usage[];
+  /** Com quem o jogador fala, quando fala com uma pessoa só e o grid não resolve: o Jev decide a reação dela. */
+  addressee?: string;
 }
 
 export interface InputReader {
@@ -91,7 +93,7 @@ export class JevReader implements InputReader {
       const npc = people.find((c) => keyOf(c.id) === chosen(a.com_quem, CONFIDENT));
       const other = action && !(action.act.kind === 'walk' && 'near' in action.act && action.act.near === npc?.id);
       const line = npc ? pickLine(npc, a[`resposta_${keyOf(npc.id)}`]) : null;
-      if (!npc || !line || other || (a.uma?.type === 'noul' && a.uma.noul < 0.5)) return { plan: null, usages };
+      if (!npc || !line || other || (a.uma?.type === 'noul' && a.uma.noul < 0.5)) return { plan: null, usages, ...(npc ? { addressee: npc.id } : {}) };
       const quoted = segments
         .filter((s) => s.kind === 'fala')
         .map((s) => s.text)

@@ -69,10 +69,10 @@ describe('o Jev lê o texto do jogador', () => {
 });
 
 describe('a resposta no grid', () => {
-  it('o jogador chega perto, diz o que escreveu, e quem responde fala a linha escolhida', () => {
+  it('o jogador chega perto, diz o que escreveu, e quem responde fala a linha escolhida', async () => {
     const e = room();
     const line = e.state.characters.yuki.lines!.turn[0];
-    const r = answer(e, 'yuki', line, 'Yuki, quando é a prova?');
+    const r = await answer(e, 'yuki', line, 'Yuki, quando é a prova?');
     expect(r.ok).toBe(true);
     expect(r.entries.filter((x) => x.startsWith('@'))).toEqual(['@kenji[>yuki]: Yuki, quando é a prova?', '@yuki[>kenji]: A prova é amanhã, professor.']);
     // Respondeu com a próxima fala do turno: a conversa anda.

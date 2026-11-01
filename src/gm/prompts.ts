@@ -157,14 +157,14 @@ Monte o mundo inicial com as tools, nesta ordem:
 Depois narre a cena de abertura, situando o jogador, e termine com as três ações (linhas \`>> \`).`;
 }
 
-export function turnMessage(brief: string, input: string, marked: string[] = []): string {
+export function turnMessage(brief: string, input: string, marked: string[] = [], decided: string[] = []): string {
   return `${brief}
 
 ---
 Ação do jogador:
 """
 ${input}
-"""${marked.length ? `\nComo o jogador marcou:\n${marked.join('\n')}` : ''}
+"""${marked.length ? `\nComo o jogador marcou:\n${marked.join('\n')}` : ''}${decided.length ? `\n\nDecidido pelo motor (narre assim; o fato que a pessoa conta, o motor já registrou):\n${decided.map((d) => `- ${d}`).join('\n')}` : ''}
 
 Antes de narrar: cada um em cena, inclusive quem sofreu a ação, reage do jeito dele, pelo papel, pelo que pensa, pelo que quer e, acima de tudo, pelo que sente por quem agiu e por quem sofreu; quem ameaçou cumpre se o jogador insistiu; set_feelings registra o sentimento que faltava e o que o turno mudou; set_lines dá a quem está em cena o que diria se o jogador puxar conversa.`;
 }

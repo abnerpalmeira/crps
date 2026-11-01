@@ -66,6 +66,7 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 | `CRPS_EFFORT_TURN` | `low` | Esforço nos turnos; suba se o mestre esquecer de chamar tools |
 | `TYPESAFE_API_KEY` | | Chave do Jev, que confere a narração; sem ela, quem confere é o modelo |
 | `CRPS_READ` | `1` | `0` desliga a leitura do texto do jogador pelo Jev (tudo o que ele escreve vai ao mestre) |
+| `CRPS_DECIDE` | `1` | `0` desliga as decisões do Jev pelos NPCs (fala que cabe, iniciativa, reação no turno) |
 | `CRPS_VERIFY` | `jev` | `jev`: o código e o Jev conferem, com o modelo de reserva; `llm`: só o modelo; `ambos`: os dois, com o jogo seguindo o modelo e os vereditos em `conferencias.jsonl`; `0` desliga |
 | `CRPS_PROVIDER` | `claude` | `offline` usa o roteiro fixo |
 | `CRPS_SAVES` | `saves` | Pasta dos saves |
@@ -206,6 +207,7 @@ src/gm/       o mestre
   gm.ts         loop do turno, eventos, conferência e rollback se a API falhar
   checker.ts    quem confere a narração: o código e o Jev, o modelo, ou os dois em paralelo
   reader.ts     o Jev lê o texto do jogador e resolve no grid o que não precisa do mestre
+  decider.ts    o Jev decide pelos NPCs: a fala que cabe, a iniciativa e a reação no turno
   jev.ts        cliente do Jev (TypeSafe), que responde perguntas tipadas
   provider.ts   interface do provedor de modelo
   claude.ts     implementação com o SDK da Anthropic
@@ -365,8 +367,14 @@ Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e
   O segredo vai cochichado (`whisper`): a pessoa chega perto, e só o jogador ouve e fica sabendo.
 - **Iniciativa:** como em Persona, alguns NPCs não esperam. Com `initiative` "vem", depois de uma
   ação livre do jogador o NPC vai até ele e diz a fala do turno; com "chama", diz de onde está (de
-  longe, gritando). Um por ação, o mais perto, e só enquanto tem fala nova. Quem não tem iniciativa
-  só fala se o jogador puxar conversa ou provocar.
+  longe, gritando). Um por ação, e só enquanto tem fala nova. O mestre marca quem quer falar, e o
+  Jev diz se é a hora, pelo que acabou de acontecer (sem o Jev, vale o mais perto). Quem acabou de
+  falar com o jogador não emenda outra fala. Quem não tem iniciativa só fala se o jogador puxar
+  conversa ou provocar.
+- **A fala que cabe:** em "Conversar", o Jev escolhe entre as falas da pessoa a que cabe agora.
+  Ela não repete o que a pessoa já disse e não diz em voz alta o que quem está perto não deve
+  ouvir. Se nenhuma cabe, a conversa fica com o mestre. Sem o Jev, vale a fila: as do turno na
+  ordem, depois as gerais.
 - **Continuidade:** cada passo, ação e fala ouvida entram no log como ação livre, aparecem no
   registro depois da narração e chegam ao próximo turno do mestre em "Últimos acontecimentos",
   marcados como "Livre".
@@ -818,7 +826,7 @@ Falta:
 ### O mestre com o Jev
 
 A ideia é o código manter as regras e montar as opções, o Jev decidir entre elas, e um modelo de
-texto só escrever. Duas fases estão feitas:
+texto só escrever. Três fases estão feitas:
 
 1. **A conferência** (veja [Conferência com o Jev](#conferência-com-o-jev)).
 2. **O texto do jogador sem o mestre** ([reader.ts](src/gm/reader.ts)). Antes do turno, um pedido ao
@@ -834,12 +842,23 @@ texto só escrever. Duas fases estão feitas:
    Cada leitura custou uns US$ 0,00013 e levou uns 0,2 s. Um pedido de chá não foi tomado por uma
    fala que fala de chá.
 
-As próximas, uma de cada vez, depois de medir a anterior:
+3. **Os NPCs decididos pelo Jev** ([decider.ts](src/gm/decider.ts)):
+   - **No grid:** o Jev escolhe a fala que cabe em "Conversar" e diz se é a hora de quem tem
+     iniciativa.
+   - **No turno do mestre:** quando o jogador fala com alguém e nenhuma fala pronta responde, o Jev
+     decide como a pessoa reage (coopera, desconversa, mente, recusa ou se irrita) e qual fato ela
+     conta, entre os que sabe e o jogador não. O motor registra o fato antes. O mestre recebe a
+     decisão na mensagem do turno, em "Decidido pelo motor", e narra assim.
 
-- **NPCs decididos pelo Jev:** a iniciativa vira sim ou não por NPC ("viria agora?"), a fala pronta
-  é escolhida entre as dele, e no turno do mestre o Jev decide como cada um reage e o que conta,
-  entre os fatos que ele sabe. Quem acabou de falar com o jogador já não emenda outra fala pela
-  iniciativa.
+   Na avaliação, nos mundos do hotel e do restaurante, foram 7 de 7, a uns US$ 0,00004 e 0,2 s por
+   decisão:
+   - O barman não repetiu o que já tinha dito.
+   - Com o suspeito ao lado, ele ofereceu champanhe em vez de acusar.
+   - O ladrão e o inspetor disfarçado desconversaram sem revelar nada.
+   - O barman, perguntado, contou a pista certa.
+
+A última, depois de medir as anteriores:
+
 - **O escritor:** o turno comum vira motor → Jev → motor → uma chamada sem tools que escreve a
   narração, as falas e as três ações → conferência. O loop com as tools fica para criar o mundo e
   para o que o Jev não decide com confiança, e é ele que custará moedas.

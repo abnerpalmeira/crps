@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { GameEngine } from '../engine/engine';
-import { freeAct, freeActSchema } from '../engine/free';
+import { freeActSchema } from '../engine/free';
 import type { Emit, GmEvent } from '../gm/gm';
 import { MODEL_CHOICES, modelAvailable, modelChoice, serviceOf } from '../gm/models';
 import { CostMeter, costEvent, describeCost, priceOf } from '../gm/pricing';
@@ -32,6 +32,8 @@ const models = new ModelService(catalog);
 let gm = createGameMaster({ model: store.loadSettings().model });
 let engine: GameEngine | null = store.load();
 let busy = false;
+/** Uma ação livre em curso (ela pode esperar o Jev): outra ação ou um turno esperam. */
+let acting = false;
 
 function json(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -140,7 +142,7 @@ const server = createServer(async (req, res) => {
     if (pathname === '/api/new' && req.method === 'POST') {
       const premise = await readText(req, 'premise');
       if (!premise) return json(res, 400, { error: 'Escreva a premissa da campanha.' });
-      if (busy) return json(res, 409, { error: 'O mestre ainda está narrando.' });
+      if (busy || acting) return json(res, 409, { error: 'O mestre ainda está narrando.' });
       busy = true;
       // Se a criação falhar (créditos, login), a campanha anterior continua sendo a atual.
       const previous = engine;
@@ -161,21 +163,29 @@ const server = createServer(async (req, res) => {
       const input = await readText(req, 'input');
       if (!input) return json(res, 400, { error: 'Escreva sua ação.' });
       if (!engine) return json(res, 400, { error: 'Nenhuma campanha em andamento.' });
-      if (busy) return json(res, 409, { error: 'O mestre ainda está narrando.' });
+      if (busy || acting) return json(res, 409, { error: 'O mestre ainda está narrando.' });
       busy = true;
       const current = engine;
       await streamTurn(res, (emit) => gm.play(current, input, emit));
       return;
     }
     if (pathname === '/api/act' && req.method === 'POST') {
-      // Ação livre no grid (andar, conversar): o motor resolve na hora, sem o mestre e sem custo.
+      // Ação livre no grid (andar, conversar): o motor resolve na hora, sem o mestre; o Jev escolhe a
+      // fala que cabe e quem toma a iniciativa.
       if (!engine) return json(res, 400, { error: 'Nenhuma campanha em andamento.' });
       if (busy) return json(res, 409, { error: 'O mestre ainda está narrando.' });
+      if (acting) return json(res, 409, { error: 'Espere a ação anterior terminar.' });
       const act = freeActSchema.safeParse(await readJson(req));
       if (!act.success) return json(res, 400, { error: 'Ação livre inválida.' });
-      const outcome = freeAct(engine, act.data);
-      if (outcome.entries.length) store.save(engine);
-      return json(res, 200, { ...outcome, world: engine.snapshot() });
+      acting = true;
+      try {
+        const current = engine;
+        const { usages: _usages, ...outcome } = await gm.free(current, act.data);
+        if (outcome.entries.length) store.save(current);
+        return json(res, 200, { ...outcome, world: current.snapshot() });
+      } finally {
+        acting = false;
+      }
     }
     if (pathname === '/api/models/meta' && req.method === 'GET') {
       const params = new URL(req.url ?? '/', 'http://localhost').searchParams;
