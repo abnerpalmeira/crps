@@ -857,6 +857,14 @@ texto só escrever. Três fases estão feitas:
    - O ladrão e o inspetor disfarçado desconversaram sem revelar nada.
    - O barman, perguntado, contou a pista certa.
 
+   A reação e o fato contado valem pela probabilidade da opção mais provável (0,45 e 0,55), e não
+   pela confiança do Jev, que fica baixa mesmo com a resposta clara quando há poucas opções.
+
+   Num turno real com o DeepSeek, o jogador perguntou à Hana se as reservas estavam esgotadas.
+   Nenhuma fala pronta respondia, e o Jev decidiu que ela cooperava e contava o aviso de esgotado.
+   O mestre narrou exatamente isso. A conferência pegou o inspetor, que ouviu do salão sem
+   registro, e o mestre corrigiu. O turno levou 28 s, por US$ 0,027.
+
 A última, depois de medir as anteriores:
 
 - **O escritor:** o turno comum vira motor → Jev → motor → uma chamada sem tools que escreve a

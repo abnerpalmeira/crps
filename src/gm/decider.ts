@@ -3,7 +3,7 @@ import type { FreeHooks } from '../engine/free';
 import { nextLine } from '../engine/lines';
 import { distanceBetween, knowsName, strangerLabel } from '../engine/perception';
 import type { Character, Fact, ReadyLine } from '../engine/types';
-import { chosen, type JevClient } from './jev';
+import type { JevAnswer, JevClient } from './jev';
 import type { Usage } from './provider';
 
 /**
@@ -38,12 +38,20 @@ export const REACTION_TEXT: Record<ReactionKind, string> = {
 };
 
 /**
- * Iniciativa só com 0,65 ou mais; o fato contado, com confiança de 0,6. A reação vale a partir de
- * 0,4: a mais provável já basta, e sem ela o mestre decide sozinho, como antes.
+ * Iniciativa só com 0,65 ou mais. A reação e o fato contado vão pela probabilidade da opção mais
+ * provável (0,45 e 0,55), e não pela confiança do Jev, que fica baixa mesmo com a resposta clara
+ * quando há poucas opções. Sem decisão, o mestre decide sozinho, como antes.
  */
 const COMES = 0.65;
-const DECIDED = 0.4;
-const TELLS = 0.6;
+const DECIDED = 0.45;
+const TELLS = 0.55;
+
+/** A opção mais provável de uma escolha, se a probabilidade dela chega a `min`. */
+function likeliest(answer: JevAnswer | undefined, min: number): string | null {
+  if (answer?.type !== 'choice') return null;
+  const [choice, p] = Object.entries(answer.probabilities).sort((a, b) => b[1] - a[1])[0] ?? [];
+  return choice && p >= min ? choice : null;
+}
 
 const keyOf = (s: string) => s.replace(/[^a-zA-Z0-9_]/g, '_');
 const short = (text: string, max = 300) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -186,9 +194,9 @@ export class JevDecider implements NpcDecider {
       },
     );
     onUsage(r.usage);
-    const how = chosen(r.answers.como, DECIDED) as ReactionKind | null;
+    const how = likeliest(r.answers.como, DECIDED) as ReactionKind | null;
     if (!how || !HOW[how]) return null;
-    const pick = chosen(r.answers.conta, TELLS);
+    const pick = likeliest(r.answers.conta, TELLS);
     // Quem desconversa, mente ou recusa não conta um fato de verdade.
     const fact = pick && pick !== 'nada' && (how === 'coopera' || how === 'se_irrita') ? (tellable.find((f) => keyOf(f.id) === pick) ?? null) : null;
     return { npcId, how, fact };
