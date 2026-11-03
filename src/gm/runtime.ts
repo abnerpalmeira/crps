@@ -126,6 +126,8 @@ export function createGameMaster(opts: { model?: string } = {}): GameMaster {
     reader: isOffline() || process.env.CRPS_READ === '0' ? undefined : new JevReader(new JevClient()),
     // O Jev decide pelos NPCs: a fala que cabe, quem toma a iniciativa e a reação no turno (CRPS_DECIDE=0 desliga).
     decider: isOffline() || process.env.CRPS_DECIDE === '0' ? undefined : new JevDecider(new JevClient()),
+    // A conversa com a reação decidida vai ao escritor, numa chamada sem tools (CRPS_WRITE=0 desliga).
+    write: process.env.CRPS_WRITE !== '0',
     system: (world, setup) => systemPrompt(!looks ? null : setup ? [] : eraLooks(world.era)),
   });
 }

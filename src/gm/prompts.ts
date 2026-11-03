@@ -16,7 +16,7 @@ const NOTES: Record<string, string> = {
 };
 const listed = (ids: string[]) => ids.map((id) => (NOTES[id] ? `${id} (${NOTES[id]})` : id)).join(', ');
 const POSE_LIST = listed(POSE_IDS);
-const GESTURE_LIST = listed(GESTURE_IDS);
+export const GESTURE_LIST = listed(GESTURE_IDS);
 
 export const SYSTEM_PROMPT = `Você é o Mestre do CRPS (Computerized Role-Playing System), um RPG narrado por IA feito para qualquer pessoa jogar.
 

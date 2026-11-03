@@ -1,4 +1,5 @@
-import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, StepStop, Usage, Verdict } from './provider';
+import { z } from 'zod';
+import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, StepStop, Usage, Verdict, WriteOptions, WriteResult } from './provider';
 
 /**
  * Provedor compatível com a API de chat da OpenAI (Venice e outros serviços): POST
@@ -81,6 +82,34 @@ export class OpenAICompatibleProvider implements ModelProvider {
       console.warn(`[crps] veredito ilegível de ${this.label} (fim: ${data.choices?.[0]?.finish_reason ?? '?'}): ${content.slice(0, 200) || '(vazio)'}`);
       return { verdict: { consistent: true, issues: [] }, usage };
     }
+  }
+
+  /** O escritor: uma chamada sem tools, com a resposta no esquema estrito; o que vier fora dele é null. */
+  async write(opts: WriteOptions): Promise<WriteResult> {
+    const model = this.opts.model;
+    const data = (await (
+      await this.post({
+        model,
+        messages: [
+          { role: 'system', content: opts.system },
+          { role: 'user', content: opts.prompt },
+        ],
+        max_completion_tokens: this.maxTokens,
+        reasoning_effort: opts.effort,
+        response_format: { type: 'json_schema', json_schema: { name: opts.name, strict: true, schema: strictSchema(opts.schema) } },
+        prompt_cache_key: `crps-${fnv(opts.system)}`,
+      })
+    ).json()) as { choices?: { finish_reason?: string; message?: { content?: string | null } }[]; usage?: RawUsage };
+    const usage = this.usage(model, data.usage);
+    const content = data.choices?.[0]?.message?.content ?? '';
+    try {
+      const parsed = opts.schema.safeParse(JSON.parse(unfence(stripThinking(content))));
+      if (parsed.success) return { data: parsed.data, usage };
+    } catch {
+      // JSON quebrado: segue para o aviso
+    }
+    console.warn(`[crps] resposta do escritor fora do esquema em ${this.label} (fim: ${data.choices?.[0]?.finish_reason ?? '?'}): ${content.slice(0, 200) || '(vazio)'}`);
+    return { data: null, usage };
   }
 
   /** POST no endpoint de chat; erro do serviço sobe com a mensagem dele. */
@@ -310,6 +339,22 @@ function wants(schema: JsonSchema, kind: 'array' | 'object'): boolean {
 /** Raciocínio que escapou para o texto, entre <think> e </think>, não é narração. */
 function stripThinking(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trimStart();
+}
+
+/** O esquema da resposta como o modo estrito pede: o zod já fecha os objetos e exige todos os campos; sai só o ruído. */
+function strictSchema(schema: z.ZodType): Record<string, unknown> {
+  const js = z.toJSONSchema(schema, { io: 'output' }) as Record<string, unknown>;
+  delete js.$schema;
+  const noise = (key: string, value: unknown) => (key === 'minimum' || key === 'maximum') && Math.abs(Number(value)) === Number.MAX_SAFE_INTEGER;
+  return JSON.parse(JSON.stringify(js, (key, value) => (noise(key, value) ? undefined : value)));
+}
+
+/** JSON entre cercas de código (```json … ```), como alguns modelos mandam mesmo com o esquema. */
+function unfence(text: string): string {
+  return text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '');
 }
 
 function mapStop(finish: string | null, hasTools: boolean): StepStop {

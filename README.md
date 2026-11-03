@@ -67,6 +67,7 @@ A campanha atual fica em `saves/current.json`. Começar uma nova arquiva a anter
 | `TYPESAFE_API_KEY` | | Chave do Jev, que confere a narração; sem ela, quem confere é o modelo |
 | `CRPS_READ` | `1` | `0` desliga a leitura do texto do jogador pelo Jev (tudo o que ele escreve vai ao mestre) |
 | `CRPS_DECIDE` | `1` | `0` desliga as decisões do Jev pelos NPCs (fala que cabe, iniciativa, reação no turno) |
+| `CRPS_WRITE` | `1` | `0` desliga o escritor: a conversa com a reação decidida vai ao mestre com as tools |
 | `CRPS_VERIFY` | `jev` | `jev`: o código e o Jev conferem, com o modelo de reserva; `llm`: só o modelo; `ambos`: os dois, com o jogo seguindo o modelo e os vereditos em `conferencias.jsonl`; `0` desliga |
 | `CRPS_PROVIDER` | `claude` | `offline` usa o roteiro fixo |
 | `CRPS_SAVES` | `saves` | Pasta dos saves |
@@ -208,6 +209,7 @@ src/gm/       o mestre
   checker.ts    quem confere a narração: o código e o Jev, o modelo, ou os dois em paralelo
   reader.ts     o Jev lê o texto do jogador e resolve no grid o que não precisa do mestre
   decider.ts    o Jev decide pelos NPCs: a fala que cabe, a iniciativa e a reação no turno
+  writer.ts     o escritor: o turno de conversa numa chamada sem tools, que o motor aplica
   jev.ts        cliente do Jev (TypeSafe), que responde perguntas tipadas
   provider.ts   interface do provedor de modelo
   claude.ts     implementação com o SDK da Anthropic
@@ -826,7 +828,7 @@ Falta:
 ### O mestre com o Jev
 
 A ideia é o código manter as regras e montar as opções, o Jev decidir entre elas, e um modelo de
-texto só escrever. Três fases estão feitas:
+texto só escrever. As quatro fases estão feitas:
 
 1. **A conferência** (veja [Conferência com o Jev](#conferência-com-o-jev)).
 2. **O texto do jogador sem o mestre** ([reader.ts](src/gm/reader.ts)). Antes do turno, um pedido ao
@@ -865,11 +867,55 @@ texto só escrever. Três fases estão feitas:
    O mestre narrou exatamente isso. A conferência pegou o inspetor, que ouviu do salão sem
    registro, e o mestre corrigiu. O turno levou 28 s, por US$ 0,027.
 
-A última, depois de medir as anteriores:
+4. **O escritor** ([writer.ts](src/gm/writer.ts)). Quando o jogador só conversa com alguém e nenhuma
+   fala pronta responde, o turno não passa pelo mestre com as tools:
+   - **O leitor marca a conversa.** No mesmo pedido da leitura, o Jev diz se o jogador faz algo
+     físico além de falar e de ir até a pessoa, e se pede a alguém que traga, entregue, abra ou
+     mova alguma coisa. Só com os dois "não" o turno vai ao escritor. Perguntar se ainda tem mesa
+     vai; pedir um chá, puxar uma cadeira ou pegar o caderno de alguém, não.
+   - **O motor prepara.** O Jev decide a reação e o fato contado, como na fase 3. Se a pessoa está
+     longe, o motor leva o jogador até ela, e o escritor fica sabendo.
+   - **Uma chamada sem tools.** O escritor recebe um prompt curto, o resumo e o decidido. O prompt
+     tem uns 6 mil caracteres; o mestre manda 21 mil de regras e 50 mil de esquemas das tools. Ele
+     devolve um JSON: a narração, as três ações, os fatos novos, quem soube de quê, quem se
+     apresentou, os sentimentos, os pensamentos, as falas prontas e os minutos que passaram.
+   - **O motor aplica pelas mesmas tools** (`add_fact`, `share_knowledge`, `introduce`,
+     `set_feelings`, `update_character`, `set_lines`, `advance_time`), com as mesmas validações. O
+     escritor não move ninguém, não cria nada e não rola teste: o que a cena pedir disso fica na
+     intenção, como alguém que promete ir buscar.
+   - **A mesma conferência.** As recusas do motor e os problemas da conferência voltam ao escritor
+     numa reescrita. Ela substitui a primeira resposta inteira: o mundo volta ao que era e recebe
+     só a nova.
+   - **Recaída.** Sem resposta válida, o turno vai ao mestre com as tools, com o mesmo decidido. O
+     mestre continua com as ações físicas, o combate, os lugares novos e a criação do mundo, e é
+     ele que custará moedas.
 
-- **O escritor:** o turno comum vira motor → Jev → motor → uma chamada sem tools que escreve a
-  narração, as falas e as três ações → conferência. O loop com as tools fica para criar o mundo e
-  para o que o Jev não decide com confiança, e é ele que custará moedas.
+   Para "chego na mesa 1 e pergunto…" achar com quem o jogador fala, cada pessoa vai ao Jev com os
+   móveis ao lado dela. A escolha pouco confiante também vale, se o jogador vai justamente até essa
+   pessoa ou até o móvel ao lado dela. Com 25 frases no restaurante, o leitor acertou 25, 25 e 24
+   em três rodadas, a uns US$ 0,00014 por leitura. A que errou ficou do lado seguro: foi ao mestre
+   completo, que custa mais e acerta.
+
+   Nos turnos reais com o DeepSeek, no restaurante:
+   - **Pelo escritor**, três turnos:
+
+     | Tempo | Custo | O que houve |
+     |---|---|---|
+     | 14,7 s | US$ 0,008 | A conferência pegou um gesto sem marca, e a reescrita corrigiu |
+     | 15,1 s | US$ 0,0066 | O inspetor desconversou, como o Jev decidiu, sem reescrita |
+     | 87,7 s | US$ 0,025 | A reescrita raciocinou 13 mil tokens e levou 71 s |
+
+   - **Pelo mestre completo**, um turno de 25,4 s por US$ 0,027. Era "Chego na mesa 1 e pergunto…",
+     antes do ajuste no leitor que agora manda essa frase ao escritor.
+
+   O turno típico do escritor sai por um quarto do preço e em pouco mais da metade do tempo; uma
+   reescrita longa chega perto do custo do mestre. Sem raciocínio, o escritor respondeu em 5 s, mas
+   fez o jogador andar e inventou detalhes, então ele fica com `low`. Dois ajustes no prompt vieram
+   desses turnos:
+   - **Só o que a narração mostra.** Em `contados` e `sabem` entra só quem soube na cena. Ele chegou
+     a registrar o que uma fala pronta ainda ia contar.
+   - **As duas causas de reescrita mais comuns:** todo gesto da lista leva a marca, e o jogador
+     fala de onde está. Este ajuste ainda não foi medido.
 
 ### Outros
 

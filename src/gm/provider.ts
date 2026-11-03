@@ -1,3 +1,4 @@
+import type { z } from 'zod';
 import type { ToolSpec } from '../engine/tools';
 
 /**
@@ -55,9 +56,28 @@ export interface Verdict {
   issues: string[];
 }
 
+/** Um pedido de resposta estruturada, sem tools: o escritor manda o turno inteiro num JSON. */
+export interface WriteOptions {
+  system: string;
+  prompt: string;
+  /** Esquema da resposta: o provedor o passa ao modelo e valida o que voltar. */
+  schema: z.ZodType;
+  /** Nome do esquema, para os serviços que pedem um. */
+  name: string;
+  effort: Effort;
+}
+
+export interface WriteResult {
+  /** A resposta validada pelo esquema; null se veio fora dele ou o modelo recusou. */
+  data: unknown | null;
+  usage?: Usage;
+}
+
 export interface ModelProvider {
   readonly label: string;
   startSession(opts: SessionOptions): ModelSession;
   /** Juiz barato que compara narração e estado. */
   verify(prompt: string): Promise<{ verdict: Verdict; usage?: Usage }>;
+  /** Uma chamada só, sem tools, com a resposta no esquema pedido. Sem isso, não há escritor. */
+  write?(opts: WriteOptions): Promise<WriteResult>;
 }

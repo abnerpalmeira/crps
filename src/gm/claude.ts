@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
-import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, StepStop, Usage, Verdict } from './provider';
+import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, StepStop, Usage, Verdict, WriteOptions, WriteResult } from './provider';
 
 export const DEFAULT_MODEL = 'claude-haiku-5-5';
 export const DEFAULT_VERIFIER_MODEL = 'claude-haiku-5-5';
@@ -51,17 +51,44 @@ export class ClaudeProvider implements ModelProvider {
       output_config: { effort: 'low', format: zodOutputFormat(VerdictSchema) },
       messages: [{ role: 'user', content: prompt }],
     });
-    const usage: Usage = {
-      model: response.model,
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
-      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
-    };
+    const usage = usageOf(response);
     // Na dúvida o verificador não trava o jogo.
     if (response.stop_reason === 'refusal' || !response.parsed_output) return { verdict: { consistent: true, issues: [] }, usage };
     return { verdict: response.parsed_output, usage };
   }
+
+  /** O escritor: uma chamada sem tools, com a saída no esquema; lida aqui, para o custo contar mesmo quando vem fora dele. */
+  async write(opts: WriteOptions): Promise<WriteResult> {
+    const response = await this.client.messages.create({
+      model: this.model,
+      max_tokens: 16000,
+      system: opts.system,
+      output_config: { effort: opts.effort, format: zodOutputFormat(opts.schema) },
+      messages: [{ role: 'user', content: opts.prompt }],
+    });
+    const usage = usageOf(response);
+    if (response.stop_reason === 'refusal') return { data: null, usage };
+    const text = response.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
+    try {
+      const parsed = opts.schema.safeParse(JSON.parse(text));
+      return { data: parsed.success ? parsed.data : null, usage };
+    } catch {
+      return { data: null, usage };
+    }
+  }
+}
+
+type Counted = { model: string; usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null } };
+
+/** Uso no formato do motor, de uma resposta da API. */
+function usageOf(message: Counted): Usage {
+  return {
+    model: message.model,
+    inputTokens: message.usage.input_tokens,
+    outputTokens: message.usage.output_tokens,
+    cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
+  };
 }
 
 class ClaudeSession implements ModelSession {
@@ -105,13 +132,7 @@ class ClaudeSession implements ModelSession {
         continue;
       }
 
-      const usage: Usage = {
-        model: message.model,
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-        cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
-        cacheWriteTokens: message.usage.cache_creation_input_tokens ?? 0,
-      };
+      const usage = usageOf(message);
       if (message.stop_reason === 'refusal') {
         return { text: '', toolCalls: [], stop: 'refusal', refusalCategory: message.stop_details?.category ?? null, usage };
       }

@@ -45,7 +45,7 @@ export interface FreeHooks {
 }
 
 /** Até essa distância dá para conversar sem chegar mais perto. */
-const TALK_REACH = 2;
+export const TALK_REACH = 2;
 
 type Recorder = (text: string) => void;
 

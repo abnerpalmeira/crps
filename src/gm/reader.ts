@@ -3,7 +3,7 @@ import type { GameEngine } from '../engine/engine';
 import type { FreeAct } from '../engine/free';
 import { parsePlayerInput } from '../engine/input';
 import { perceptionOf, strangerLabel } from '../engine/perception';
-import type { Character, ReadyLine } from '../engine/types';
+import type { Character, Fixture, Location, ReadyLine } from '../engine/types';
 import { chosen, yesNo, type JevAnswer, type JevClient, type JevQuestion } from './jev';
 import type { Usage } from './provider';
 
@@ -22,6 +22,8 @@ export interface ReadResult {
   usages: Usage[];
   /** Com quem o jogador fala, quando fala com uma pessoa só e o grid não resolve: o Jev decide a reação dela. */
   addressee?: string;
+  /** O texto é só conversa com essa pessoa (ir até ela conta), sem pedir nada físico: o turno pode ir ao escritor. */
+  talk?: boolean;
 }
 
 export interface InputReader {
@@ -60,12 +62,28 @@ export class JevReader implements InputReader {
     const view = perceptionOf(world, me.id);
     const people = Object.values(world.characters).filter((c) => !c.isPlayer && c.pos && c.locationId === me.locationId && (view.recognize(c.id) || view.sight(c.id) === 'nitido'));
     const shown = (c: Character) => (view.recognize(c.id) ? c.name : strangerLabel(c));
+    // Onde cada um está, pelo móvel ao lado, com o rótulo do menu: "chego na mesa 1 e pergunto" é com quem está nela.
+    const loc = world.locations[me.locationId];
+    const placed = (c: Character) => {
+      const fixtures = besideOf(loc, c).map((f) => `${f.label} (${f.id.slice(loc.id.length + 1)})`);
+      return fixtures.length ? `${shown(c)}, ao lado de: ${fixtures.join(', ')}` : shown(c);
+    };
     const acts = freeActions(engine, people, shown);
-    const listeners = { ninguem: 'ninguém', varias: 'mais de uma pessoa, ou todos', ...Object.fromEntries(people.map((c) => [keyOf(c.id), shown(c)])) };
+    const listeners = { ninguem: 'ninguém', varias: 'mais de uma pessoa, ou todos', ...Object.fromEntries(people.map((c) => [keyOf(c.id), placed(c)])) };
     const questions: Record<string, JevQuestion> = {
       uma: { type: 'noul', instructions: 'Em `texto_do_jogador`, o jogador faz uma coisa só? Ir até alguém para falar com essa pessoa conta como uma coisa.' },
       fala: { type: 'noul', instructions: 'Em `texto_do_jogador`, o jogador diz algo em voz alta a alguém: fala, pergunta, pede, chama ou grita?' },
       direto: { type: 'noul', instructions: '`texto_do_jogador` traz as palavras exatas que o jogador diz, em discurso direto?' },
+      fisico: {
+        type: 'noul',
+        instructions:
+          'Em `texto_do_jogador`, o jogador faz algo físico além de falar e de ir até a pessoa com quem fala: muda de postura, vai para outro lugar, pega, dá, usa ou empunha um objeto, ou toca ou ataca alguém? Gestos como sorrir, acenar ou apontar não contam.',
+      },
+      pede_algo: {
+        type: 'noul',
+        instructions:
+          'Em `texto_do_jogador`, o jogador pede a alguém que traga, entregue, busque, abra, feche ou mova alguma coisa, ou que vá a algum lugar? Perguntar se algo existe ou está disponível não conta.',
+      },
       com_quem: { type: 'choice', instructions: 'Em `texto_do_jogador`, com quem o jogador fala?', criteria: listeners },
       acao: {
         type: 'choice',
@@ -90,10 +108,17 @@ export class JevReader implements InputReader {
     const action = pick && pick !== 'nenhuma' ? acts[Number(pick.slice(1))] : undefined;
     if (yesNo(a.fala, YES) === true) {
       // Fala: com uma pessoa, sem outra ação além de ir até ela, e com uma fala pronta que responde.
-      const npc = people.find((c) => keyOf(c.id) === chosen(a.com_quem, CONFIDENT));
-      const other = action && !(action.act.kind === 'walk' && 'near' in action.act && action.act.near === npc?.id);
+      // Ir até a pessoa, ou até o móvel ao lado dela, é ir falar com ela.
+      const goesTo = (c: Character) => action?.act.kind === 'walk' && 'near' in action.act && [c.id, ...besideOf(loc, c).map((f) => f.id)].includes(action.act.near);
+      // Com quem: a escolha confiante, ou a mais provável quando o jogador vai justamente até essa pessoa.
+      const npc = people.find((c) => keyOf(c.id) === chosen(a.com_quem, CONFIDENT)) ?? people.find((c) => keyOf(c.id) === chosen(a.com_quem, 0) && goesTo(c));
+      const other = action && !(npc && goesTo(npc));
       const line = npc ? pickLine(npc, a[`resposta_${keyOf(npc.id)}`]) : null;
-      if (!npc || !line || other || (a.uma?.type === 'noul' && a.uma.noul < 0.5)) return { plan: null, usages, ...(npc ? { addressee: npc.id } : {}) };
+      if (!npc || !line || other || (a.uma?.type === 'noul' && a.uma.noul < 0.5)) {
+        // Só conversa, sem pedir nada físico: o turno pode ir ao escritor, que não move ninguém.
+        const talk = !other && yesNo(a.fisico, YES) === false && yesNo(a.pede_algo, YES) === false;
+        return { plan: null, usages, ...(npc ? { addressee: npc.id, talk } : {}) };
+      }
       const quoted = segments
         .filter((s) => s.kind === 'fala')
         .map((s) => s.text)
@@ -105,6 +130,14 @@ export class JevReader implements InputReader {
     if (action && yesNo(a.uma, YES) === true) return { plan: { kind: 'act', act: action.act, label: action.label }, usages };
     return { plan: null, usages };
   }
+}
+
+/** Os móveis ao lado de alguém (a um tile, contando o tamanho de cada um), fora os assentos, até três: a mesa onde a pessoa está. */
+function besideOf(loc: Location, c: Character): Fixture[] {
+  if (!c.pos) return [];
+  const { x, y } = c.pos;
+  const gap = (f: Fixture) => Math.max(f.x - x, x - (f.x + f.w - 1), f.y - y, y - (f.y + f.h - 1), 0);
+  return loc.fixtures.filter((f) => !f.seat && gap(f) <= 1).slice(0, 3);
 }
 
 function linesOf(c: Character): ReadyLine[] {
