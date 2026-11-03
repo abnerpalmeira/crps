@@ -1,5 +1,61 @@
-import { isPassable } from './layout';
+import { isPassable, rectCenter } from './layout';
+import { chebyshev } from './text';
 import type { Location, Pos } from './types';
+
+/** Um retângulo do grid: um móvel (x, y, w, h) ou o tile de uma pessoa. */
+export interface GridRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Para onde vai quem anda até um tile: o próprio tile, se dá para ficar nele, ou o livre mais perto.
+ * `occupant` diz quem está em cada tile; o tile de quem anda conta como livre só como destino.
+ */
+export function walkGoal(loc: Location, p: Pos, occupant: (x: number, y: number) => string | null, moverId: string | null): Pos | null {
+  const who = occupant(p.x, p.y);
+  if (isPassable(loc, p.x, p.y) && (!who || who === moverId)) return p;
+  return nearestFree(loc, p, (x, y) => occupant(x, y) !== null);
+}
+
+/** O tile transitável e sem ninguém mais perto de p (pela maior das distâncias em x e em y). */
+export function nearestFree(loc: Location, p: Pos, blocked: (x: number, y: number) => boolean): Pos | null {
+  let best: Pos | null = null;
+  for (let y = 0; y < loc.height; y++) {
+    for (let x = 0; x < loc.width; x++) {
+      if (!isPassable(loc, x, y) || blocked(x, y)) continue;
+      if (!best || chebyshev(p, { x, y }) < chebyshev(p, best)) best = { x, y };
+    }
+  }
+  return best;
+}
+
+/**
+ * O tile livre ao lado de um móvel ou de uma pessoa, para quem vai até lá: o de caminho mais curto
+ * a partir de `from`; sem ponto de partida, ou sem caminho, o mais perto do centro do alvo.
+ */
+export function besideRect(loc: Location, target: GridRect, from: Pos | null, blocked: (x: number, y: number) => boolean): Pos | null {
+  const candidates: Pos[] = [];
+  for (let y = target.y - 1; y <= target.y + target.h; y++) {
+    for (let x = target.x - 1; x <= target.x + target.w; x++) {
+      const inside = x >= target.x && x < target.x + target.w && y >= target.y && y < target.y + target.h;
+      if (!inside && isPassable(loc, x, y) && !blocked(x, y)) candidates.push({ x, y });
+    }
+  }
+  if (!candidates.length) return null;
+  if (from) {
+    let best: { p: Pos; len: number } | null = null;
+    for (const p of candidates) {
+      const path = findPath(loc, from, p, blocked);
+      if (path && (!best || path.length < best.len)) best = { p, len: path.length };
+    }
+    if (best) return best.p;
+  }
+  const c = rectCenter(target);
+  return candidates.sort((a, b) => Math.hypot(a.x - c.x, a.y - c.y) - Math.hypot(b.x - c.x, b.y - c.y))[0];
+}
 
 /**
  * Caminho mais curto no grid de um local, por A*: o grid é um grafo em que cada tile liga com os

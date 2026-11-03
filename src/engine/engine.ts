@@ -3,7 +3,7 @@ import { modelCatalog, portable, sizeLabel, type CatalogItem } from './catalog';
 import { DECOR_IDS, ERAS, ERA_LOOK, PACK_ERA, outOfEra } from './eras';
 import { MAX_FRAMES, snapshotScene } from './frames';
 import { LEGEND, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, tileOf, type LocationSpec } from './layout';
-import { findPath as searchPath } from './path';
+import { besideRect, findPath as searchPath, nearestFree, walkGoal } from './path';
 import { OBJECT_LIBRARY, findObjectType, librarySummary, objectType, resolveType, typeChain } from './objects';
 import { DEFAULT_VISION, sightOf, type Sight } from './perception';
 import { parseDice, pickMany, randInt, rollDice } from './rng';
@@ -559,44 +559,20 @@ export class GameEngine {
     return searchPath(loc, from, to, (x, y) => !this.freeTile(loc, x, y, moverId));
   }
 
+  /** O tile livre ao lado de um móvel ou pessoa (path.ts, o mesmo que o 3D desenha no chão). */
   private nearestFreeAround(loc: Location, target: Rect, from: Pos | null, moverId: string | null): Pos | null {
-    const candidates: Pos[] = [];
-    for (let y = target.y - 1; y <= target.y + target.h; y++) {
-      for (let x = target.x - 1; x <= target.x + target.w; x++) {
-        const inside = x >= target.x && x < target.x + target.w && y >= target.y && y < target.y + target.h;
-        if (!inside && isPassable(loc, x, y) && this.freeTile(loc, x, y, moverId)) candidates.push({ x, y });
-      }
-    }
-    if (!candidates.length) return null;
-    if (from) {
-      let best: { p: Pos; len: number } | null = null;
-      for (const p of candidates) {
-        const path = this.findPath(loc, from, p, moverId);
-        if (path && (!best || path.length < best.len)) best = { p, len: path.length };
-      }
-      if (best) return best.p;
-    }
-    const c = rectCenter(target);
-    return candidates.sort((a, b) => Math.hypot(a.x - c.x, a.y - c.y) - Math.hypot(b.x - c.x, b.y - c.y))[0];
+    return besideRect(loc, target, from, (x, y) => !this.freeTile(loc, x, y, moverId));
   }
 
   /** Para onde vai um clique no chão: o próprio tile, se dá para ficar nele, ou o livre mais perto. */
   walkTarget(locationId: string, p: Pos, moverId: string): Pos | null {
     const loc = this.state.locations[locationId];
     if (!loc) return null;
-    if (isPassable(loc, p.x, p.y) && this.freeTile(loc, p.x, p.y, moverId)) return p;
-    return this.nearestFreePassable(loc, p);
+    return walkGoal(loc, p, (x, y) => this.characterAt(loc.id, x, y)?.id ?? null, moverId);
   }
 
   private nearestFreePassable(loc: Location, p: Pos): Pos | null {
-    let best: Pos | null = null;
-    for (let y = 0; y < loc.height; y++) {
-      for (let x = 0; x < loc.width; x++) {
-        if (!isPassable(loc, x, y) || !this.freeTile(loc, x, y, null)) continue;
-        if (!best || chebyshev(p, { x, y }) < chebyshev(p, best)) best = { x, y };
-      }
-    }
-    return best;
+    return nearestFree(loc, p, (x, y) => !this.freeTile(loc, x, y, null));
   }
 
   /** Retângulo ocupado por um móvel ou personagem (usado como alvo de "near"). */

@@ -350,6 +350,11 @@ Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e
   ou móvel. A rota desvia de quem está parado; sem outra saída, passa por essa pessoa. O 3D anda
   pelo mesmo caminho, tile a tile e virado para onde vai, em vez de deslizar reto até o destino.
   Quem senta do outro lado da sala se levanta antes de sair e senta quando chega.
+- **Antes de clicar:** o que está sob o mouse se destaca, seja o tile, o anel de uma pessoa ou a
+  caixa de um móvel ou item. Pontos laranja no chão mostram o caminho do jogador até onde ele
+  pararia, com a marca no tile de chegada: o próprio tile, ou o lado livre da pessoa ou do móvel.
+  Num tile onde não dá para ficar, o tile fica vermelho e o caminho vai ao livre mais perto. O
+  destino sai das mesmas funções que o motor usa no clique e em "Ir até" ([path.ts](src/engine/path.ts)).
 - **Escrever:** o que o jogador escreve também pode não precisar do mestre. O Jev lê o texto e
   escolhe entre as ações livres do menu naquela cena ("Vou até a Hana", "Vou para a cozinha",
   "Sento numa cadeira"), ou entre as falas prontas de quem o jogador procura ("Hana, ele é da

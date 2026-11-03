@@ -4,12 +4,12 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { GESTURES, GRIPS, POSES, bodyPose, clipFor, gripOf, handsOf, mainGrip, variantIndex, type Act, type Grip, type Hand } from '../engine/body';
 import { ERA_DOORS, decorModel, locationLook } from '../engine/eras';
 import { isPassable, tileDef } from '../engine/layout';
-import { findPath } from '../engine/path';
+import { besideRect, findPath, walkGoal, type GridRect } from '../engine/path';
 import { lightSources } from '../engine/light';
 import { hasNews } from '../engine/lines';
 import { typeChain } from '../engine/objects';
 import { lifeStatId, perceptionOf, strangerLabel, visionOf } from '../engine/perception';
-import type { Character, Fixture, Item, Location, ObjectType, WorldState } from '../engine/types';
+import type { Character, Fixture, Item, Location, ObjectType, Pos, WorldState } from '../engine/types';
 import { arrange, type Rect, type Spot } from './arrange';
 import { decorSpots, type DecorSpot } from './dressing';
 import { capitalize } from './format';
@@ -76,6 +76,9 @@ export interface Pick {
   id: string;
 }
 
+/** O que está sob o mouse: uma pessoa, um móvel, um item ou um tile do chão. */
+type Target = Pick | { kind: 'tile'; x: number; y: number };
+
 interface Actor {
   obj: THREE.Group;
   label: CSS2DObject;
@@ -136,6 +139,34 @@ interface WallPart {
 }
 
 const PLAYER_COLOR = '#f0b35a';
+/** Destaque do que está sob o mouse, e do tile onde não dá para ficar ou aonde não há caminho. */
+const HOVER_COLOR = '#9fd8ff';
+const BLOCKED_COLOR = '#ff7a6b';
+/** Pontos do caminho desenhado no chão: dois por tile. */
+const TRAIL_MAX = 400;
+
+/** Marca de um tile no chão: borda viva e miolo claro, na cor de cada uso (placeMark). */
+function tileMark(): THREE.Group {
+  const mark = new THREE.Group();
+  const fill = new THREE.Mesh(new THREE.PlaneGeometry(0.94, 0.94), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.2, depthWrite: false }));
+  // Anel de quatro lados começando em 45°: um quadrado vazado, com as bordas no grid.
+  const edge = new THREE.Mesh(
+    new THREE.RingGeometry(0.4 * Math.SQRT2, 0.47 * Math.SQRT2, 4, 1, Math.PI / 4),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.95, depthWrite: false }),
+  );
+  for (const part of [fill, edge]) {
+    part.rotation.x = -Math.PI / 2;
+    mark.add(part);
+  }
+  mark.visible = false;
+  return mark;
+}
+
+function placeMark(mark: THREE.Group, p: Pos, color: string, y: number): void {
+  mark.position.set(p.x, y, p.y);
+  for (const part of mark.children) ((part as THREE.Mesh).material as THREE.MeshBasicMaterial).color.set(color);
+  mark.visible = true;
+}
 
 const EXIT_ICON: Partial<Record<Fixture['kind'], string>> = { door: '🚪', elevator: '🛗', stairs: '🪜' };
 
@@ -205,6 +236,17 @@ export class WorldView {
   private selected: Pick | null = null;
   private selectionRing = playerRing('#ffffff');
   private selectionBox: THREE.BoxHelper | null = null;
+  /** O que está sob o mouse, destacado, com o caminho do jogador até lá desenhado no chão. */
+  private hovered: Target | null = null;
+  private readonly hoverMark = tileMark();
+  private readonly goalMark = tileMark();
+  private readonly hoverRing = playerRing(HOVER_COLOR);
+  private hoverBox: THREE.BoxHelper | null = null;
+  private readonly trail = new THREE.InstancedMesh(
+    new THREE.CircleGeometry(0.07, 12).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: PLAYER_COLOR, transparent: true, opacity: 0.9, depthWrite: false }),
+    TRAIL_MAX,
+  );
   private pressed = { x: 0, y: 0 };
 
   constructor(private readonly host: HTMLElement) {
@@ -239,6 +281,11 @@ export class WorldView {
     this.scene.add(ground);
     this.selectionRing.visible = false;
     this.scene.add(this.selectionRing);
+    this.hoverRing.visible = false;
+    this.trail.count = 0;
+    // As matrizes dos pontos mudam a cada alvo: a esfera de recorte da geometria não vale para eles.
+    this.trail.frustumCulled = false;
+    this.scene.add(this.hoverRing, this.hoverMark, this.goalMark, this.trail);
 
     const canvas = this.renderer.domElement;
     canvas.addEventListener('pointerdown', (e) => (this.pressed = { x: e.clientX, y: e.clientY }));
@@ -251,7 +298,10 @@ export class WorldView {
     canvas.addEventListener('pointermove', (e) => {
       const pick = this.pickAt(e);
       canvas.style.cursor = !pick ? 'grab' : pick.kind === 'tile' ? 'cell' : 'pointer';
+      // Arrastando, a câmera gira: o destaque e o caminho voltam depois de soltar.
+      this.hover(e.buttons ? null : pick);
     });
+    canvas.addEventListener('pointerleave', () => this.hover(null));
     new ResizeObserver(() => this.resize()).observe(host);
     this.resize();
     this.renderer.setAnimationLoop(() => this.tick());
@@ -274,10 +324,14 @@ export class WorldView {
     this.syncItems(world, loc);
     this.syncLight(world, loc);
     if (this.selected && !this.exists(this.selected)) this.select(null);
+    // O jogador e quem está no caminho podem ter mudado de lugar: o caminho sob o mouse se refaz.
+    this.drawHover();
   }
 
   clear(): void {
     this.select(null);
+    this.hovered = null;
+    this.drawHover();
     this.buildRoom(null, null);
     this.roomKey = '';
   }
@@ -355,8 +409,91 @@ export class WorldView {
     return Boolean(this.room.getObjectByProperty('name', `fixture:${pick.id}`));
   }
 
+  /** O alvo sob o mouse; o destaque e o caminho só se refazem quando ele muda. */
+  private hover(target: Target | null): void {
+    const key = (t: Target | null) => (!t ? '' : t.kind === 'tile' ? `tile:${t.x},${t.y}` : `${t.kind}:${t.id}`);
+    if (key(target) === key(this.hovered)) return;
+    this.hovered = target;
+    this.drawHover();
+  }
+
+  /**
+   * Destaca o alvo sob o mouse (o tile, o anel de quem está ali, a caixa do móvel ou do item) e desenha
+   * o caminho do jogador até onde ele pararia, pelas regras do motor no clique e em "Ir até". O tile
+   * onde não dá para ficar, ou aonde não há caminho, fica vermelho, e a marca laranja diz onde o
+   * jogador para de fato.
+   */
+  private drawHover(): void {
+    this.hoverMark.visible = this.goalMark.visible = this.hoverRing.visible = false;
+    this.trail.count = 0;
+    if (this.hoverBox) {
+      this.scene.remove(this.hoverBox);
+      this.hoverBox.dispose();
+      this.hoverBox = null;
+    }
+    const t = this.hovered;
+    if (!t || !this.shown) return;
+    const { world, loc } = this.shown;
+    const at = new Map(Object.values(world.characters).flatMap((c) => (c.locationId === loc.id && c.pos ? [[`${c.pos.x},${c.pos.y}`, c.id] as const] : [])));
+    const occupant = (x: number, y: number) => at.get(`${x},${y}`) ?? null;
+    const me = world.playerId ? world.characters[world.playerId] : undefined;
+    const from = me?.locationId === loc.id ? me.pos : null;
+    const goal = me && from ? this.goalOf(world, loc, me, from, t, occupant) : null;
+    const path = me && from && goal ? findPath(loc, from, goal, (x, y) => ![null, me.id].includes(occupant(x, y))) : null;
+    const walks = path !== null && path.length > 1;
+    if (t.kind === 'tile') {
+      const here = from?.x === t.x && from.y === t.y;
+      const reached = walks && goal!.x === t.x && goal!.y === t.y;
+      placeMark(this.hoverMark, t, reached ? PLAYER_COLOR : here || !from ? HOVER_COLOR : BLOCKED_COLOR, 0.008);
+    } else if (t.kind === 'character') {
+      this.hoverRing.visible = this.actors.has(t.id);
+    } else {
+      const obj = t.kind === 'item' ? this.items.get(t.id) : this.room.getObjectByProperty('name', `fixture:${t.id}`);
+      if (obj) {
+        this.hoverBox = new THREE.BoxHelper(obj, HOVER_COLOR);
+        this.scene.add(this.hoverBox);
+      }
+    }
+    if (!walks) return;
+    const end = path[path.length - 1];
+    if (t.kind !== 'tile' || end.x !== t.x || end.y !== t.y) placeMark(this.goalMark, end, PLAYER_COLOR, 0.01);
+    // Um ponto entre cada par de tiles e outro no centro de cada um, da saída até o destino, que já tem a marca.
+    const m = new THREE.Matrix4();
+    let n = 0;
+    for (let i = 1; i < path.length && n < TRAIL_MAX - 1; i++) {
+      const [a, b] = [path[i - 1], path[i]];
+      this.trail.setMatrixAt(n++, m.makeTranslation((a.x + b.x) / 2, 0.014, (a.y + b.y) / 2));
+      if (i < path.length - 1) this.trail.setMatrixAt(n++, m.makeTranslation(b.x, 0.014, b.y));
+    }
+    this.trail.count = n;
+    this.trail.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
+   * Onde o jogador para se for até o alvo: o tile, ou o livre mais perto dele; o lado livre do móvel ou
+   * da pessoa; e, para um item, o tile dele no chão ou o lado de quem o tem. Null se não houver.
+   */
+  private goalOf(world: WorldState, loc: Location, me: Character, from: Pos, t: Target, occupant: (x: number, y: number) => string | null): Pos | null {
+    const beside = (r: GridRect) => besideRect(loc, r, from, (x, y) => ![null, me.id].includes(occupant(x, y)));
+    const person = (id: string) => {
+      const c = world.characters[id];
+      return c?.pos && c.locationId === loc.id && c.id !== me.id ? beside({ ...c.pos, w: 1, h: 1 }) : null;
+    };
+    const fixture = (id: string) => {
+      const f = loc.fixtures.find((x) => x.id === id);
+      return f ? beside(f) : null;
+    };
+    if (t.kind === 'tile') return walkGoal(loc, t, occupant, me.id);
+    if (t.kind === 'character') return person(t.id);
+    if (t.kind === 'fixture') return fixture(t.id);
+    const h = world.items[t.id]?.holder;
+    if (!h) return null;
+    if (h.kind === 'ground') return h.locationId === loc.id ? walkGoal(loc, h, occupant, me.id) : null;
+    return h.kind === 'fixture' ? fixture(h.id) : person(h.id);
+  }
+
   /** O que está sob o ponteiro: uma pessoa, um móvel ou um item, ou o tile do chão (para andar). */
-  private pickAt(e: PointerEvent): Pick | { kind: 'tile'; x: number; y: number } | null {
+  private pickAt(e: PointerEvent): Target | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
@@ -1201,6 +1338,10 @@ export class WorldView {
     if (this.selected?.kind === 'character') {
       const a = this.actors.get(this.selected.id);
       if (a) this.selectionRing.position.set(a.obj.position.x, 0.015, a.obj.position.z);
+    }
+    if (this.hovered?.kind === 'character') {
+      const a = this.actors.get(this.hovered.id);
+      if (a) this.hoverRing.position.set(a.obj.position.x, 0.013, a.obj.position.z);
     }
     const view = new THREE.Vector2(this.camera.position.x - this.controls.target.x, this.camera.position.z - this.controls.target.z).normalize();
     for (const w of this.walls) {

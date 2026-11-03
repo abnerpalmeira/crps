@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { GameEngine } from '../src/engine/engine';
 import { isPassable } from '../src/engine/layout';
-import { findPath } from '../src/engine/path';
+import { besideRect, findPath, walkGoal } from '../src/engine/path';
 import { EXAMPLE_CLASSROOM } from '../src/engine/tools';
 import type { Location, Pos } from '../src/engine/types';
 
@@ -65,5 +65,40 @@ describe('caminho no grid (A*)', () => {
     const r = e.moveCharacter({ character_id: 'kenji', to: { x: 12, y: 1 } });
     expect(r.path!.some((p) => p.x === 6 && p.y === 1)).toBe(false);
     expect(e.state.characters.kenji.pos).toEqual({ x: 12, y: 1 });
+  });
+});
+
+describe('aonde vai quem anda (o mesmo no motor e no caminho que o 3D desenha)', () => {
+  /** Quem está em cada tile, como o 3D monta a partir do mundo. */
+  const people = (spots: Record<string, string>) => (x: number, y: number) => spots[`${x},${y}`] ?? null;
+
+  it('o tile clicado, se dá para ficar nele; senão, o livre mais perto', () => {
+    const { loc } = classroom();
+    const occupant = people({ '1,1': 'kenji', '3,3': 'ren' });
+    expect(walkGoal(loc, { x: 9, y: 3 }, occupant, 'kenji')).toEqual({ x: 9, y: 3 });
+    // O próprio tile de quem anda serve de destino; o de outra pessoa, não.
+    expect(walkGoal(loc, { x: 1, y: 1 }, occupant, 'kenji')).toEqual({ x: 1, y: 1 });
+    const beside = walkGoal(loc, { x: 3, y: 3 }, occupant, 'kenji')!;
+    expect(beside).not.toEqual({ x: 3, y: 3 });
+    expect(Math.max(Math.abs(beside.x - 3), Math.abs(beside.y - 3))).toBe(1);
+    // A mesa do professor não é chão: vai para o lado dela.
+    const desk = walkGoal(loc, { x: 6, y: 2 }, occupant, 'kenji')!;
+    expect(isPassable(loc, desk.x, desk.y)).toBe(true);
+    expect(Math.max(Math.abs(desk.x - 6), Math.abs(desk.y - 2))).toBe(1);
+  });
+
+  it('ao lado de um móvel ou pessoa, o tile livre de caminho mais curto', () => {
+    const { e, loc } = classroom();
+    const desk = loc.fixtures.find((f) => f.label === 'mesa do professor')!;
+    const blocked = (x: number, y: number) => x === 6 && y === 3;
+    // Vindo de baixo, para no lado de baixo da mesa, e não onde há alguém.
+    const p = besideRect(loc, desk, { x: 6, y: 7 }, blocked)!;
+    expect(p.y).toBe(3);
+    expect(p).not.toEqual({ x: 6, y: 3 });
+    // O motor escolhe o mesmo lugar ao andar até a mesa.
+    e.createCharacter({ name: 'Kenji Tanaka', role: 'professor', appearance: 'gravata', is_player: true, position: { x: 6, y: 7 } });
+    e.createCharacter({ name: 'Ren Ito', role: 'aluno', appearance: 'boné', position: { x: 6, y: 3 } });
+    e.moveCharacter({ character_id: 'kenji', to: { near: desk.id } });
+    expect(e.state.characters.kenji.pos).toEqual(p);
   });
 });
