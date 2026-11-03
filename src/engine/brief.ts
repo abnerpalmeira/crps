@@ -95,6 +95,11 @@ export function describePerk(perk: PerkDef): string {
       const factor = g.factor === undefined ? '' : g.factor === 0 ? ' anulado' : ` fator ${g.factor}`;
       return `sentido ${g.channel}${mult}${bonus}${factor}`;
     }
+    if (g.kind === 'move') {
+      const bonus = g.bonus ? `${g.bonus > 0 ? '+' : ''}${g.bonus} passos` : '';
+      const factor = g.factor === undefined ? '' : g.factor === 0 ? 'não anda' : `passos ×${g.factor}`;
+      return [bonus, factor].filter(Boolean).join(', ');
+    }
     const scope = [g.attribute && `de ${g.attribute}`, g.skill && `com ${g.skill}`].filter(Boolean).join(' ');
     return `${g.bonus > 0 ? '+' : ''}${g.bonus} em testes${scope ? ` ${scope}` : ''}`;
   });
@@ -140,6 +145,11 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       `Atributos: ${rules.attributes.map((a) => `${a.id} (${a.name}${vis(a.visibility)})`).join(', ')}. ` +
       `Recursos: ${rules.resources.map((r) => `${r.id} (máx ${r.max}${vis(r.visibility)}${r.core ? ', universal' : ''})`).join(', ') || 'nenhum'}. ` +
       `${rules.notes}`,
+  );
+  const move = rules.movement;
+  out.push(
+    `Passos por turno: ${move.steps}${move.attribute ? ` (+${move.perPoint ?? 1} por ponto de ${move.attribute})` : ''}; o jogador anda isso pelo grid sem você, ` +
+      'e perks e condições com move somam ou multiplicam.',
   );
   if (rules.perks.length) out.push(`Perks: ${rules.perks.map((perk) => `${perk.id} (${perk.name}: ${describePerk(perk)})`).join('; ')}.`);
   if (rules.conditions.length) out.push(`Condições: ${rules.conditions.map((d) => `${d.id} (${describePerk(d)})`).join('; ')}.`);

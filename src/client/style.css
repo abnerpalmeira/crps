@@ -182,7 +182,13 @@ button {
   font-size: 12px;
 }
 
-#hud-sense:empty {
+#hud-steps {
+  color: #f0b35a;
+  font-size: 12px;
+}
+
+#hud-sense:empty,
+#hud-steps:empty {
   display: none;
 }
 

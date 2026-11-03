@@ -350,11 +350,24 @@ Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e
   ou móvel. A rota desvia de quem está parado; sem outra saída, passa por essa pessoa. O 3D anda
   pelo mesmo caminho, tile a tile e virado para onde vai, em vez de deslizar reto até o destino.
   Quem senta do outro lado da sala se levanta antes de sair e senta quando chega.
+- **Passos por turno:** andar pelo grid não chama o Jev nem o mestre, mas tem limite.
+  - **De onde sai o número:** quando o turno do mestre fecha, o motor fixa quantos passos o jogador
+    tem até o próximo. O número vem do `movement` do ruleset (8 por padrão), mais o atributo que o
+    mestre escolher para somar passos. Perks e condições com o efeito `move` somam passos ou
+    multiplicam (ágil +2, perna ferida ×0,5, amarrado ×0).
+  - **O que gasta passo:** cada tile andado conta, inclusive o caminho até quem o jogador vai
+    conversar ou até o móvel em que vai sentar. Andar não dispara a iniciativa dos NPCs.
+  - **Quando faltam passos:** um clique além deles leva até onde dão. Acabados, o jogador escreve
+    ao mestre para seguir. O topo da tela mostra quantos restam.
+- **Fluido:** o personagem sai andando no clique, sem esperar o servidor, com o mesmo plano do
+  motor. Anda num caminho curto e corre a partir de 5 tiles. O passo da animação acompanha a
+  velocidade, para os pés não deslizarem.
 - **Antes de clicar:** o que está sob o mouse se destaca, seja o tile, o anel de uma pessoa ou a
-  caixa de um móvel ou item. Pontos laranja no chão mostram o caminho do jogador até onde ele
-  pararia, com a marca no tile de chegada: o próprio tile, ou o lado livre da pessoa ou do móvel.
-  Num tile onde não dá para ficar, o tile fica vermelho e o caminho vai ao livre mais perto. O
-  destino sai das mesmas funções que o motor usa no clique e em "Ir até" ([path.ts](src/engine/path.ts)).
+  caixa de um móvel ou item. Pontos laranja no chão mostram o caminho até onde os passos do turno
+  levam, com a marca no tile de chegada: o próprio tile, ou o lado livre da pessoa ou do móvel. O
+  resto do caminho fica em cinza. O tile aonde ele não chega fica vermelho: onde não dá para
+  ficar, sem caminho ou sem passos. O destino sai das mesmas funções que o motor usa no clique e
+  em "Ir até" ([path.ts](src/engine/path.ts)).
 - **Escrever:** o que o jogador escreve também pode não precisar do mestre. O Jev lê o texto e
   escolhe entre as ações livres do menu naquela cena ("Vou até a Hana", "Vou para a cozinha",
   "Sento numa cadeira"), ou entre as falas prontas de quem o jogador procura ("Hana, ele é da

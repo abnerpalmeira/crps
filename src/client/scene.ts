@@ -4,7 +4,9 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { GESTURES, GRIPS, POSES, bodyPose, clipFor, gripOf, handsOf, mainGrip, variantIndex, type Act, type Grip, type Hand } from '../engine/body';
 import { ERA_DOORS, decorModel, locationLook } from '../engine/eras';
 import { isPassable, tileDef } from '../engine/layout';
-import { besideRect, findPath, walkGoal, type GridRect } from '../engine/path';
+import { stepsFor } from '../engine/effects';
+import type { FreeAct } from '../engine/free';
+import { besideRect, findPath, stopWithin, walkGoal, type GridRect } from '../engine/path';
 import { lightSources } from '../engine/light';
 import { hasNews } from '../engine/lines';
 import { typeChain } from '../engine/objects';
@@ -87,8 +89,9 @@ interface Actor {
   seated: boolean;
   /** O caminho que falta andar: o centro de cada tile e, no fim, o lugar exato (o assento). */
   route: THREE.Vector3[];
-  /** Tiles por segundo no caminho atual, e para onde o corpo vira enquanto anda. */
+  /** Tiles por segundo no caminho atual, andando ou correndo, e para onde o corpo vira enquanto anda. */
   speed: number;
+  gait: Gait;
   walkYaw: number;
   /** Sentou do outro lado da sala: o corpo dobra quando chegar, não no caminho. */
   sitOnArrival?: boolean;
@@ -142,8 +145,18 @@ const PLAYER_COLOR = '#f0b35a';
 /** Destaque do que está sob o mouse, e do tile onde não dá para ficar ou aonde não há caminho. */
 const HOVER_COLOR = '#9fd8ff';
 const BLOCKED_COLOR = '#ff7a6b';
-/** Pontos do caminho desenhado no chão: dois por tile. */
+/** Pontos do caminho desenhado no chão: dois por tile. Além dos passos do turno, apagados. */
 const TRAIL_MAX = 400;
+const FAR_COLOR = '#8d939e';
+
+/**
+ * Andar e correr: a velocidade no chão (m/s; um tile é um metro) e a dos clipes da Synty medida pela
+ * raiz do esqueleto, para o passo do clipe acompanhar o deslocamento e os pés não deslizarem.
+ */
+const GAIT = { walk: { speed: 1.7, clip: 1.45 }, run: { speed: 3.3, clip: 2.7 } } as const;
+type Gait = keyof typeof GAIT;
+/** A partir de quantos tiles de caminho a pessoa corre em vez de andar. */
+const RUN_FROM = 5;
 
 /** Marca de um tile no chão: borda viva e miolo claro, na cor de cada uso (placeMark). */
 function tileMark(): THREE.Group {
@@ -247,6 +260,11 @@ export class WorldView {
     new THREE.MeshBasicMaterial({ color: PLAYER_COLOR, transparent: true, opacity: 0.9, depthWrite: false }),
     TRAIL_MAX,
   );
+  private readonly farTrail = new THREE.InstancedMesh(
+    new THREE.CircleGeometry(0.06, 12).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: FAR_COLOR, transparent: true, opacity: 0.75, depthWrite: false }),
+    TRAIL_MAX,
+  );
   private pressed = { x: 0, y: 0 };
 
   constructor(private readonly host: HTMLElement) {
@@ -282,10 +300,12 @@ export class WorldView {
     this.selectionRing.visible = false;
     this.scene.add(this.selectionRing);
     this.hoverRing.visible = false;
-    this.trail.count = 0;
-    // As matrizes dos pontos mudam a cada alvo: a esfera de recorte da geometria não vale para eles.
-    this.trail.frustumCulled = false;
-    this.scene.add(this.hoverRing, this.hoverMark, this.goalMark, this.trail);
+    for (const dots of [this.trail, this.farTrail]) {
+      dots.count = 0;
+      // As matrizes dos pontos mudam a cada alvo: a esfera de recorte da geometria não vale para eles.
+      dots.frustumCulled = false;
+    }
+    this.scene.add(this.hoverRing, this.hoverMark, this.goalMark, this.trail, this.farTrail);
 
     const canvas = this.renderer.domElement;
     canvas.addEventListener('pointerdown', (e) => (this.pressed = { x: e.clientX, y: e.clientY }));
@@ -419,13 +439,13 @@ export class WorldView {
 
   /**
    * Destaca o alvo sob o mouse (o tile, o anel de quem está ali, a caixa do móvel ou do item) e desenha
-   * o caminho do jogador até onde ele pararia, pelas regras do motor no clique e em "Ir até". O tile
-   * onde não dá para ficar, ou aonde não há caminho, fica vermelho, e a marca laranja diz onde o
-   * jogador para de fato.
+   * o caminho do jogador até lá, pelas regras do motor no clique e em "Ir até": em laranja até onde os
+   * passos do turno levam, com a marca onde ele para; o resto, apagado. O tile aonde ele não chega
+   * (sem lugar, sem caminho ou sem passos) fica vermelho.
    */
   private drawHover(): void {
     this.hoverMark.visible = this.goalMark.visible = this.hoverRing.visible = false;
-    this.trail.count = 0;
+    this.trail.count = this.farTrail.count = 0;
     if (this.hoverBox) {
       this.scene.remove(this.hoverBox);
       this.hoverBox.dispose();
@@ -434,16 +454,13 @@ export class WorldView {
     const t = this.hovered;
     if (!t || !this.shown) return;
     const { world, loc } = this.shown;
-    const at = new Map(Object.values(world.characters).flatMap((c) => (c.locationId === loc.id && c.pos ? [[`${c.pos.x},${c.pos.y}`, c.id] as const] : [])));
-    const occupant = (x: number, y: number) => at.get(`${x},${y}`) ?? null;
     const me = world.playerId ? world.characters[world.playerId] : undefined;
     const from = me?.locationId === loc.id ? me.pos : null;
-    const goal = me && from ? this.goalOf(world, loc, me, from, t, occupant) : null;
-    const path = me && from && goal ? findPath(loc, from, goal, (x, y) => ![null, me.id].includes(occupant(x, y))) : null;
-    const walks = path !== null && path.length > 1;
+    const plan = this.planWalk(world, loc, t);
+    const stop = plan?.path[plan.stop];
     if (t.kind === 'tile') {
       const here = from?.x === t.x && from.y === t.y;
-      const reached = walks && goal!.x === t.x && goal!.y === t.y;
+      const reached = plan !== null && plan.stop > 0 && stop!.x === t.x && stop!.y === t.y;
       placeMark(this.hoverMark, t, reached ? PLAYER_COLOR : here || !from ? HOVER_COLOR : BLOCKED_COLOR, 0.008);
     } else if (t.kind === 'character') {
       this.hoverRing.visible = this.actors.has(t.id);
@@ -454,19 +471,67 @@ export class WorldView {
         this.scene.add(this.hoverBox);
       }
     }
-    if (!walks) return;
-    const end = path[path.length - 1];
-    if (t.kind !== 'tile' || end.x !== t.x || end.y !== t.y) placeMark(this.goalMark, end, PLAYER_COLOR, 0.01);
-    // Um ponto entre cada par de tiles e outro no centro de cada um, da saída até o destino, que já tem a marca.
+    if (!plan || !stop || plan.path.length < 2) return;
+    if (plan.stop > 0 && (t.kind !== 'tile' || stop.x !== t.x || stop.y !== t.y)) placeMark(this.goalMark, stop, PLAYER_COLOR, 0.01);
+    this.dots(this.trail, plan.path.slice(0, plan.stop + 1), false);
+    if (plan.stop < plan.path.length - 1) this.dots(this.farTrail, plan.path.slice(plan.stop), t.kind !== 'tile');
+  }
+
+  /** Pontos no chão ao longo de um trecho do caminho: entre cada par de tiles e no centro dos do meio (e do último, com `last`). */
+  private dots(mesh: THREE.InstancedMesh, tiles: Pos[], last: boolean): void {
     const m = new THREE.Matrix4();
     let n = 0;
-    for (let i = 1; i < path.length && n < TRAIL_MAX - 1; i++) {
-      const [a, b] = [path[i - 1], path[i]];
-      this.trail.setMatrixAt(n++, m.makeTranslation((a.x + b.x) / 2, 0.014, (a.y + b.y) / 2));
-      if (i < path.length - 1) this.trail.setMatrixAt(n++, m.makeTranslation(b.x, 0.014, b.y));
+    for (let i = 1; i < tiles.length && n < TRAIL_MAX - 1; i++) {
+      const [a, b] = [tiles[i - 1], tiles[i]];
+      mesh.setMatrixAt(n++, m.makeTranslation((a.x + b.x) / 2, 0.014, (a.y + b.y) / 2));
+      if (i < tiles.length - 1 || last) mesh.setMatrixAt(n++, m.makeTranslation(b.x, 0.014, b.y));
     }
-    this.trail.count = n;
-    this.trail.instanceMatrix.needsUpdate = true;
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /**
+   * Quem anda até o alvo, pelas regras do motor (path.ts): o caminho a partir de onde o mundo deixou o
+   * jogador e o índice do tile em que os passos do turno acabam (0: não sai do lugar). Null sem o
+   * jogador em cena, sem destino ou sem caminho.
+   */
+  private planWalk(world: WorldState, loc: Location, t: Target): { path: Pos[]; stop: number } | null {
+    const me = world.playerId ? world.characters[world.playerId] : undefined;
+    if (!me?.pos || me.locationId !== loc.id) return null;
+    const at = new Map(Object.values(world.characters).flatMap((c) => (c.locationId === loc.id && c.pos ? [[`${c.pos.x},${c.pos.y}`, c.id] as const] : [])));
+    const occupant = (x: number, y: number) => at.get(`${x},${y}`) ?? null;
+    const others = (x: number, y: number) => ![null, me.id].includes(occupant(x, y));
+    const goal = this.goalOf(world, loc, me, me.pos, t, occupant);
+    const path = goal ? findPath(loc, me.pos, goal, others) : null;
+    if (!path) return null;
+    const { max, used } = me.steps ?? { max: stepsFor(world, me.id), used: 0 };
+    return { path, stop: path.indexOf(stopWithin(path, max - used, others)) };
+  }
+
+  /**
+   * O jogador sai andando no clique, sem esperar o servidor: o plano é o do motor, a partir de onde o
+   * mundo o deixou e até onde os passos do turno levam. Quando o mundo chega e ele parou onde se
+   * previu, o passo segue; se não, o personagem corrige até onde o motor o pôs.
+   */
+  predict(act: FreeAct): void {
+    if (act.kind !== 'walk' || !this.shown) return;
+    const { world, loc } = this.shown;
+    const me = world.playerId ? world.characters[world.playerId] : undefined;
+    const actor = me ? this.actors.get(me.id) : undefined;
+    const target: Target = !('near' in act)
+      ? { kind: 'tile', x: act.x, y: act.y }
+      : world.characters[act.near]
+        ? { kind: 'character', id: act.near }
+        : { kind: 'fixture', id: act.near };
+    const plan = this.planWalk(world, loc, target);
+    if (!me || !actor || !plan || plan.stop === 0) return;
+    const stop = plan.path[plan.stop];
+    const pos = new THREE.Vector3(stop.x, 0, stop.y);
+    if (!this.walk(actor, world, loc, { ...me, pos: stop }, pos)) return;
+    actor.target.copy(pos);
+    if (actor.seated) setSeated(actor.obj, false);
+    actor.seated = false;
+    actor.sitOnArrival = false;
   }
 
   /**
@@ -1062,9 +1127,9 @@ export class WorldView {
     const tiles = findPath(loc, from, c.pos, (x, y) => people.has(`${x},${y}`));
     if (!tiles || tiles.length < 2) return false;
     actor.route = [...tiles.slice(1, -1).map((t) => new THREE.Vector3(t.x, pos.y, t.y)), pos.clone()];
-    const length = actor.route.reduce((sum, p, i) => sum + p.distanceTo(i ? actor.route[i - 1] : actor.obj.position), 0);
-    // Passo de quem anda; num caminho longo, mais depressa, para chegar em até três segundos.
-    actor.speed = Math.max(2.2, length / 3);
+    // Caminho longo, corre; curto, anda. O passo do clipe acompanha a velocidade (tick).
+    actor.gait = tiles.length - 1 >= RUN_FROM ? 'run' : 'walk';
+    actor.speed = GAIT[actor.gait].speed;
     return true;
   }
 
@@ -1090,7 +1155,23 @@ export class WorldView {
         const label = new CSS2DObject(el);
         obj.add(label);
         this.room.add(obj);
-        actor = { obj, label, target: pos.clone(), yaw, seated: false, route: [], speed: 2.2, walkYaw: yaw, missing: new Set(), pose: '', poseClip: 'idle', stance: 'pe', grip: null, held: new Map() };
+        actor = {
+          obj,
+          label,
+          target: pos.clone(),
+          yaw,
+          seated: false,
+          route: [],
+          speed: GAIT.walk.speed,
+          gait: 'walk',
+          walkYaw: yaw,
+          missing: new Set(),
+          pose: '',
+          poseClip: 'idle',
+          stance: 'pe',
+          grip: null,
+          held: new Map(),
+        };
         this.actors.set(c.id, actor);
         void this.upgradeActor(actor, c);
       }
@@ -1308,8 +1389,13 @@ export class WorldView {
           const b = Math.min(1, t / 0.25, (g.until - g.start - t) / 0.25);
           g.action.setEffectiveWeight(b <= 0 ? 0 : b >= 0.98 ? 50 : b / (1 - b));
         }
-        const want = moving ? 'walk' : a.missing.has(a.poseClip) ? 'idle' : a.poseClip;
-        if (!(a.gesture && !a.gesture.upper) && a.clip !== want) void this.play(a, want);
+        // Sem o clipe de correr nesta máquina, anda mais depressa.
+        const gait: Gait = a.gait === 'run' && !a.missing.has('run') ? 'run' : 'walk';
+        const want = moving ? gait : a.missing.has(a.poseClip) ? 'idle' : a.poseClip;
+        // Sair andando é na hora: o andar entra mais rápido que as outras trocas de clipe.
+        if (!(a.gesture && !a.gesture.upper) && a.clip !== want) void this.play(a, want, moving ? { fade: 0.12 } : {});
+        const stride = a.model.actions.get(gait);
+        if (moving && stride && a.current === stride) stride.timeScale = Math.min(1.6, a.speed / GAIT[gait].clip);
       }
       if (next) {
         // Anda até o próximo tile do caminho, virado para onde vai.

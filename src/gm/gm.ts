@@ -358,6 +358,8 @@ export class GameMaster {
     }
     const shown = playerNarration(engine.state, text);
     engine.log('narration', text, shown !== text ? shown : undefined, options);
+    // Começa o turno do jogador: os passos dele pelo grid saem do ruleset, com o que este turno mudou.
+    engine.startTurnSteps();
     engine.recordFrame();
     emit({ type: 'narration', text: shown, turn: engine.state.turn, options });
     emit({ type: 'state', world: engine.snapshot() });

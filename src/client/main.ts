@@ -136,11 +136,14 @@ async function runFree(act: FreeAct): Promise<void> {
   if (busy || !world) return;
   busy = true;
   playback.live();
+  // Andar dentro dos passos do turno é só do motor: o personagem sai na hora, e o servidor confirma.
+  view.predict(act);
   try {
     const r = await freeAction(act);
     applyWorld(r.world);
     ui.addFree(r.entries);
     if (!r.ok && r.error) ui.notice(r.error);
+    if (r.note) ui.notice(r.note);
     // A fala ouvida (de quem o jogador procurou, ou de quem veio até ele) aparece no balão sobre quem falou.
     if (r.entries.some((e) => parseSpeechLine(e))) playback.showLast();
   } catch (err) {

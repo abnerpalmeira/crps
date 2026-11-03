@@ -3,6 +3,7 @@ import { modelCatalog, portable, sizeLabel, type CatalogItem } from './catalog';
 import { DECOR_IDS, ERAS, ERA_LOOK, PACK_ERA, outOfEra } from './eras';
 import { MAX_FRAMES, snapshotScene } from './frames';
 import { LEGEND, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, tileOf, type LocationSpec } from './layout';
+import { DEFAULT_MOVEMENT, stepsFor } from './effects';
 import { besideRect, findPath as searchPath, nearestFree, walkGoal } from './path';
 import { OBJECT_LIBRARY, findObjectType, librarySummary, objectType, resolveType, typeChain } from './objects';
 import { DEFAULT_VISION, sightOf, type Sight } from './perception';
@@ -27,6 +28,7 @@ import type {
   Location,
   LightSpec,
   LogKind,
+  MovementRules,
   ObjectType,
   PerkDef,
   PerkGrant,
@@ -103,6 +105,7 @@ export const DEFAULT_RULESET: Ruleset = {
   sightChannels: DEFAULT_SIGHT_CHANNELS,
   vision: DEFAULT_VISION,
   reaches: DEFAULT_REACHES,
+  movement: DEFAULT_MOVEMENT,
   dice: '2d6',
   difficulties: { facil: 7, normal: 9, dificil: 11, muito_dificil: 13 },
   notes: 'Atributos e perícias vão de 0 a 5 (1 = mediano, 3 = muito bom, 5 = lendário).',
@@ -134,6 +137,7 @@ function migrate(state: WorldState): WorldState {
   rules.vision ??= { ...DEFAULT_VISION };
   rules.conditions ??= structuredClone(DEFAULT_CONDITIONS);
   rules.reaches ??= { ...DEFAULT_REACHES };
+  rules.movement ??= { ...DEFAULT_MOVEMENT };
   state.objectTypes ??= {};
   for (const l of Object.values(state.locations)) {
     l.light ??= 1;
@@ -214,6 +218,13 @@ export interface ResourceInput {
 
 /** Como o mestre descreve um efeito: igual a PerkGrant, com a força da luz opcional. */
 export type PerkGrantInput = Exclude<PerkGrant, { kind: 'light' }> | { kind: 'light'; radius: number; intensity?: number; color?: string };
+
+/** Passos por turno como o mestre escreve: a base e o atributo que soma passos ("" tira o atributo). */
+export interface MovementInput {
+  steps?: number;
+  attribute?: string;
+  per_point?: number;
+}
 
 export interface PerkInput {
   id?: string;
@@ -575,6 +586,57 @@ export class GameEngine {
     return nearestFree(loc, p, (x, y) => !this.freeTile(loc, x, y, null));
   }
 
+  /** Para onde vai quem anda até um móvel ou uma pessoa ("Ir até"): o tile livre ao lado, pelo caminho mais curto. */
+  nearSpot(locationId: string, ref: string, moverId: string): Pos | null {
+    const loc = this.state.locations[locationId];
+    const mover = this.state.characters[moverId];
+    if (!loc || !mover) return null;
+    return this.nearestFreeAround(loc, this.rectOf(ref, loc), mover.pos, moverId);
+  }
+
+  /** Passos do personagem neste turno: o máximo fixado quando o turno começou e quantos já andou. */
+  stepsOf(c: Character): { max: number; used: number } {
+    return c.steps ?? { max: stepsFor(this.state, c.id), used: 0 };
+  }
+
+  /** Começa um turno do jogador: o máximo de passos sai do ruleset agora, e nenhum foi andado. */
+  startTurnSteps(): void {
+    const me = this.player;
+    if (me) me.steps = { max: stepsFor(this.state, me.id), used: 0 };
+  }
+
+  /** Quem anda pelo grid sem o mestre (free.ts) e por isso gasta os passos do turno; o mestre move sem limite. */
+  private onFootId: string | null = null;
+
+  /** Enquanto `run` corre, cada passo de `id` sai dos passos do turno, e o que passar deles é recusado. */
+  async onFoot<T>(id: string, run: () => Promise<T>): Promise<T> {
+    this.onFootId = id;
+    try {
+      return await run();
+    } finally {
+      this.onFootId = null;
+    }
+  }
+
+  private spendSteps(c: Character, path: Pos[] | null): void {
+    if (this.onFootId !== c.id || !path) return;
+    const walked = path.length - 1;
+    const { max, used } = this.stepsOf(c);
+    if (used + walked > max) {
+      throw new EngineError(`Longe demais para este turno: restam ${max - used} passos, e até lá são ${walked}. Escreva ao mestre para ir além.`);
+    }
+    c.steps = { max, used: used + walked };
+  }
+
+  /** Os passos por turno com o que o mestre mudou: a base e o atributo que soma passos. */
+  private movementRules(input: MovementInput, current: MovementRules): MovementRules {
+    const steps = input.steps ?? current.steps;
+    if (!Number.isInteger(steps) || steps < 0 || steps > 40) throw new EngineError('movement.steps precisa ser um inteiro de 0 a 40.');
+    const attribute = input.attribute === '' ? undefined : input.attribute ? this.resolveAttributeId(input.attribute) : current.attribute;
+    if (!attribute) return { steps };
+    return { steps, attribute, perPoint: clamp(input.per_point ?? current.perPoint ?? 1, 0, 5) };
+  }
+
   /** Retângulo ocupado por um móvel ou personagem (usado como alvo de "near"). */
   private rectOf(ref: string, loc: Location): Rect {
     try {
@@ -692,6 +754,7 @@ export class GameEngine {
     difficulties?: Partial<Record<DifficultyName, number>>;
     notes?: string;
     era?: Era;
+    movement?: MovementInput;
   }): Ruleset {
     if (Object.keys(this.state.characters).length) {
       throw new EngineError('As regras já estão em uso por personagens; para mudar no meio da campanha, use extend_ruleset.');
@@ -714,6 +777,7 @@ export class GameEngine {
       sightChannels: [...DEFAULT_SIGHT_CHANNELS],
       vision: { ...DEFAULT_VISION },
       reaches: { ...DEFAULT_REACHES },
+      movement: { ...DEFAULT_MOVEMENT },
       dice,
       difficulties,
       notes: input.notes ?? DEFAULT_RULESET.notes,
@@ -725,6 +789,7 @@ export class GameEngine {
     const previous = this.state.ruleset;
     this.state.ruleset = rules;
     try {
+      if (input.movement) rules.movement = this.movementRules(input.movement, rules.movement);
       for (const p of input.perks ?? []) rules.perks.push(this.perkDef(p));
       for (const p of input.conditions ?? []) rules.conditions.push(this.conditionDef(p));
     } catch (err) {
@@ -750,6 +815,7 @@ export class GameEngine {
     speech_modes?: Record<string, SpeechMode>;
     senses?: Record<string, number>;
     reaches?: Record<string, number>;
+    movement?: MovementInput;
     /** A história foi para outra época (viagem no tempo): os lugares novos e os itens novos seguem ela. */
     era?: Era;
     reason: string;
@@ -757,7 +823,7 @@ export class GameEngine {
     const rules = this.state.ruleset;
     const characters = Object.values(this.state.characters);
     const added: {
-      kind: 'atributo' | 'recurso' | 'perk' | 'condição' | 'visibilidade' | 'modo de fala' | 'sentido' | 'alcance' | 'visão' | 'época';
+      kind: 'atributo' | 'recurso' | 'perk' | 'condição' | 'visibilidade' | 'modo de fala' | 'sentido' | 'alcance' | 'visão' | 'movimento' | 'época';
       id: string;
       name: string;
       visibility?: Visibility;
@@ -822,6 +888,12 @@ export class GameEngine {
       for (const c of characters) c.resources[def.id] = clamp(Math.round(r.start ?? def.max), 0, def.max);
       added.push({ kind: 'recurso', id: def.id, name: def.name, visibility: def.visibility });
     }
+    // Depois dos atributos: o que soma passos pode ter nascido nesta mesma chamada.
+    if (input.movement) {
+      rules.movement = this.movementRules(input.movement, rules.movement);
+      const m = rules.movement;
+      added.push({ kind: 'movimento', id: 'movement', name: `${m.steps} passos por turno${m.attribute ? ` (+${m.perPoint ?? 1} por ponto de ${m.attribute})` : ''}`, visibility: 'hidden' });
+    }
     for (const p of input.perks ?? []) {
       const def = this.perkDef(p);
       rules.perks.push(def);
@@ -843,7 +915,7 @@ export class GameEngine {
     }
     if (!added.length) {
       throw new EngineError(
-        'Nada para estender: informe attributes, resources, perks, conditions, visibility, speech_modes, senses, sight_channels, vision, reaches ou era.',
+        'Nada para estender: informe attributes, resources, perks, conditions, visibility, speech_modes, senses, sight_channels, vision, reaches, movement ou era.',
       );
     }
     if (rules.attributes.length > 10 || rules.resources.length > 8) {
@@ -921,6 +993,14 @@ export class GameEngine {
       };
     }
     if (g.kind === 'light') return { kind: 'light', ...lightSpec(g) };
+    if (g.kind === 'move') {
+      if (g.bonus === undefined && g.factor === undefined) throw new EngineError(`"${owner}" precisa de bonus ou factor nos passos.`);
+      return {
+        kind: 'move',
+        ...(g.bonus !== undefined ? { bonus: clamp(Math.round(g.bonus), -20, 20) } : {}),
+        ...(g.factor !== undefined ? { factor: clamp(g.factor, 0, 5) } : {}),
+      };
+    }
     if (g.kind === 'conjure') {
       return {
         kind: 'conjure',
@@ -1370,9 +1450,12 @@ export class GameEngine {
         exitUsed = this.exitTowards(fromLoc, targetLoc.id, input.via);
         if (exitUsed) {
           const goal = this.nearestFreeAround(fromLoc, exitUsed, c.pos, c.id);
-          if (goal && !this.findPath(fromLoc, c.pos, goal, c.id)) {
+          const toExit = goal ? this.findPath(fromLoc, c.pos, goal, c.id) : null;
+          if (goal && !toExit) {
             throw new EngineError(`${c.name} não tem caminho até ${exitUsed.label} (${exitUsed.id.slice(fromLoc.id.length + 1)}).`);
           }
+          // Até a saída conta passo; a passagem em si, não.
+          this.spendSteps(c, toExit);
           this.link(fromLoc, exitUsed, targetLoc.id);
         }
       }
@@ -1390,6 +1473,7 @@ export class GameEngine {
       if (c.pos) {
         path = this.findPath(targetLoc, c.pos, spot.pos, c.id);
         if (!path) throw new EngineError(`${c.name} não tem caminho de (${c.pos.x},${c.pos.y}) até (${spot.pos.x},${spot.pos.y}).`);
+        this.spendSteps(c, path);
       }
     }
     // Quem muda de local deixa para trás as vozes que ouviu, e os outros perdem a dele.

@@ -169,6 +169,8 @@ describe('o turno de conversa pelo escritor', () => {
     expect(distanceBetween(e.state, 'kenji', 'mei')).toBeLessThanOrEqual(2);
     expect(provider.prompts[0]).toContain('O personagem do jogador vai até Mei Kato para falar');
     expect(e.state.turn).toBe(turn + 1);
+    // O turno do mestre levou o professor sem gastar passos, e o turno do jogador começa com todos.
+    expect(e.state.characters.kenji.steps).toEqual({ max: 8, used: 0 });
     expect(e.state.facts.map((f) => f.text)).toContain('Mei tem medo de ser expulsa.');
     expect(e.state.characters.mei.lines?.turn).toMatchObject([{ text: 'Não conta pro diretor, por favor.', whisper: true }]);
     expect(events.find((ev) => ev.type === 'narration')).toMatchObject({ options: ['"Por que, Mei?"', 'Volto para o quadro.', 'Chamo a Yuki.'] });

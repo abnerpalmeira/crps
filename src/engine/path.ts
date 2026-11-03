@@ -33,6 +33,18 @@ export function nearestFree(loc: Location, p: Pos, blocked: (x: number, y: numbe
 }
 
 /**
+ * Até onde se chega por um caminho com `steps` passos (cada tile é um passo): o caminho inteiro, se
+ * os passos dão; senão, o tile do último passo possível, recuando enquanto houver alguém nele.
+ */
+export function stopWithin(path: Pos[], steps: number, blocked: (x: number, y: number) => boolean): Pos {
+  const last = path.length - 1;
+  for (let i = Math.min(Math.max(0, steps), last); i > 0; i--) {
+    if (i === last || !blocked(path[i].x, path[i].y)) return path[i];
+  }
+  return path[0];
+}
+
+/**
  * O tile livre ao lado de um móvel ou de uma pessoa, para quem vai até lá: o de caminho mais curto
  * a partir de `from`; sem ponto de partida, ou sem caminho, o mais perto do centro do alvo.
  */

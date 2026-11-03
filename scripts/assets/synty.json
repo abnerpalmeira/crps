@@ -188,6 +188,7 @@
   "clips": {
     "idle": "A_Idle_Standing_{Sx}",
     "walk": "A_Walk_F_{Sx}",
+    "run": "A_Run_F_{Sx}",
     "talk": "A_POLY_IDL_PointHand_Index_F_Small_{Sx}",
     "nod": "A_POLY_IDL_HeadNod_Small_{Sx}",
     "sit": {"src": "A_Idle_Standing_{Sx}", "op": "sit"},

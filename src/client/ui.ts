@@ -1,4 +1,5 @@
 import { actLabel, actionsFor, type ActionOption } from '../engine/actions';
+import { stepsFor } from '../engine/effects';
 import { parseSpeechLine } from '../engine/frames';
 import type { FreeAct } from '../engine/free';
 import { lightAt, lightLabel, lightSources } from '../engine/light';
@@ -533,6 +534,9 @@ export class Ui {
     const loc = player?.locationId ? world.locations[player.locationId] : Object.values(world.locations).at(-1);
     $('#hud-location').textContent = loc?.name ?? 'Montando o mundo…';
     $('#hud-clock').textContent = `${formatClock(world.clock)} · turno ${world.turn}`;
+    // Quanto o jogador ainda anda pelo grid neste turno, sem o mestre.
+    const steps = player ? (player.steps ?? { max: stepsFor(world, player.id), used: 0 }) : null;
+    $('#hud-steps').textContent = steps ? `👣 ${steps.max - steps.used} de ${steps.max} passos neste turno` : '';
     $('#hud-sense').textContent = senseText(world);
     $('#stage-empty').hidden = Boolean(loc);
     this.renderSheet(world, player);

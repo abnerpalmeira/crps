@@ -1,8 +1,9 @@
 import { z } from 'zod';
 import { VERBS } from './actions';
 import { gripOf } from './body';
-import type { GameEngine } from './engine';
+import { EngineError, type GameEngine } from './engine';
 import { hasNews, nextLine } from './lines';
+import { stopWithin } from './path';
 import { distanceBetween } from './perception';
 import { performMenuAct } from './perform';
 import { analyzeSpeech, playerNarration } from './speech';
@@ -29,6 +30,8 @@ export interface FreeOutcome {
   ok: boolean;
   /** Por que o motor recusou. */
   error?: string;
+  /** Aviso de algo que deu certo só em parte: os passos do turno acabaram no meio do caminho. */
+  note?: string;
   /** O que entrou no log, como o jogador vê: passos, ações e as falas que ele ouviu. */
   entries: string[];
 }
@@ -71,9 +74,11 @@ export async function freeAct(engine: GameEngine, act: FreeAct, hooks: FreeHooks
   if (!me?.pos || !me.locationId) return { ok: false, error: 'Seu personagem não está em cena.', entries: [] };
   const entries: string[] = [];
   const record = recorder(engine, entries);
-  const outcome = await perform(engine, me, act, record, hooks);
-  // Quem tem iniciativa não espera o jogador puxar conversa: vem até ele, ou chama de onde está.
-  if (outcome.ok) await initiative(engine, me, record, act.kind === 'talk' ? act.with : null, entries, hooks);
+  // Cada passo sai dos passos do turno, que o ruleset fixou quando ele começou.
+  const outcome = await engine.onFoot(me.id, () => perform(engine, me, act, record, hooks));
+  // Quem tem iniciativa não espera o jogador puxar conversa: vem até ele, ou chama de onde está. Andar
+  // dentro dos passos do turno é só do motor: não chama quem decide pelos NPCs.
+  if (outcome.ok && act.kind !== 'walk') await initiative(engine, me, record, act.kind === 'talk' ? act.with : null, entries, hooks);
   return { ...outcome, entries };
 }
 
@@ -89,7 +94,7 @@ export async function answer(engine: GameEngine, npcId: string, line: ReadyLine,
   const entries: string[] = [];
   const record = recorder(engine, entries);
   if ((distanceBetween(engine.state, me.id, npc.id) ?? Infinity) > TALK_REACH) {
-    const error = walk(engine, me.id, { near: npc.id }, record);
+    const error = await engine.onFoot(me.id, async () => walk(engine, me.id, { near: npc.id }, record));
     if (error) return { ok: false, error, entries };
   }
   if (said) {
@@ -102,13 +107,30 @@ export async function answer(engine: GameEngine, npcId: string, line: ReadyLine,
   return { ok: true, entries };
 }
 
-async function perform(engine: GameEngine, me: Character, act: FreeAct, record: Recorder, hooks: FreeHooks): Promise<{ ok: boolean; error?: string }> {
+async function perform(engine: GameEngine, me: Character, act: FreeAct, record: Recorder, hooks: FreeHooks): Promise<{ ok: boolean; error?: string; note?: string }> {
   if (act.kind === 'walk') {
-    // Clique no chão: num tile em que não dá para ficar (parede, móvel, alguém), vai para o livre mais perto.
-    const tile = 'near' in act ? null : (engine.walkTarget(me.locationId!, { x: act.x, y: act.y }, me.id) ?? { x: act.x, y: act.y });
-    if (tile && tile.x === me.pos!.x && tile.y === me.pos!.y) return { ok: true };
-    const error = walk(engine, me.id, tile ?? { near: (act as { near: string }).near }, record);
-    return error ? { ok: false, error } : { ok: true };
+    // Clique no chão: num tile em que não dá para ficar (parede, móvel, alguém), vai para o livre mais perto;
+    // "Ir até": para o lado livre da pessoa ou do móvel.
+    const loc = engine.state.locations[me.locationId!];
+    let goal: Pos | null;
+    try {
+      goal = 'near' in act ? engine.nearSpot(loc.id, act.near, me.id) : engine.walkTarget(loc.id, { x: act.x, y: act.y }, me.id);
+    } catch (err) {
+      // Alvo que não existe ou não está aqui: o motor diz o quê, sem mexer em nada.
+      if (err instanceof EngineError) return { ok: false, error: err.message };
+      throw err;
+    }
+    if (!goal) return { ok: false, error: 'Não há lugar livre ali.' };
+    if (goal.x === me.pos!.x && goal.y === me.pos!.y) return { ok: true };
+    const path = engine.findPath(loc, me.pos!, goal, me.id);
+    if (!path) return { ok: false, error: 'Não há caminho até lá.' };
+    // Dentro dos passos do turno, anda até o fim; além deles, até onde os passos levam.
+    const { max, used } = engine.stepsOf(me);
+    if (used >= max) return { ok: false, error: 'Os passos deste turno acabaram: escreva ao mestre para seguir.' };
+    const stop = stopWithin(path, max - used, (x, y) => ![undefined, me.id].includes(engine.characterAt(loc.id, x, y)?.id));
+    const error = walk(engine, me.id, stop, record);
+    if (error) return { ok: false, error };
+    return path.length - 1 <= max - used ? { ok: true } : { ok: true, note: 'Os passos deste turno acabaram aqui: escreva ao mestre para seguir.' };
   }
 
   if (act.kind === 'act') {

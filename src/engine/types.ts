@@ -46,7 +46,8 @@ export interface LightSpec {
  * sensorial qualquer (som, labios, mente, visao ou um canal novo criado pelo mestre): multiplier
  * substitui o multiplicador base do canal, bonus soma tiles de alcance e factor multiplica o
  * resultado (0 = perdeu o sentido). `light` faz o dono emitir luz. `conjure` deixa o dono tirar
- * itens do nada (um mágico, um bolso sem fundo), com custo opcional num recurso.
+ * itens do nada (um mágico, um bolso sem fundo), com custo opcional num recurso. `move` mexe nos
+ * passos por turno: bonus soma passos (ágil), factor multiplica (perna ferida 0.5, amarrado 0).
  */
 export type PerkGrant =
   | { kind: 'see_stat'; stat: string }
@@ -54,7 +55,16 @@ export type PerkGrant =
   | { kind: 'check_bonus'; bonus: number; attribute?: string; skill?: string }
   | { kind: 'sense'; channel: string; multiplier?: number; bonus?: number; factor?: number }
   | ({ kind: 'light' } & LightSpec)
-  | { kind: 'conjure'; note?: string; cost?: { resource: string; amount: number } };
+  | { kind: 'conjure'; note?: string; cost?: { resource: string; amount: number } }
+  | { kind: 'move'; bonus?: number; factor?: number };
+
+/** Quanto se anda pelo grid entre um turno do mestre e o próximo, sem ele: passos (tiles) por turno. */
+export interface MovementRules {
+  steps: number;
+  /** Atributo que soma passos (ex.: agilidade), cada ponto valendo `perPoint` passos. */
+  attribute?: string;
+  perPoint?: number;
+}
 
 /** Um jeito de falar: até onde o alvo pode estar e até onde cada canal leva o conteúdo. */
 export interface SpeechMode {
@@ -104,6 +114,7 @@ export interface Ruleset {
   vision: VisionRules;
   /** Alcance (tiles) de ações com alvo: toque, corpo_a_corpo, arremesso… */
   reaches: Record<string, number>;
+  movement: MovementRules;
   /** Teste = dados + atributo + perícia + modificador >= dificuldade. */
   dice: string;
   difficulties: Record<DifficultyName, number>;
@@ -161,6 +172,11 @@ export interface Character {
   pos: Pos | null;
   facing: Dir;
   seatId: string | null;
+  /**
+   * Passos do jogador pelo grid neste turno: o máximo, fixado quando o turno começou (pelo ruleset),
+   * e quantos ele já andou sem o mestre. Sem isso, o máximo é o do ruleset agora, e nenhum andado.
+   */
+  steps?: { max: number; used: number };
   /**
    * Pose do corpo (body.ts: ajoelhado, mirando, caído…); sem ela, de pé. Sentar num assento e
    * deitar numa cama vêm do assento, e quem fica com a vida em 0 cai sozinho. Andar desfaz a pose.

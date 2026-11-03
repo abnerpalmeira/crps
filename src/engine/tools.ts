@@ -101,7 +101,20 @@ const perkGrant = z.discriminatedUnion('kind', [
     intensity: z.number().optional().describe('Força de 0 a 1 (padrão 0.9).'),
     color: z.string().optional().describe('Cor CSS, ex. "#9fd0ff".'),
   }),
+  z.object({
+    kind: z.literal('move'),
+    bonus: z.number().optional().describe('Passos a mais por turno, ex. ágil +2.'),
+    factor: z.number().optional().describe('Multiplica os passos: 0.5 = perna ferida, 0 = amarrado ou imobilizado.'),
+  }),
 ]);
+
+const movementInput = z
+  .object({
+    steps: z.number().int().min(0).max(40).optional().describe('Passos de todos por turno (padrão 8).'),
+    attribute: z.string().optional().describe('Atributo que soma passos, ex. "agilidade"; "" tira.'),
+    per_point: z.number().optional().describe('Passos que cada ponto do atributo soma (padrão 1).'),
+  })
+  .describe('Quanto o jogador anda pelo grid entre um turno e outro, sem você; perks e condições com move somam ou multiplicam.');
 
 const lightInput = z.object({
   radius: z.number().describe('Alcance da luz em tiles: vela 2, lanterna 5, holofote 10.'),
@@ -299,6 +312,7 @@ export const TOOLS = [
         .optional()
         .describe('Padrão para 2d6: fácil 7, normal 9, difícil 11, muito difícil 13.'),
       notes: z.string().optional(),
+      movement: movementInput.optional(),
       era: era.optional().describe(`${era.description} Informe sempre: é a época da premissa.`),
     }),
     mutates: true,
@@ -317,7 +331,7 @@ export const TOOLS = [
       'Muda as regras no meio da campanha, quando a história muda de rumo (a aula vira uma epidemia, a investigação vira ' +
       'tiroteio): novos atributos (ex.: pontaria), recursos (ex.: infecção), perks, condições (ex.: envenenado), a ' +
       'visibilidade de atributos e recursos, modos de fala (ex.: telepatia), sentidos base, canais que exigem ver quem emite ' +
-      '(ex.: língua de sinais), limiares de visão e alcances de ação (ex.: tiro). Quem já existe recebe o valor padrão ' +
+      '(ex.: língua de sinais), limiares de visão, alcances de ação (ex.: tiro) e os passos por turno. Quem já existe recebe o valor padrão ' +
       '(attributes.default, padrão 0; resources.start, padrão o máximo); ajuste os relevantes com update_character. Chame ' +
       'antes de usar a regra nova.',
     schema: z.object({
@@ -338,6 +352,7 @@ export const TOOLS = [
         .optional(),
       senses: z.record(z.string(), z.number()).optional().describe('Multiplicador base de um canal para todos, ex. {"olfato": 1}.'),
       reaches: z.record(z.string(), z.number()).optional().describe('Alcance de ações com alvo, ex. {"tiro_pistola": 20}.'),
+      movement: movementInput.optional(),
       sight_channels: z.array(z.string()).optional().describe('Canais que só funcionam vendo quem emite, ex. ["sinais"].'),
       vision: z
         .object({

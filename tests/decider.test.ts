@@ -67,14 +67,15 @@ describe('o grid livre pergunta a quem decide', () => {
         return candidates.find((c) => c.id === 'ren') ?? null;
       },
     };
-    const r = await freeAct(e, { kind: 'walk', x: 12, y: 9 }, pickRen);
+    const pose = (target: string) => ({ kind: 'act' as const, verb: 'pose', target, other: null });
+    const r = await freeAct(e, pose('bracos_cruzados'), pickRen);
     expect(r.entries.some((x) => x.startsWith('@ren['))).toBe(true);
     expect(r.entries.some((x) => x.startsWith('@yuki['))).toBe(false);
     expect(offered.map((c) => c.id).sort()).toEqual(['mei', 'ren', 'yuki']);
     // Conversando com a Yuki, ela não é candidata a emendar outra fala; o Ren já disse a dele.
     await freeAct(e, { kind: 'talk', with: 'yuki' }, { initiative: async (candidates) => ((offered = candidates), null) });
     expect(offered.map((c) => c.id)).toEqual(['mei']);
-    const quiet = await freeAct(e, { kind: 'walk', x: 11, y: 9 }, { initiative: async () => null });
+    const quiet = await freeAct(e, pose('pensativo'), { initiative: async () => null });
     expect(quiet.entries.some((x) => x.startsWith('@'))).toBe(false);
   });
 });

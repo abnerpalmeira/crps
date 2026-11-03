@@ -44,7 +44,7 @@ interface Part {
 export type Clip = string;
 
 /** Os clipes que todo personagem usa logo de cara; os outros carregam quando a cena pede. */
-const BASE_CLIPS: Clip[] = ['idle', 'walk', 'talk', 'nod', 'sit'];
+const BASE_CLIPS: Clip[] = ['idle', 'walk', 'run', 'talk', 'nod', 'sit'];
 
 /** Ossos da mão de que o 3D precisa para pôr um item nela: o pulso e as juntas do indicador e do médio. */
 export interface HandBones {
