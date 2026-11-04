@@ -2,7 +2,6 @@ import { actLabel, actionsFor, type ActionOption } from '../engine/actions';
 import { timeLeft, timeUp } from '../engine/effects';
 import { parseSpeechLine } from '../engine/frames';
 import type { FreeAct } from '../engine/free';
-import type { Conversation } from '../engine/lines';
 import { lightAt, lightLabel, lightSources } from '../engine/light';
 import { FEELING_LABELS, feelingsHere, perceptionOf, strangerLabel } from '../engine/perception';
 import { findByName, hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
@@ -16,6 +15,7 @@ import { INPUT_ICON, capitalize, escapeHtml, formatNarration, formatPlayerInput,
 import { randomPremise } from './premises';
 import type { PlaybackState } from './playback';
 import { hash } from './props';
+import { ConversationPanel } from './conversation';
 import type { Pick } from './scene';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
@@ -56,6 +56,8 @@ interface TurnContext {
   speaker: (id: string) => Speaker | null;
   world: () => WorldState | null;
   onReplay: (turn: number) => void;
+  /** Reabre a conversa com a pessoa, sem gastar tempo. */
+  onTalk: (id: string) => void;
 }
 
 /** Um turno no registro: fala do jogador, chips do motor e a narração, que chega inteira e já conferida. */
@@ -66,6 +68,8 @@ export class TurnView {
   private readonly status = el('div', 'status');
   /** O que o jogador fez no grid depois da narração, sem o mestre. */
   private readonly after = el('div', 'after');
+  /** Com quem o jogador conversou no grid depois da narração: um chip por pessoa. */
+  private readonly talked = new Set<string>();
 
   constructor(
     private readonly log: HTMLElement,
@@ -97,14 +101,27 @@ export class TurnView {
     this.scroll();
   }
 
-  /** Ações livres depois da narração: o passo vira chip; a fala pronta que ele ouviu, fala. */
+  /**
+   * Ações livres depois da narração: o passo vira chip. A conversa com alguém fica no painel dessa
+   * pessoa; aqui, um chip por pessoa, que reabre o painel.
+   */
   free(entries: string[]): void {
+    const world = this.ctx.world();
     for (const text of entries) {
-      if (parseSpeechLine(text)) {
-        const said = el('div', 'narration');
-        said.innerHTML = formatNarration(text, this.ctx.speaker);
-        this.after.append(said);
-      } else this.after.append(el('span', `chip ${chipKind(text, true)}`, text));
+      const speech = parseSpeechLine(text);
+      if (!speech) {
+        this.after.append(el('span', `chip ${chipKind(text, true)}`, text));
+        continue;
+      }
+      const other = speech.speakerId === world?.playerId ? speech.targetId : speech.speakerId;
+      const c = other ? world?.characters[other] : undefined;
+      if (!world || !c || this.talked.has(c.id)) continue;
+      this.talked.add(c.id);
+      const chip = el('button', 'chip talk-chip', `💬 conversa com ${shownAs(world, c)}`);
+      chip.type = 'button';
+      chip.title = 'Abrir a conversa';
+      chip.addEventListener('click', () => this.ctx.onTalk(c.id));
+      this.after.append(chip);
     }
     this.scroll();
   }
@@ -161,6 +178,8 @@ export class Ui {
   onModel: (id: string) => void = () => {};
   /** Pedir ao mestre para narrar, sem escrever: quando o tempo do turno acaba, é o que resta. */
   onNarrate: () => void = () => {};
+  /** Reabrir a conversa com alguém sem gastar tempo (o chip "conversa com" do registro). */
+  onTalk: (id: string) => void = () => {};
 
   private readonly log = $('#log');
   private readonly input = $<HTMLTextAreaElement>('#input');
@@ -177,16 +196,23 @@ export class Ui {
   private world: WorldState | null = null;
   /** As ações que o mestre sugeriu no fim da última narração. */
   private options: string[] = [];
-  /** A conversa aberta no grid, e para quem vai o próximo envio quando o jogador quer dizer outra coisa. */
-  private talk: Conversation | null = null;
-  private talkTo: string | null = null;
   private readonly placeholder = this.input.placeholder;
+  /** A conversa com uma pessoa, que toma a coluna da direita enquanto dura. */
+  private readonly conversation = new ConversationPanel($('#conversation'), {
+    free: (act) => this.onFree(act),
+    action: (a) => this.runAction(a),
+    say: () => this.input.focus(),
+    close: () => this.closeConversation(),
+    speaker: (id) => this.speaker(id),
+    card: (world, id) => this.characterCard(world, id, false),
+  });
   /** O último turno do registro, onde entram as ações livres feitas depois dele. */
   private lastTurn: TurnView | null = null;
   private readonly ctx: TurnContext = {
     speaker: (id) => this.speaker(id),
     world: () => this.world,
     onReplay: (turn) => this.onReplay(turn),
+    onTalk: (id) => this.onTalk(id),
   };
 
   constructor() {
@@ -197,6 +223,12 @@ export class Ui {
       button.addEventListener('click', () => this.onControl(button.dataset.cmd!));
     }
     $('#narrate').addEventListener('click', () => this.onNarrate());
+    // Na conversa, as teclas 1 a 9 escolhem a opção, como no Disco Elysium (fora da caixa de texto).
+    document.addEventListener('keydown', (e) => {
+      if (!this.conversation.with || this.busy || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.target as HTMLElement).closest('input, textarea, select')) return;
+      if (/^[1-9]$/.test(e.key) && this.conversation.choose(Number(e.key))) e.preventDefault();
+    });
     $('#composer').addEventListener('submit', (e) => {
       e.preventDefault();
       this.submit();
@@ -300,8 +332,8 @@ export class Ui {
     $<HTMLButtonElement>('#model').disabled = busy || !this.model.options.length;
     if (busy) this.closeModelMenu();
     document.body.classList.toggle('busy', busy);
-    $('#talk').hidden = busy || !this.talk;
-    $('#options').hidden = busy || !this.options.length || Boolean(this.talk);
+    $('#conversation').classList.toggle('busy', busy);
+    $('#options').hidden = busy || !this.options.length || Boolean(this.conversation.with);
     if (!busy) this.input.focus();
   }
 
@@ -319,47 +351,41 @@ export class Ui {
         return button;
       }),
     );
-    box.hidden = this.busy || !options.length || Boolean(this.talk);
+    box.hidden = this.busy || !options.length || Boolean(this.conversation.with);
   }
 
   /**
-   * A conversa aberta no grid, como no Persona: as respostas prontas (sem o mestre e sem efeito no
-   * mundo), continuar ouvindo, dizer outra coisa (o mestre responde, e isso abre um turno) ou encerrar.
+   * A conversa com uma pessoa toma a coluna da direita, como no Disco Elysium: o retrato, o chat dos
+   * dois e as opções. A caixa de texto fica embaixo, e o que se manda vai para essa pessoa.
    */
-  showTalk(conversation: Conversation | null): void {
-    const world = this.world;
-    const c = conversation && world ? world.characters[conversation.with] : undefined;
-    this.talk = c ? conversation : null;
-    this.talkTo = null;
+  openConversation(npcId: string): void {
+    const c = this.world?.characters[npcId];
+    if (!this.world || !c) return;
+    this.closeInspector();
+    $('#panel').classList.add('talking');
+    this.conversation.open(this.world, npcId);
+    this.input.placeholder = `O que você diz a ${shownAs(this.world, c)}? O mestre responde, e isso abre um turno.`;
+    $('#options').hidden = true;
+  }
+
+  /** Encerra a conversa: a coluna volta ao chat do mestre. */
+  closeConversation(): void {
+    if (!this.conversation.with) return;
+    this.conversation.close();
+    $('#panel').classList.remove('talking');
     this.input.placeholder = this.placeholder;
-    const box = $('#talk');
-    $('#options').hidden = this.busy || !this.options.length || Boolean(this.talk);
-    if (!c || !conversation || !world?.playerId) {
-      box.hidden = true;
-      box.replaceChildren();
-      return;
-    }
-    // Pelo nome só quem o jogador conhece; os outros, pelo que ele vê.
-    const name = perceptionOf(world, world.playerId).recognize(c.id) ? c.name.split(' ')[0] : strangerLabel(c);
-    const button = (label: string, className: string, run: () => void) => {
-      const b = el('button', className, label);
-      b.type = 'button';
-      b.addEventListener('click', run);
-      return b;
-    };
-    const buttons = el('div', 'talk-buttons');
-    buttons.append(
-      ...conversation.replies.map((label, option) => button(label, 'talk-reply', () => this.onFree({ kind: 'reply', with: c.id, option }))),
-      ...(conversation.more ? [button('Continuar ▸', 'talk-more', () => this.onFree({ kind: 'talk', with: c.id }))] : []),
-      button('✍ Dizer outra coisa… 🪙', 'talk-say', () => {
-        this.talkTo = c.id;
-        this.input.placeholder = `O que você diz a ${name}? O mestre responde, e isso abre um turno.`;
-        this.input.focus();
-      }),
-      button('Encerrar', 'talk-end', () => this.showTalk(null)),
-    );
-    box.replaceChildren(el('div', 'talk-who', `💬 ${name}`), buttons);
-    box.hidden = this.busy;
+    $('#options').hidden = this.busy || !this.options.length;
+    this.onSelect(null);
+  }
+
+  /** Com quem o jogador está conversando; null fora da conversa. */
+  conversationWith(): string | null {
+    return this.conversation.with;
+  }
+
+  /** Um aviso do motor dentro da conversa: a recusa, o tempo que acabou. */
+  conversationNote(text: string | null): void {
+    if (this.world) this.conversation.note(this.world, text);
   }
 
   /** Completa a ação com um texto (fala, escrita) depois do que já está escrito, com o cursor no fim. */
@@ -601,6 +627,10 @@ export class Ui {
     this.renderSheet(world, player);
     this.renderJournal(world, player);
     if (this.inspected) this.showInspector(world, this.inspected);
+    // A conversa acompanha o mundo; quem saiu de cena, ou do lugar, encerra a conversa.
+    const partner = this.conversation.with ? world.characters[this.conversation.with] : undefined;
+    if (this.conversation.with && (!partner || partner.locationId !== player?.locationId)) this.closeConversation();
+    else if (partner) this.conversation.render(world);
   }
 
   renderNoWorld(): void {
@@ -611,6 +641,7 @@ export class Ui {
     $('#hud-sense').textContent = '';
     $('#hud-time').textContent = '';
     $('#stage-empty').hidden = false;
+    this.closeConversation();
     $('#tab-sheet').replaceChildren(el('p', 'muted', 'Seu personagem aparece aqui assim que o mundo estiver pronto.'));
     $('#tab-journal').replaceChildren();
     this.closeInspector();
@@ -624,70 +655,18 @@ export class Ui {
     if (pick.kind === 'character') {
       const c = world.characters[pick.id];
       if (!c) return this.closeInspector();
-      const view = perceptionOf(world, world.playerId);
-      const sight = c.isPlayer ? 'nitido' : view.sight(c.id);
-      // Sabe quem é pelo rosto ou pela voz; sem isso, é um estranho (se o vê) ou um vulto.
-      const known = c.isPlayer ? 'rosto' : view.recognize(c.id);
-      const truth = () => {
-        const box = el('div', 'backstage-only');
-        box.append(el('p', 'hint', `Na verdade (bastidores): ${c.name}, ${c.role}`));
-        return box;
-      };
-      if (!known && sight !== 'nitido') {
+      const card = this.characterCard(world, c.id, true);
+      if (!card) {
+        // Um vulto: o jogador não sabe quem é nem o vê bem.
+        const sight = perceptionOf(world, world.playerId).sight(c.id);
         body.append(
           el('h3', '', sight === 'vulto' ? 'Um vulto' : 'Alguém?'),
           el('p', 'muted', sight === 'vulto' ? 'Está escuro demais para ver quem é.' : 'Você não enxerga quem está aí.'),
-          truth(),
+          truthBox(c),
         );
         return this.openInspector(body, [{ label: 'Ir até lá', prefill: 'Vou, com cuidado, na direção do vulto.' }]);
       }
-      const stranger = strangerLabel(c);
-      if (known) body.append(el('h3', '', c.name), el('p', 'muted', c.role));
-      else body.append(el('h3', '', capitalize(stranger)), el('p', 'muted', 'Você não sabe quem é.'), truth());
-      body.append(sight === 'nitido' ? el('p', '', c.appearance) : el('p', 'muted', 'Está escuro demais para ver, mas você reconhece a voz.'));
-      if (known) {
-        if (c.traits.length) body.append(this.traits(c.traits));
-        if (c.detail === 'full') {
-          if (c.personality) body.append(el('p', '', c.personality));
-          if (c.background) body.append(el('p', 'muted', c.background));
-        } else body.append(el('p', 'hint', 'Ainda um esboço: o mestre aprofunda quando a pessoa ficar importante.'));
-      }
-      const held = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === c.id);
-      if (held.length && c.isPlayer) {
-        // Os próprios itens abrem o inspetor deles.
-        const row = el('p', 'muted', 'Com: ');
-        for (const i of held) {
-          const b = el('button', 'link', i.name);
-          b.type = 'button';
-          b.addEventListener('click', () => this.showInspector(world, { kind: 'item', id: i.id }));
-          row.append(b, ' ');
-        }
-        body.append(row);
-      } else if (held.length && sight === 'nitido') body.append(el('p', 'muted', `Com: ${held.map((i) => i.name).join(', ')}`));
-      if (!c.isPlayer) {
-        const stats = statTexts(world, c);
-        const visible = stats.filter((s) => view.canSeeStat(s.id, c.id)).map((s) => s.text);
-        if (visible.length && sight === 'nitido') body.append(el('p', 'muted', visible.join(' · ')));
-        if (c.thoughts && view.canSeeThoughts(c.id)) body.append(el('p', 'thought', `💭 ${c.thoughts}`));
-        // Quem lê a mente percebe também o que ele sente por quem está ali (o mesmo recorte do resumo do mestre).
-        if (view.canSeeThoughts(c.id)) {
-          for (const { target, feeling } of feelingsHere(world, c)) {
-            const who = target.isPlayer ? 'por você' : withPor(shownAs(world, target));
-            body.append(el('p', 'thought', `Sente ${who}: ${FEELING_LABELS[feeling.degree]}${feeling.text ? ` (${feeling.text})` : ''}`));
-          }
-        }
-        // Bastidores: tudo o que o mestre sabe sobre o NPC.
-        const box = el('div', 'backstage-only');
-        const perks = c.perks.flatMap((id) => world.ruleset.perks.filter((p) => p.id === id).map((p) => p.name));
-        const secrets = world.facts.filter((f) => f.knownBy !== 'all' && f.knownBy.includes(c.id));
-        box.append(el('p', 'hint', `Ficha (bastidores): ${stats.map((s) => s.text).join(' · ')}`));
-        if (perks.length) box.append(el('p', 'hint', `Perks (bastidores): ${perks.join(', ')}`));
-        if (c.thoughts) box.append(el('p', 'hint', `Pensa (bastidores): ${c.thoughts}`));
-        const feelings = Object.entries(c.feelings).map(([id, f]) => `${world.characters[id]?.name ?? id} ${signed(f.degree)}${f.text ? ` (${f.text})` : ''}`);
-        if (feelings.length) box.append(el('p', 'hint', `Sente (bastidores): ${feelings.join(' · ')}`));
-        if (secrets.length) box.append(el('p', 'hint', `Sabe (bastidores): ${secrets.map((f) => f.text).join(' · ')}`));
-        body.append(box);
-      }
+      body.append(card);
       actions.push(...actionsFor(world, pick));
     } else if (pick.kind === 'fixture') {
       const loc = Object.values(world.locations).find((l) => l.fixtures.some((fx) => fx.id === pick.id));
@@ -728,6 +707,77 @@ export class Ui {
     this.openInspector(body, actions);
   }
 
+  /**
+   * O que o jogador sabe e vê de uma pessoa, pelas regras de percepção, e os bastidores para quem os
+   * abre. Null quando ele não a vê nem a reconhece (um vulto). Serve ao inspetor e ao "Sobre" da
+   * conversa, que já mostra o nome no alto (`header` false).
+   */
+  private characterCard(world: WorldState, id: string, header: boolean): HTMLElement | null {
+    const c = world.characters[id];
+    if (!c) return null;
+    const view = perceptionOf(world, world.playerId);
+    const sight = c.isPlayer ? 'nitido' : view.sight(c.id);
+    // Sabe quem é pelo rosto ou pela voz; sem isso, é um estranho (se o vê) ou um vulto.
+    const known = c.isPlayer ? 'rosto' : view.recognize(c.id);
+    if (!known && sight !== 'nitido') return null;
+    const body = el('div', 'character-card');
+    if (header && known) body.append(el('h3', '', c.name), el('p', 'muted', c.role));
+    else if (header) body.append(el('h3', '', capitalize(strangerLabel(c))), el('p', 'muted', 'Você não sabe quem é.'), truthBox(c));
+    else if (!known) body.append(truthBox(c));
+    body.append(sight === 'nitido' ? el('p', '', c.appearance) : el('p', 'muted', 'Está escuro demais para ver, mas você reconhece a voz.'));
+    if (known) {
+      if (c.traits.length) body.append(this.traits(c.traits));
+      if (c.detail === 'full') {
+        if (c.personality) body.append(el('p', '', c.personality));
+        if (c.background) body.append(el('p', 'muted', c.background));
+      } else body.append(el('p', 'hint', 'Ainda um esboço: o mestre aprofunda quando a pessoa ficar importante.'));
+    }
+    const held = Object.values(world.items).filter((i) => i.holder.kind === 'character' && i.holder.id === c.id);
+    if (held.length && c.isPlayer) {
+      // Os próprios itens abrem o inspetor deles.
+      const row = el('p', 'muted', 'Com: ');
+      for (const i of held) {
+        const b = el('button', 'link', i.name);
+        b.type = 'button';
+        b.addEventListener('click', () => this.showInspector(world, { kind: 'item', id: i.id }));
+        row.append(b, ' ');
+      }
+      body.append(row);
+    } else if (held.length && sight === 'nitido') body.append(el('p', 'muted', `Com: ${held.map((i) => i.name).join(', ')}`));
+    if (!c.isPlayer) {
+      const stats = statTexts(world, c);
+      const visible = stats.filter((s) => view.canSeeStat(s.id, c.id)).map((s) => s.text);
+      if (visible.length && sight === 'nitido') body.append(el('p', 'muted', visible.join(' · ')));
+      if (c.thoughts && view.canSeeThoughts(c.id)) body.append(el('p', 'thought', `💭 ${c.thoughts}`));
+      // Quem lê a mente percebe também o que ele sente por quem está ali (o mesmo recorte do resumo do mestre).
+      if (view.canSeeThoughts(c.id)) {
+        for (const { target, feeling } of feelingsHere(world, c)) {
+          const who = target.isPlayer ? 'por você' : withPor(shownAs(world, target));
+          body.append(el('p', 'thought', `Sente ${who}: ${FEELING_LABELS[feeling.degree]}${feeling.text ? ` (${feeling.text})` : ''}`));
+        }
+      }
+      // Bastidores: tudo o que o mestre sabe sobre o NPC.
+      const box = el('div', 'backstage-only');
+      const perks = c.perks.flatMap((id) => world.ruleset.perks.filter((p) => p.id === id).map((p) => p.name));
+      const secrets = world.facts.filter((f) => f.knownBy !== 'all' && f.knownBy.includes(c.id));
+      box.append(el('p', 'hint', `Ficha (bastidores): ${stats.map((s) => s.text).join(' · ')}`));
+      if (perks.length) box.append(el('p', 'hint', `Perks (bastidores): ${perks.join(', ')}`));
+      if (c.thoughts) box.append(el('p', 'hint', `Pensa (bastidores): ${c.thoughts}`));
+      const feelings = Object.entries(c.feelings).map(([id, f]) => `${world.characters[id]?.name ?? id} ${signed(f.degree)}${f.text ? ` (${f.text})` : ''}`);
+      if (feelings.length) box.append(el('p', 'hint', `Sente (bastidores): ${feelings.join(' · ')}`));
+      if (secrets.length) box.append(el('p', 'hint', `Sabe (bastidores): ${secrets.map((f) => f.text).join(' · ')}`));
+      body.append(box);
+    }
+    return body;
+  }
+
+  /** Uma ação do menu: livre (o motor faz na hora), uma marca na caixa de texto ou o começo de uma fala. */
+  private runAction(a: ActionOption): void {
+    if (a.free) this.onFree(a.free);
+    else if (a.token) this.insertToken(a.token);
+    else if (a.prefill) this.prefill(a.prefill);
+  }
+
   /** Botões das ações; uma com mais escolhas (a quem entregar, que gesto) abre a lista no lugar. */
   private renderActions(row: HTMLElement, actions: ActionOption[], back?: () => void): void {
     row.replaceChildren();
@@ -745,9 +795,7 @@ export class Ui {
       if (a.note) b.append(el('small', 'note', a.note));
       b.addEventListener('click', () => {
         if (a.options) return this.renderActions(row, a.options, () => this.renderActions(row, actions, back));
-        if (a.free) this.onFree(a.free);
-        else if (a.token) this.insertToken(a.token);
-        else if (a.prefill) this.prefill(a.prefill);
+        this.runAction(a);
       });
       row.append(b);
     }
@@ -784,7 +832,7 @@ export class Ui {
     if (!text || this.busy) return;
     this.input.value = '';
     this.renderPreview();
-    this.onSend(text, this.talkTo ?? undefined);
+    this.onSend(text, this.conversation.with ?? undefined);
   }
 
   private showTab(name: string): void {
@@ -903,6 +951,13 @@ export class Ui {
     }
     journal.replaceChildren(...parts);
   }
+}
+
+/** O que o NPC é de verdade, só nos bastidores: quem joga não vê. */
+function truthBox(c: Character): HTMLElement {
+  const box = el('div', 'backstage-only');
+  box.append(el('p', 'hint', `Na verdade (bastidores): ${c.name}, ${c.role}`));
+  return box;
 }
 
 /** "por" junto do artigo de quem vem depois: pelo homem de terno, pela moça, por Ana. */

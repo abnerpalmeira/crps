@@ -439,6 +439,8 @@ export interface LogEntry {
   playerText?: string;
   /** Na narração: as ações que o mestre sugeriu ao jogador, que viram botões. */
   options?: string[];
+  /** Na ação do jogador: a pessoa da conversa aberta no grid, de onde ele mandou o turno. */
+  to?: string;
 }
 
 /** Retrato da cena no fim de um turno: o que o replay precisa para mostrar o passado. */

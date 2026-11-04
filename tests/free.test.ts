@@ -4,7 +4,7 @@ import { compileBrief } from '../src/engine/brief';
 import { speedFor, timeUp } from '../src/engine/effects';
 import { GameEngine } from '../src/engine/engine';
 import { freeAct } from '../src/engine/free';
-import { hasNews, nextLine } from '../src/engine/lines';
+import { conversationLog, hasNews, nextLine } from '../src/engine/lines';
 import { distanceBetween } from '../src/engine/perception';
 import { EXAMPLE_CLASSROOM, runTool } from '../src/engine/tools';
 
@@ -302,6 +302,13 @@ describe('conversa com respostas prontas', () => {
     expect(e.state.facts).toEqual(before.facts);
     expect(e.state.characters.yuki.feelings).toEqual(before.characters.yuki.feelings);
     expect(e.state.characters.yuki.lines!.heard).toBe(before.characters.yuki.lines!.heard);
+    // O chat da Yuki: as falas do grid entre os dois, e nada de quem não falou com ela.
+    expect(conversationLog(e.state, 'yuki').map((x) => x.text)).toEqual([
+      '@yuki[>kenji]: Professor, posso entregar o trabalho amanhã?',
+      '@kenji[>yuki]: Não.',
+      '@yuki[>kenji]: Tá bom… *suspira*',
+    ]);
+    expect(conversationLog(e.state, 'ren')).toEqual([]);
     // Respondida, a pergunta fecha; o próximo turno do mestre também fecha a que ficou aberta.
     expect(await freeAct(e, { kind: 'reply', with: 'yuki', option: 0 })).toMatchObject({ ok: false, error: 'Essa conversa não espera resposta agora.' });
     e.setLines([{ who: 'yuki', turn: [asks] }]);

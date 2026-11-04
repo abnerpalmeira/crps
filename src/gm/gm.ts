@@ -135,6 +135,8 @@ export class GameMaster {
       const marked = hasMarks(segments) ? describeInput(engine.state, segments, menu.map((o) => o.line)) : [];
       const brief = compileBrief(engine);
       engine.log('player', input);
+      // O turno mandado pelo painel de uma pessoa entra no chat dela, além do chat do mestre.
+      if (opts.to) engine.state.log.at(-1)!.to = opts.to;
       for (const summary of changes) engine.log('tool', summary);
       const verified = marked.length ? `${input}\n\nComo o jogador marcou:\n${marked.join('\n')}` : input;
       // O gesto escolhido no menu acontece no 3D mesmo que a narração esqueça a marca.

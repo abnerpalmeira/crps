@@ -1,3 +1,4 @@
+import { parseSpeechLine } from './frames';
 import type { Character, ReadyLine, WorldState } from './types';
 
 /** A conversa aberta no grid, para a interface oferecer as respostas prontas, continuar ou dizer outra coisa. */
@@ -23,6 +24,34 @@ export function hasNews(c: Character): boolean {
 /** A conversa com o NPC: as respostas prontas à última fala dele e se há outra fala para ouvir. */
 export function conversationWith(c: Character): Conversation {
   return { with: c.id, replies: (c.lines?.awaiting ?? []).map((r) => r.label), more: hasNews(c) || Boolean(c.lines?.general.length) };
+}
+
+/** Uma linha do chat de um personagem: uma fala do grid, o que o jogador mandou pelo painel dele ou a narração que respondeu. */
+export interface ConversationEntry {
+  kind: 'free' | 'player' | 'narration';
+  turn: number;
+  text: string;
+}
+
+/**
+ * O chat do jogador com uma pessoa: as falas do grid entre os dois (as prontas, as respostas, a de
+ * quem veio puxar conversa) e os turnos que o jogador mandou pelo painel dela, com a narração que
+ * os respondeu. O texto é o que o jogador percebe.
+ */
+export function conversationLog(world: WorldState, npcId: string): ConversationEntry[] {
+  const me = world.playerId;
+  if (!me) return [];
+  const pair = new Set([me, npcId]);
+  const asked = new Set(world.log.filter((e) => e.kind === 'player' && e.to === npcId).map((e) => e.turn));
+  return world.log.flatMap((e): ConversationEntry[] => {
+    const text = e.playerText ?? e.text;
+    if (e.kind === 'free') {
+      const s = parseSpeechLine(text);
+      const between = s && s.targetId && s.speakerId !== s.targetId && pair.has(s.speakerId) && pair.has(s.targetId);
+      return between ? [{ kind: 'free', turn: e.turn, text }] : [];
+    }
+    return (e.kind === 'player' || e.kind === 'narration') && asked.has(e.turn) ? [{ kind: e.kind, turn: e.turn, text }] : [];
+  });
 }
 
 /** A pergunta que um NPC perto do jogador fez e que espera a resposta dele, como a da narração. */

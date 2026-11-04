@@ -1,6 +1,7 @@
 import { parseSpeechLine } from '../engine/frames';
 import type { FreeAct } from '../engine/free';
-import { openQuestion } from '../engine/lines';
+import { nextLine, openQuestion } from '../engine/lines';
+import { perceptionOf } from '../engine/perception';
 import { NARRATE_INPUT } from '../engine/text';
 import type { WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
@@ -17,7 +18,12 @@ const playback = new Playback(view, ui, (id) => world?.characters[id]?.name ?? (
 let world: WorldState | null = null;
 let busy = false;
 
-view.onPick = (pick) => ui.showInspector(world, pick);
+// Clicar numa pessoa que o jogador vê ou reconhece abre a conversa com ela, como no Disco Elysium;
+// um vulto, um móvel, um objeto ou o próprio personagem abrem o inspetor.
+view.onPick = (pick) => {
+  if (pick?.kind === 'character' && world && talkable(world, pick.id)) void openTalk(pick.id, true);
+  else ui.showInspector(world, pick);
+};
 ui.onSelect = (pick) => view.select(pick);
 ui.onReplay = (turn) => playback.playTurn(turn);
 ui.onControl = (command) => {
@@ -55,7 +61,6 @@ function handle(event: GmEvent, turn: TurnView): void {
     case 'narration':
       turn.final(event.text);
       turn.setTurn(event.turn);
-      ui.showTalk(null);
       ui.setOptions(event.options);
       break;
     case 'verify':
@@ -64,7 +69,7 @@ function handle(event: GmEvent, turn: TurnView): void {
     case 'free':
       turn.free(event.entries);
       turn.note('⚡ Resolvido no grid, sem o mestre');
-      ui.showTalk(event.conversation ?? null);
+      if (event.conversation) ui.openConversation(event.conversation.with);
       break;
     case 'status':
       turn.setStatus(event.text);
@@ -109,8 +114,13 @@ async function run(path: '/api/new' | '/api/turn', body: Record<string, unknown>
     busy = false;
     ui.setBusy(false);
   }
-  // A pergunta que alguém fez na narração abre a conversa, com as respostas prontas.
-  if (narrated && world) ui.showTalk(openQuestion(world));
+  // Depois da narração: a pergunta que alguém fez abre a conversa; o turno mandado pela conversa a
+  // mantém aberta, com a resposta no chat dela; qualquer outro a encerra.
+  if (narrated && world) {
+    const question = openQuestion(world);
+    if (question) ui.openConversation(question.with);
+    else if (!body.to) ui.closeConversation();
+  }
   // Resolvido no grid: sem turno novo para rever, só o balão de quem respondeu.
   if (failure === null && freed && !narrated) {
     if (freed.some((e) => parseSpeechLine(e))) playback.showLast();
@@ -153,20 +163,47 @@ async function runFree(act: FreeAct): Promise<void> {
     const r = await freeAction(act);
     applyWorld(r.world);
     ui.addFree(r.entries);
-    // Quem falou com o jogador abre a conversa: respostas prontas, continuar, dizer outra coisa ou encerrar.
-    ui.showTalk(r.conversation ?? null);
-    if (!r.ok && r.error) ui.notice(r.error);
-    if (r.note) ui.notice(r.note);
+    // Quem falou com o jogador abre a conversa com ele, ou a mantém: as respostas, continuar, dizer outra coisa.
+    if (r.conversation) ui.openConversation(r.conversation.with);
+    notify((!r.ok && r.error) || r.note || null);
     // A fala ouvida (de quem o jogador procurou, ou de quem veio até ele) aparece no balão sobre quem falou.
     if (r.entries.some((e) => parseSpeechLine(e))) playback.showLast();
   } catch (err) {
-    ui.notice(err instanceof Error ? err.message : String(err));
+    notify(err instanceof Error ? err.message : String(err));
   } finally {
     busy = false;
   }
 }
+
+/** O aviso do motor fica na conversa, se ela está aberta (null limpa o anterior); fora dela, no registro. */
+function notify(message: string | null): void {
+  if (ui.conversationWith()) ui.conversationNote(message);
+  else if (message) ui.notice(message);
+}
+
+/** Pessoa com quem dá para conversar: um NPC que o jogador vê ou reconhece. */
+function talkable(w: WorldState, id: string): boolean {
+  const c = w.characters[id];
+  if (!c || c.isPlayer || !w.playerId) return false;
+  const view = perceptionOf(w, w.playerId);
+  return view.sight(id) === 'nitido' || Boolean(view.recognize(id));
+}
+
+/** Abre a conversa com a pessoa; `start`, como no clique, já vai até ela e ouve a próxima fala. */
+async function openTalk(id: string, start: boolean): Promise<void> {
+  const c = world?.characters[id];
+  if (!c) return;
+  ui.openConversation(id);
+  if (start && nextLine(c)) await runFree({ kind: 'talk', with: id });
+}
+
 ui.onFree = (act) => void runFree(act);
-view.onWalk = (x, y) => void runFree({ kind: 'walk', x, y });
+ui.onTalk = (id) => void openTalk(id, false);
+// Andar para outro lugar encerra a conversa, como sair de perto de alguém.
+view.onWalk = (x, y) => {
+  ui.closeConversation();
+  void runFree({ kind: 'walk', x, y });
+};
 let modelNames = new Map<string, string>();
 const modelName = (id: string) => modelNames.get(id) ?? id;
 
@@ -207,7 +244,8 @@ void (async () => {
     if (state.world) {
       applyWorld(state.world);
       ui.renderHistory(state.world);
-      ui.showTalk(openQuestion(state.world));
+      const question = openQuestion(state.world);
+      if (question) ui.openConversation(question.with);
     } else ui.openNewGame(true);
     if (state.busy) ui.notice('O mestre ainda está terminando um turno anterior. Recarregue a página em instantes.');
   } catch {

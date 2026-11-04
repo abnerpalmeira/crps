@@ -4,7 +4,7 @@ import { EXAMPLE_CLASSROOM } from '../src/engine/tools';
 import { GameMaster, dropPreamble, splitOptions, type GmEvent } from '../src/gm/gm';
 import { OPTIONS_REQUEST, SYSTEM_PROMPT, turnMessage, verifierPrompt } from '../src/gm/prompts';
 import { NARRATE_INPUT } from '../src/engine/text';
-import { openQuestion } from '../src/engine/lines';
+import { conversationLog, openQuestion } from '../src/engine/lines';
 import { compileBrief } from '../src/engine/brief';
 import type { CheckInput, Checker } from '../src/gm/checker';
 import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, Verdict } from '../src/gm/provider';
@@ -286,6 +286,19 @@ describe('GameMaster', () => {
     expect(engine.state.characters.yuki.lines?.turn).toEqual([]);
     expect(engine.state.characters.yuki.lines?.awaiting).toEqual(asks.replies);
     expect(openQuestion(engine.state)).toEqual({ with: 'yuki', replies: ['Pode.'], more: false });
+  });
+
+  it('o turno mandado pelo painel de uma pessoa entra no chat dela, com a narração que o respondeu', async () => {
+    const provider = new FakeProvider([worldBuildingSteps(), [time(), say('A Yuki sorri e acena.')]]);
+    const gm = new GameMaster({ provider });
+    const { engine } = await setUpWorld(provider, gm);
+    await gm.play(engine, '"Tudo bem, Yuki?"', () => {}, { to: 'yuki' });
+    expect(engine.state.log.findLast((e) => e.kind === 'player')).toMatchObject({ text: '"Tudo bem, Yuki?"', to: 'yuki' });
+    expect(conversationLog(engine.state, 'yuki').map((x) => [x.kind, x.text])).toEqual([
+      ['player', '"Tudo bem, Yuki?"'],
+      ['narration', 'A Yuki sorri e acena.'],
+    ]);
+    expect(conversationLog(engine.state, 'ren')).toEqual([]);
   });
 
   it('pedir ao mestre para narrar não passa pelo leitor: vai ao mestre como a ação do jogador', async () => {

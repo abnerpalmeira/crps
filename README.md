@@ -201,7 +201,7 @@ src/engine/   motor puro em TypeScript, sem rede (roda no servidor e nos testes)
   frames.ts     falas `@id[modo>alvo]:` → passos do replay; retratos da cena por turno
   free.ts       ações livres no grid (andar, conversar com as falas prontas), sem o mestre
   path.ts       caminho no grid por A*, o mesmo no motor e no 3D
-  lines.ts      falas prontas dos NPCs: a próxima que toca e quem tem novidade
+  lines.ts      falas prontas dos NPCs: a próxima que toca, quem tem novidade e o chat de cada um
   diff.ts       o que o turno mudou no mundo (antes × depois), para a conferência
   checks.ts     conferências só de código: nomes indevidos e falas que repetem a narração
 src/gm/       o mestre
@@ -218,7 +218,9 @@ src/gm/       o mestre
   offline.ts    provedor de roteiro fixo
   prompts.ts    prompt de sistema, mensagem de criação e do verificador
 src/server/   API HTTP (estado, novo jogo e turno em NDJSON)
-src/client/   Three.js + painéis (Mestre, Ficha, Diário) e inspetor por clique
+src/client/   Three.js + painéis (Mestre, Ficha, Diário), inspetor por clique e o painel de conversa
+  conversation.ts a conversa com uma pessoa na coluna da direita: chat dos dois e opções numeradas
+  portrait.ts   o retrato 3D de quem conversa, num canvas próprio
 src/cli.ts    versão de terminal
 ```
 
@@ -394,19 +396,35 @@ tempo que o mestre deu ao turno:
   também na hora. Sacar uma arma, mirar e abrir caminho para um lugar novo continuam com o mestre.
 - **Conversar:** a cada turno o mestre dá aos NPCs em cena falas prontas com `set_lines`. As do
   turno falam do que acabou de acontecer e somem no próximo turno dele; as gerais são do jeito da
-  pessoa e ficam. "💬 Conversar" no inspetor leva o jogador até a pessoa e toca a próxima fala num
-  balão: as do turno na ordem, depois as gerais em rodízio. Quem tem fala do turno que o jogador
-  ainda não ouviu aparece com 💬 no nome.
-- **Responder:** como no Persona, a fala que pergunta algo traz respostas prontas (`replies`). O
-  painel da conversa mostra "Sim", "Não" ou o que o mestre escreveu, e a pessoa responde com a
-  dela, sem o mestre e sem mudar nada no mundo. Ele tem mais três botões:
-  - **"Continuar ▸"** ouve a próxima fala.
-  - **"✍ Dizer outra coisa… 🪙"** manda ao mestre o que o jogador escrever, já endereçado a essa
-    pessoa, e o leitor não precisa adivinhar com quem ele fala.
-  - **"Encerrar"** fecha a conversa.
+  pessoa e ficam. Quem tem fala do turno que o jogador ainda não ouviu aparece com 💬 no nome.
+- **O painel da pessoa:** como no Disco Elysium, clicar num NPC que o jogador vê ou reconhece faz a
+  coluna da direita virar o painel dele:
+  - o retrato 3D, que respira e gesticula quando a pessoa fala;
+  - o nome, ou o rótulo de estranho, e o papel;
+  - "Sobre", com o que o inspetor mostrava;
+  - o chat dos dois;
+  - as opções numeradas, escolhidas também pelas teclas 1 a 9.
 
-  Quando a própria narração faz a pergunta, a fala pronta repetida sai, mas as respostas ficam
-  esperando a escolha do jogador, e o painel abre depois da narração.
+  O clique já começa a conversa: o jogador vai até a pessoa e ouve a próxima fala, as do turno na
+  ordem e depois as gerais em rodízio. Num vulto, num móvel, num objeto ou no próprio personagem, o
+  clique continua abrindo o inspetor.
+- **As opções:**
+  - **As respostas prontas** (`replies`): a fala que pergunta algo traz "Sim", "Não" ou o que o
+    mestre escreveu, e a pessoa responde com a dela, sem o mestre e sem mudar nada no mundo.
+  - **"Continuar ▸"** ouve a próxima fala.
+  - **"✍ Dizer outra coisa… 🪙"** foca a caixa de texto. Enquanto o painel está aberto, tudo o que
+    se manda vai ao mestre já endereçado a essa pessoa, e o leitor não precisa adivinhar com quem o
+    jogador fala. A resposta aparece no chat dela e no chat do mestre, como um turno.
+  - **O que mais se faz com a pessoa:** sussurrar, ir até ela, gesto, entregar, mirar, atacar.
+  - **"Encerrar"** devolve a coluna ao chat do mestre.
+- **Quando o painel abre e fecha:**
+  - Ele abre quando alguém toma a iniciativa ou responde, com uma fala pronta, ao que o jogador
+    escreveu.
+  - Também abre quando a narração faz uma pergunta com respostas prontas. A fala pronta repetida
+    sai, mas as respostas ficam esperando a escolha do jogador.
+  - Ele fecha com um clique no chão, com uma narração que não veio dele ou com "Encerrar".
+- **O chat do mestre** fica sem as falas do grid: só um chip "💬 conversa com Hana" por pessoa e
+  turno, que reabre o painel sem gastar tempo.
 - **Falas que revelam:** a fala que conta um fato registrado leva o id dele (`fact_id`), e quem a
   ouve fica sabendo, como em `share_knowledge`: o jogador e quem mais estava perto. Só quem sabe
   pode contar. A fala em que a pessoa diz o nome leva `introduces`, e quem ouve passa a conhecê-la.
