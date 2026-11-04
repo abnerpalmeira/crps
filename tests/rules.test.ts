@@ -97,7 +97,7 @@ describe('regras que evoluem', () => {
       /"mana" não é atributo nem recurso/,
     );
     expect(runTool(e, 'extend_ruleset', { reason: 'x', attributes: [{ name: 'Carisma', description: '' }] }).content).toMatch(/Já existe/);
-    expect(toolSpecs()).toHaveLength(23);
+    expect(toolSpecs()).toHaveLength(24);
   });
 });
 

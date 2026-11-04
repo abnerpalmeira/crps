@@ -43,7 +43,7 @@ export async function fetchState(): Promise<StateResponse> {
 }
 
 /** POST que devolve NDJSON: um evento do mestre por linha, conforme acontecem. */
-export async function streamEvents(path: '/api/new' | '/api/turn', body: Record<string, string>, onEvent: (event: GmEvent) => void): Promise<void> {
+export async function streamEvents(path: '/api/new' | '/api/turn', body: Record<string, unknown>, onEvent: (event: GmEvent) => void): Promise<void> {
   const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok || !res.body) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };

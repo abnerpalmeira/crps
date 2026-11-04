@@ -4,7 +4,7 @@ import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer
 import { GESTURES, GRIPS, POSES, bodyPose, clipFor, gripOf, handsOf, mainGrip, variantIndex, type Act, type Grip, type Hand } from '../engine/body';
 import { ERA_DOORS, decorModel, locationLook } from '../engine/eras';
 import { isPassable, tileDef } from '../engine/layout';
-import { stepsFor } from '../engine/effects';
+import { walkRange } from '../engine/effects';
 import type { FreeAct } from '../engine/free';
 import { besideRect, findPath, stopWithin, walkGoal, type GridRect } from '../engine/path';
 import { lightSources } from '../engine/light';
@@ -492,7 +492,7 @@ export class WorldView {
 
   /**
    * Quem anda até o alvo, pelas regras do motor (path.ts): o caminho a partir de onde o mundo deixou o
-   * jogador e o índice do tile em que os passos do turno acabam (0: não sai do lugar). Null sem o
+   * jogador e o índice do tile em que o tempo do turno acaba (0: não sai do lugar). Null sem o
    * jogador em cena, sem destino ou sem caminho.
    */
   private planWalk(world: WorldState, loc: Location, t: Target): { path: Pos[]; stop: number } | null {
@@ -504,13 +504,12 @@ export class WorldView {
     const goal = this.goalOf(world, loc, me, me.pos, t, occupant);
     const path = goal ? findPath(loc, me.pos, goal, others) : null;
     if (!path) return null;
-    const { max, used } = me.steps ?? { max: stepsFor(world, me.id), used: 0 };
-    return { path, stop: path.indexOf(stopWithin(path, max - used, others)) };
+    return { path, stop: path.indexOf(stopWithin(path, walkRange(world, me.id), others)) };
   }
 
   /**
    * O jogador sai andando no clique, sem esperar o servidor: o plano é o do motor, a partir de onde o
-   * mundo o deixou e até onde os passos do turno levam. Quando o mundo chega e ele parou onde se
+   * mundo o deixou e até onde o tempo do turno leva. Quando o mundo chega e ele parou onde se
    * previu, o passo segue; se não, o personagem corrige até onde o motor o pôs.
    */
   predict(act: FreeAct): void {

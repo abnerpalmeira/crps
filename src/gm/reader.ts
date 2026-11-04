@@ -27,7 +27,8 @@ export interface ReadResult {
 }
 
 export interface InputReader {
-  read(engine: GameEngine, input: string): Promise<ReadResult>;
+  /** `to`: o NPC da conversa aberta no grid, com quem o jogador fala sem precisar dizer. */
+  read(engine: GameEngine, input: string, to?: string): Promise<ReadResult>;
 }
 
 /**
@@ -51,7 +52,7 @@ const keyOf = (s: string) => s.replace(/[^a-zA-Z0-9_]/g, '_');
 export class JevReader implements InputReader {
   constructor(private readonly jev: JevClient) {}
 
-  async read(engine: GameEngine, input: string): Promise<ReadResult> {
+  async read(engine: GameEngine, input: string, to?: string): Promise<ReadResult> {
     const none: ReadResult = { plan: null, usages: [] };
     const me = engine.player;
     const text = input.trim();
@@ -62,6 +63,8 @@ export class JevReader implements InputReader {
     const view = perceptionOf(world, me.id);
     const people = Object.values(world.characters).filter((c) => !c.isPlayer && c.pos && c.locationId === me.locationId && (view.recognize(c.id) || view.sight(c.id) === 'nitido'));
     const shown = (c: Character) => (view.recognize(c.id) ? c.name : strangerLabel(c));
+    // Na conversa aberta no grid, com quem o jogador fala já se sabe: não há o que perguntar.
+    const partner = to ? people.find((c) => c.id === to) : undefined;
     // Onde cada um está, pelo móvel ao lado, com o rótulo do menu: "chego na mesa 1 e pergunto" é com quem está nela.
     const loc = world.locations[me.locationId];
     const placed = (c: Character) => {
@@ -91,8 +94,9 @@ export class JevReader implements InputReader {
         criteria: { nenhuma: 'nenhuma destas: o jogador fala, pergunta, pensa ou faz outra coisa', ...Object.fromEntries(acts.map((a, i) => [`a${i}`, a.label])) },
       },
     };
+    if (partner) delete questions.com_quem;
     // Especulativo: para cada pessoa com falas prontas, qual delas responde, se for com ela.
-    for (const c of people) {
+    for (const c of partner ? [partner] : people) {
       const lines = linesOf(c);
       if (!lines.length) continue;
       questions[`resposta_${keyOf(c.id)}`] = {
@@ -111,7 +115,7 @@ export class JevReader implements InputReader {
       // Ir até a pessoa, ou até o móvel ao lado dela, é ir falar com ela.
       const goesTo = (c: Character) => action?.act.kind === 'walk' && 'near' in action.act && [c.id, ...besideOf(loc, c).map((f) => f.id)].includes(action.act.near);
       // Com quem: a escolha confiante, ou a mais provável quando o jogador vai justamente até essa pessoa.
-      const npc = people.find((c) => keyOf(c.id) === chosen(a.com_quem, CONFIDENT)) ?? people.find((c) => keyOf(c.id) === chosen(a.com_quem, 0) && goesTo(c));
+      const npc = partner ?? people.find((c) => keyOf(c.id) === chosen(a.com_quem, CONFIDENT)) ?? people.find((c) => keyOf(c.id) === chosen(a.com_quem, 0) && goesTo(c));
       const other = action && !(npc && goesTo(npc));
       const line = npc ? pickLine(npc, a[`resposta_${keyOf(npc.id)}`]) : null;
       if (!npc || !line || other || (a.uma?.type === 'noul' && a.uma.noul < 0.5)) {

@@ -14,6 +14,9 @@ const line = z.object({
   fato: z.string().nullable().describe('id do fato registrado que a fala conta, ou null'),
   diz_o_nome: z.boolean().describe('a pessoa diz o próprio nome nesta fala'),
   cochicho: z.boolean().describe('segredo: só o jogador ouve'),
+  respostas: z
+    .array(z.object({ opcao: z.string().describe('o que o jogador responde, curto'), resposta: z.string().describe('o que a pessoa diz a isso') }))
+    .describe('para a fala que pergunta algo ao jogador: até três respostas prontas dele e o que a pessoa diz a cada uma; vazio nas outras'),
 });
 
 export const WriterSchema = z.object({
@@ -43,6 +46,9 @@ export const WriterSchema = z.object({
     )
     .describe('falas prontas dos NPCs em cena'),
   minutos: z.number().int().describe('quanto tempo a conversa levou'),
+  tempo_do_turno: z
+    .object({ quantidade: z.number().describe('quanto tempo, na unidade'), unidade: z.enum(['s', 'min', 'h']) })
+    .describe('quanto tempo o jogador tem para agir no grid sem você, até a próxima narração'),
 });
 
 export type Writing = z.infer<typeof WriterSchema>;
@@ -57,8 +63,9 @@ export const WRITER_PROMPT = `Você é o escritor do CRPS (Computerized Role-Pla
 - apresentados: quem disse o próprio nome nesta cena, ou foi apresentado, e a quem; daí em diante eles o conhecem.
 - sentimentos: o que a conversa mudou no que um NPC sente por alguém (grau de -3 a +3, a boa vontade com a pessoa, e o porquê numa frase), um ou dois pontos por vez e pelo jeito dele; e o sentimento que falta em quem reage ao jogador (o resumo aponta "falta sentimento por"), mesmo que seja indiferença (grau 0). Só NPCs: o que o personagem do jogador sente, quem diz é o jogador.
 - pensamentos: o que um NPC passa a pensar ou querer depois da conversa, numa frase, só para quem mudou.
-- falas: as falas prontas dos NPCs em cena, para o jogador puxar conversa depois, sem você. Em do_turno, o que cada um diria em seguida, do ponto de vista dele, pelo que sabe, sente e quer, e nunca o que acabou de dizer na narração. Em gerais, falas do jeito da pessoa para qualquer momento, só para quem o resumo marca "sem falas gerais"; para os outros, deixe vazio, e as que eles têm ficam. Uma a três de cada, curtas. A fala que conta um fato registrado leva o id dele em fato (só quem sabe pode contar); diz_o_nome quando a pessoa diz o próprio nome; cochicho para segredo, que só o jogador ouve. iniciativa: "vem" (vai até o jogador) ou "chama" (de onde está) para quem tem motivo para puxar conversa; "nenhuma" para os outros.
+- falas: as falas prontas dos NPCs em cena, para o jogador puxar conversa depois, sem você. Em do_turno, o que cada um diria em seguida, do ponto de vista dele, pelo que sabe, sente e quer, e nunca o que acabou de dizer na narração. Em gerais, falas do jeito da pessoa para qualquer momento, só para quem o resumo marca "sem falas gerais"; para os outros, deixe vazio, e as que eles têm ficam. Uma a três de cada, curtas. A fala que conta um fato registrado leva o id dele em fato (só quem sabe pode contar); diz_o_nome quando a pessoa diz o próprio nome; cochicho para segredo, que só o jogador ouve. A fala que pergunta algo ao jogador leva respostas: até três respostas curtas dele (opcao, como "Sim" e "Não") e o que a pessoa diz a cada uma (resposta); elas não mudam nada no mundo. iniciativa: "vem" (vai até o jogador) ou "chama" (de onde está) para quem tem motivo para puxar conversa; "nenhuma" para os outros.
 - minutos: quanto tempo a conversa levou, em geral de 1 a 5.
+- tempo_do_turno: quanto tempo do mundo o jogador tem para agir no grid sem você até a próxima narração, pelo que a cena pede: a pessoa espera a resposta dele, 30 s; o garçom volta com o pedido em 5 minutos, 5 min; alguém aponta uma arma para ele, 1 s. Andar, ouvir falas e as ações do menu gastam esse tempo, e quando ele acaba, o jogador só pode pedir a próxima narração.
 
 # O que você não faz
 Neste turno ninguém muda de lugar, de postura ou de mãos, nem o personagem do jogador, que fala de onde está (se ele precisava chegar perto, o motor já o levou), nenhuma pessoa ou objeto aparece, nada se quebra ou se acende, e nenhum teste é rolado: se a cena pedir isso, mostre a intenção sem consumar (alguém faz menção de levantar, promete ir buscar). Não contradiga o "Decidido pelo motor": a pessoa reage assim e conta o que foi decidido, nem mais nem menos. O jogador decide as falas e as atitudes do personagem dele: narre o que ele escreveu, sem acrescentar falas nem decisões dele.
@@ -79,7 +86,7 @@ Neste turno ninguém muda de lugar, de postura ou de mãos, nem o personagem do 
 
 /** Na reescrita, cada tool que a conferência cita e o campo do JSON que faz o mesmo. */
 const FIELDS =
-  'add_fact em fatos, share_knowledge em contados, introduce em apresentados, set_feelings em sentimentos, update_character thoughts em pensamentos, set_lines em falas (fact_id é fato, introduces é diz_o_nome, whisper é cochicho)';
+  'add_fact em fatos, share_knowledge em contados, introduce em apresentados, set_feelings em sentimentos, update_character thoughts em pensamentos, set_lines em falas (fact_id é fato, introduces é diz_o_nome, whisper é cochicho, replies é respostas), set_turn_time em tempo_do_turno';
 
 /** A mensagem do turno para o escritor: o resumo, a ação do jogador, o decidido e, numa reescrita, o que corrigir. */
 export function writerMessage(brief: string, input: string, marked: string[], decided: string[], fix?: { previous: Writing; issues: string[] }): string {
@@ -124,6 +131,7 @@ const ready = (l: z.infer<typeof line>) => ({
   ...(l.fato ? { fact_id: l.fato } : {}),
   ...(l.diz_o_nome ? { introduces: true } : {}),
   ...(l.cochicho ? { whisper: true } : {}),
+  ...(l.respostas.length ? { replies: l.respostas.slice(0, 3).map((r) => ({ label: r.opcao.slice(0, 40), answer: r.resposta.slice(0, 240) })) } : {}),
 });
 
 /**
@@ -162,5 +170,7 @@ export function writingCalls(out: Writing, playerId: string | null): WritingCall
   }
   const minutes = Math.min(Math.max(0, Math.round(out.minutos)), 240);
   if (minutes) calls.push({ field: 'minutos', name: 'advance_time', input: { minutes, reason: 'a conversa' } });
+  const { quantidade, unidade } = out.tempo_do_turno;
+  calls.push({ field: 'tempo_do_turno', name: 'set_turn_time', input: { amount: Math.max(0, quantidade), unit: unidade, reason: 'o ritmo da conversa' } });
   return calls;
 }

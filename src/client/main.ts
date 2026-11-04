@@ -1,5 +1,7 @@
 import { parseSpeechLine } from '../engine/frames';
 import type { FreeAct } from '../engine/free';
+import { openQuestion } from '../engine/lines';
+import { NARRATE_INPUT } from '../engine/text';
 import type { WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 import { chooseModel, fetchState, freeAction, streamEvents } from './api';
@@ -53,6 +55,7 @@ function handle(event: GmEvent, turn: TurnView): void {
     case 'narration':
       turn.final(event.text);
       turn.setTurn(event.turn);
+      ui.showTalk(null);
       ui.setOptions(event.options);
       break;
     case 'verify':
@@ -61,6 +64,7 @@ function handle(event: GmEvent, turn: TurnView): void {
     case 'free':
       turn.free(event.entries);
       turn.note('⚡ Resolvido no grid, sem o mestre');
+      ui.showTalk(event.conversation ?? null);
       break;
     case 'status':
       turn.setStatus(event.text);
@@ -80,7 +84,7 @@ function handle(event: GmEvent, turn: TurnView): void {
   }
 }
 
-async function run(path: '/api/new' | '/api/turn', body: Record<string, string>, input: string | null): Promise<void> {
+async function run(path: '/api/new' | '/api/turn', body: Record<string, unknown>, input: string | null): Promise<void> {
   busy = true;
   ui.setBusy(true);
   playback.live();
@@ -105,6 +109,8 @@ async function run(path: '/api/new' | '/api/turn', body: Record<string, string>,
     busy = false;
     ui.setBusy(false);
   }
+  // A pergunta que alguém fez na narração abre a conversa, com as respostas prontas.
+  if (narrated && world) ui.showTalk(openQuestion(world));
   // Resolvido no grid: sem turno novo para rever, só o balão de quem respondeu.
   if (failure === null && freed && !narrated) {
     if (freed.some((e) => parseSpeechLine(e))) playback.showLast();
@@ -127,8 +133,13 @@ async function resync(failure: string): Promise<void> {
   }
 }
 
-ui.onSend = (text) => {
-  if (!busy && world) void run('/api/turn', { input: text }, text);
+ui.onSend = (text, to) => {
+  if (!busy && world) void run('/api/turn', to ? { input: text, to } : { input: text }, text);
+};
+
+// Sem escrever nada: o mestre narra o que acontece agora, e o turno seguinte traz um tempo novo.
+ui.onNarrate = () => {
+  if (!busy && world) void run('/api/turn', { narrate: true }, NARRATE_INPUT);
 };
 
 /** Andar e conversar com as falas prontas: o motor faz na hora, sem o mestre. */
@@ -142,6 +153,8 @@ async function runFree(act: FreeAct): Promise<void> {
     const r = await freeAction(act);
     applyWorld(r.world);
     ui.addFree(r.entries);
+    // Quem falou com o jogador abre a conversa: respostas prontas, continuar, dizer outra coisa ou encerrar.
+    ui.showTalk(r.conversation ?? null);
     if (!r.ok && r.error) ui.notice(r.error);
     if (r.note) ui.notice(r.note);
     // A fala ouvida (de quem o jogador procurou, ou de quem veio até ele) aparece no balão sobre quem falou.
@@ -194,6 +207,7 @@ void (async () => {
     if (state.world) {
       applyWorld(state.world);
       ui.renderHistory(state.world);
+      ui.showTalk(openQuestion(state.world));
     } else ui.openNewGame(true);
     if (state.busy) ui.notice('O mestre ainda está terminando um turno anterior. Recarregue a página em instantes.');
   } catch {

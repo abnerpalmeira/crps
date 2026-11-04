@@ -3,6 +3,8 @@ import { GameEngine } from '../src/engine/engine';
 import { EXAMPLE_CLASSROOM } from '../src/engine/tools';
 import { GameMaster, dropPreamble, splitOptions, type GmEvent } from '../src/gm/gm';
 import { OPTIONS_REQUEST, SYSTEM_PROMPT, turnMessage, verifierPrompt } from '../src/gm/prompts';
+import { NARRATE_INPUT } from '../src/engine/text';
+import { openQuestion } from '../src/engine/lines';
 import { compileBrief } from '../src/engine/brief';
 import type { CheckInput, Checker } from '../src/gm/checker';
 import type { ModelProvider, ModelSession, SessionOptions, StepHandlers, StepResult, Verdict } from '../src/gm/provider';
@@ -50,6 +52,8 @@ class FakeProvider implements ModelProvider {
 const call = (id: string, name: string, input: unknown) => ({ id, name, input });
 const tools = (...toolCalls: ReturnType<typeof call>[]): StepResult => ({ text: '', toolCalls, stop: 'tool_use' });
 const say = (text: string): StepResult => ({ text, toolCalls: [], stop: 'end_turn' });
+/** O tempo do turno, que o mestre dá a cada narração (sem ele, a conferência pede correção). */
+const time = (): StepResult => tools(call('tt', 'set_turn_time', { amount: 1, unit: 'min', reason: 'a aula segue' }));
 
 function worldBuildingSteps(): StepResult[] {
   return [
@@ -77,6 +81,7 @@ function worldBuildingSteps(): StepResult[] {
         ],
       }),
       call('t4', 'create_items', { items: [{ name: 'Giz', description: 'giz branco', holder: { character_id: 'kenji' } }] }),
+      call('t4b', 'set_turn_time', { amount: 5, unit: 'min', reason: 'a turma chegando' }),
     ),
     say('A sala 1-A cheira a giz e café requentado.'),
   ];
@@ -96,7 +101,7 @@ describe('GameMaster', () => {
 
     expect(engine.player?.name).toBe('Kenji Tanaka');
     expect(engine.itemsHeldBy('kenji').map((i) => i.name)).toEqual(['Giz']);
-    expect(events.filter((e) => e.type === 'tool')).toHaveLength(4);
+    expect(events.filter((e) => e.type === 'tool')).toHaveLength(5);
     expect(events.filter((e) => e.type === 'narration')).toHaveLength(1);
     expect(events.find((e) => e.type === 'narration')).toMatchObject({ text: 'A sala 1-A cheira a giz e café requentado.' });
     expect(provider.options[0].effort).toBe('medium');
@@ -110,6 +115,7 @@ describe('GameMaster', () => {
       [
         worldBuildingSteps(),
         [
+          time(),
           say('Você escreve a data no quadro.'),
           tools(call('t5', 'update_fixture', { fixture_id: 'sala/quadro-1', text: '28/10' })),
           say('Você escreve 28/10 no quadro, e o giz range.'),
@@ -133,7 +139,7 @@ describe('GameMaster', () => {
   });
 
   it('a conferência recebe o mundo de antes do turno e a narração crua, e o problema dela pede correção', async () => {
-    const provider = new FakeProvider([worldBuildingSteps(), [say('Você vai até a janela.\n>> Olho para fora.'), say('Você vai até a janela e olha o pátio.')]]);
+    const provider = new FakeProvider([worldBuildingSteps(), [time(), say('Você vai até a janela.\n>> Olho para fora.'), say('Você vai até a janela e olha o pátio.')]]);
     const seen: CheckInput[] = [];
     const verdicts: Verdict[] = [
       { consistent: true, issues: [] },
@@ -161,6 +167,7 @@ describe('GameMaster', () => {
       [
         worldBuildingSteps(),
         [
+          time(),
           say('Você escreve a data no quadro.'),
           tools(call('t5', 'update_fixture', { fixture_id: 'sala/quadro-1', text: '28/10' })),
           say('O quadro agora tem a data. Segue a narração corrigida deste turno.\n\nVocê escreve 28/10 no quadro, e o giz range.'),
@@ -184,7 +191,7 @@ describe('GameMaster', () => {
   it('a narração chega inteira, depois do verificador, e as três ações saem dela para os botões e o log', async () => {
     const provider = new FakeProvider([
       worldBuildingSteps(),
-      [say('Você escreve 28/10 no quadro.\n>> Começo a chamada.\n>> "Bom dia, turma."\n>> Vou até a janela.')],
+      [time(), say('Você escreve 28/10 no quadro.\n>> Começo a chamada.\n>> "Bom dia, turma."\n>> Vou até a janela.')],
     ]);
     const gm = new GameMaster({ provider });
     const { engine } = await setUpWorld(provider, gm);
@@ -204,7 +211,7 @@ describe('GameMaster', () => {
   it('narração sem as ações: o mestre é chamado de novo só para elas, e a narração fica', async () => {
     const provider = new FakeProvider([
       worldBuildingSteps(),
-      [say('Você escreve 28/10 no quadro.'), say('>> 1. Começo a chamada.\n> 2. Vou até a janela.\n>> Sento e espero.\n>> Saio da sala.')],
+      [time(), say('Você escreve 28/10 no quadro.'), say('>> 1. Começo a chamada.\n> 2. Vou até a janela.\n>> Sento e espero.\n>> Saio da sala.')],
     ]);
     const gm = new GameMaster({ provider });
     const { engine } = await setUpWorld(provider, gm);
@@ -224,7 +231,7 @@ describe('GameMaster', () => {
   });
 
   it('o prompt do mestre sai do mundo: na criação, sem a época; nos turnos, com a dela', async () => {
-    const provider = new FakeProvider([worldBuildingSteps(), [say('A turma se ajeita.')]]);
+    const provider = new FakeProvider([worldBuildingSteps(), [time(), say('A turma se ajeita.')]]);
     const gm = new GameMaster({ provider, system: (world, setup) => (setup ? 'CRIAÇÃO' : `TURNO ${world.era ?? 'sem época'}`) });
     const { engine } = await setUpWorld(provider, gm);
     engine.state.era = 'atual';
@@ -254,6 +261,44 @@ describe('GameMaster', () => {
     expect(SYSTEM_PROMPT).toContain('não assiste parado a uma agressão');
   });
 
+  it('o turno sem o tempo do jogador pede correção, e o tempo que o mestre dá abre o turno seguinte', async () => {
+    const provider = new FakeProvider([worldBuildingSteps(), [say('A turma se ajeita.'), time(), say('A turma se ajeita.')]]);
+    const gm = new GameMaster({ provider });
+    const { engine } = await setUpWorld(provider, gm);
+    await gm.play(engine, 'Espero.', () => {});
+    expect(provider.sessions[1].userTexts[0]).toContain('chame set_turn_time');
+    expect(engine.state.turnClock).toEqual({ turn: engine.state.turn, budget: 60, spent: 0 });
+  });
+
+  it('a pergunta que a narração já fez deixa as respostas prontas esperando o jogador', async () => {
+    const asks = { text: 'Professor, posso apagar o quadro?', replies: [{ label: 'Pode.', answer: 'Oba!' }] };
+    const provider = new FakeProvider([
+      worldBuildingSteps(),
+      [
+        tools(call('tm', 'move_character', { character_id: 'kenji', to: { near: 'yuki' } }), call('tl', 'set_lines', { lines: [{ who: 'yuki', turn: [asks] }] })),
+        time(),
+        say('@yuki[>kenji]: Professor, posso apagar o quadro?'),
+      ],
+    ]);
+    const gm = new GameMaster({ provider });
+    const { engine } = await setUpWorld(provider, gm);
+    await gm.play(engine, 'Espero.', () => {});
+    expect(engine.state.characters.yuki.lines?.turn).toEqual([]);
+    expect(engine.state.characters.yuki.lines?.awaiting).toEqual(asks.replies);
+    expect(openQuestion(engine.state)).toEqual({ with: 'yuki', replies: ['Pode.'], more: false });
+  });
+
+  it('pedir ao mestre para narrar não passa pelo leitor: vai ao mestre como a ação do jogador', async () => {
+    const provider = new FakeProvider([worldBuildingSteps(), [time(), say('O sinal toca.')]]);
+    let read = false;
+    const reader = { read: async () => ((read = true), { plan: null, usages: [] }) };
+    const gm = new GameMaster({ provider, reader });
+    const { engine } = await setUpWorld(provider, gm);
+    await gm.play(engine, '', () => {}, { narrate: true });
+    expect(read).toBe(false);
+    expect(engine.state.log.findLast((e) => e.kind === 'player')?.text).toBe(NARRATE_INPUT);
+  });
+
   it('desfaz o turno inteiro quando a API falha no meio', async () => {
     const provider = new FakeProvider([worldBuildingSteps(), [tools(call('t7', 'update_fixture', { fixture_id: 'sala/quadro-1', text: 'meio turno' }))]]);
     const gm = new GameMaster({ provider });
@@ -266,7 +311,7 @@ describe('GameMaster', () => {
   it('devolve erros de tool ao modelo e não verifica recusas', async () => {
     const provider = new FakeProvider([
       worldBuildingSteps(),
-      [tools(call('t6', 'move_character', { character_id: 5 })), say('Você hesita.')],
+      [tools(call('t6', 'move_character', { character_id: 5 })), time(), say('Você hesita.')],
       [{ text: '', toolCalls: [], stop: 'refusal' }],
     ]);
     const gm = new GameMaster({ provider });

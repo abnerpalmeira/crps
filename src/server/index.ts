@@ -160,13 +160,17 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (pathname === '/api/turn' && req.method === 'POST') {
-      const input = await readText(req, 'input');
-      if (!input) return json(res, 400, { error: 'Escreva sua ação.' });
+      const body = await readJson(req);
+      // "Pedir ao mestre para narrar" vem sem texto; uma fala na conversa aberta diz com quem.
+      const narrate = body.narrate === true;
+      const input = typeof body.input === 'string' ? body.input.trim().slice(0, MAX_TEXT) : '';
+      const to = typeof body.to === 'string' ? body.to : undefined;
+      if (!input && !narrate) return json(res, 400, { error: 'Escreva sua ação.' });
       if (!engine) return json(res, 400, { error: 'Nenhuma campanha em andamento.' });
       if (busy || acting) return json(res, 409, { error: 'O mestre ainda está narrando.' });
       busy = true;
       const current = engine;
-      await streamTurn(res, (emit) => gm.play(current, input, emit));
+      await streamTurn(res, (emit) => gm.play(current, input, emit, { narrate, to }));
       return;
     }
     if (pathname === '/api/act' && req.method === 'POST') {

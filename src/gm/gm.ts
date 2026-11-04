@@ -4,10 +4,12 @@ import { describeInput, hasMarks, parsePlayerInput } from '../engine/input';
 import { analyzeActs } from '../engine/body';
 import { dropRepeated } from '../engine/checks';
 import { answer, freeAct, TALK_REACH, type FreeAct, type FreeOutcome } from '../engine/free';
+import type { Conversation } from '../engine/lines';
 import { distanceBetween } from '../engine/perception';
 import { performMenuAct } from '../engine/perform';
 import { analyzeReading } from '../engine/reading';
 import { analyzeSpeech, playerNarration, type SpeechLine } from '../engine/speech';
+import { NARRATE_INPUT } from '../engine/text';
 import { runTool, toolSpecs, type ToolResult } from '../engine/tools';
 import type { WorldState } from '../engine/types';
 import { LlmChecker, type CheckInput, type Checker } from './checker';
@@ -26,8 +28,8 @@ export type GmEvent =
   | { type: 'narration'; text: string; turn: number; options: string[] }
   | { type: 'state'; world: WorldState }
   | { type: 'verify'; consistent: boolean; issues: string[] }
-  /** O texto do jogador resolvido no grid, sem o mestre: os passos e as falas, como o jogador os vê. */
-  | { type: 'free'; entries: string[] }
+  /** O texto do jogador resolvido no grid, sem o mestre: os passos e as falas, como o jogador os vê, e a conversa aberta. */
+  | { type: 'free'; entries: string[]; conversation?: Conversation }
   | { type: 'usage'; usage: Usage }
   | { type: 'error'; message: string }
   /** Emitido pelo servidor no fim do turno: US$ no modo dev, só créditos no release. */
@@ -63,6 +65,14 @@ export interface GameMasterOptions {
 
 const SILENCE = '(O mestre ficou em silêncio. Tente descrever sua ação de outro jeito.)';
 const REFUSAL = '(O mestre não consegue narrar esse caminho. Tente descrever a ação de outra forma.)';
+/** Como o jogador mandou o turno: pedindo a narração sem escrever, ou falando com quem está na conversa com ele. */
+export interface PlayOptions {
+  narrate?: boolean;
+  /** O NPC da conversa aberta: o leitor não precisa adivinhar com quem o jogador fala. */
+  to?: string;
+}
+
+const TURN_TIME_MISSING = 'O turno não diz quanto tempo o jogador tem para agir no grid até a próxima narração: chame set_turn_time pelo que a cena pede.';
 
 interface LoopResult {
   text: string;
@@ -94,8 +104,10 @@ export class GameMaster {
     return { ...(await freeAct(engine, act, hooks)), usages };
   }
 
-  async play(engine: GameEngine, input: string, emit: Emit): Promise<void> {
-    const read = this.opts.reader ? await this.tryFree(engine, input, emit) : { done: false, addressee: null, talk: false };
+  async play(engine: GameEngine, input: string, emit: Emit, opts: PlayOptions = {}): Promise<void> {
+    // Pedir a narração não tem o que ler: o mestre conta o que acontece agora.
+    if (opts.narrate) input = NARRATE_INPUT;
+    const read = this.opts.reader && !opts.narrate ? await this.tryFree(engine, input, emit, opts.to) : { done: false, addressee: null, talk: false };
     if (read.done) return;
     // Quem o jogador procura: o Jev decide como reage e o que conta, e o mestre (ou o escritor) narra isso.
     const reaction = read.addressee && this.opts.decider ? await this.react(engine, input, read.addressee, emit) : null;
@@ -139,17 +151,17 @@ export class GameMaster {
    * passar por uma porta conhecida, ou perguntar a alguém algo que uma fala pronta dele já responde.
    * O leitor (o Jev) escolhe entre as opções do motor; na dúvida, ou se o motor recusar, segue o turno.
    */
-  private async tryFree(engine: GameEngine, input: string, emit: Emit): Promise<{ done: boolean; addressee: string | null; talk: boolean }> {
+  private async tryFree(engine: GameEngine, input: string, emit: Emit, to?: string): Promise<{ done: boolean; addressee: string | null; talk: boolean }> {
     emit({ type: 'status', text: 'Lendo o que você escreveu…' });
     try {
-      const { plan, usages, addressee, talk } = await this.opts.reader!.read(engine, input);
+      const { plan, usages, addressee, talk } = await this.opts.reader!.read(engine, input, to);
       for (const usage of usages) emit({ type: 'usage', usage });
       if (!plan) return { done: false, addressee: addressee ?? null, talk: talk === true };
       const hooks = this.opts.decider?.hooks(engine, (usage) => emit({ type: 'usage', usage })) ?? {};
       const outcome = plan.kind === 'act' ? await freeAct(engine, plan.act, hooks) : await answer(engine, plan.npcId, plan.line, plan.said, hooks);
       // O que o motor fez antes de recusar (ir até lá) aconteceu e fica, e o mestre continua dali.
       if (outcome.entries.length) {
-        emit({ type: 'free', entries: outcome.entries });
+        emit({ type: 'free', entries: outcome.entries, ...(outcome.ok && outcome.conversation ? { conversation: outcome.conversation } : {}) });
         emit({ type: 'state', world: engine.snapshot() });
       }
       return { done: outcome.ok, addressee: null, talk: false };
@@ -326,6 +338,8 @@ export class GameMaster {
       ...analyzeSpeech(engine.state, narration).issues,
       ...analyzeActs(engine.state, narration),
       ...analyzeReading(engine.state, narration).issues,
+      // O tempo do turno é do mestre, a cada narração: sem ele, o jogador não sabe quanto pode agir no grid.
+      ...(engine.turnTimeGiven() ? [] : [TURN_TIME_MISSING]),
     ];
     if (this.opts.verify !== false) emit({ type: 'status', text: 'Conferindo a narração…' });
     const verdict = this.opts.verify !== false ? await this.check({ engine, before, changes, input, narration: text }, emit) : null;
@@ -346,8 +360,14 @@ export class GameMaster {
     const reading = analyzeReading(engine.state, text);
     const outside = [...speech.issues, ...analyzeActs(engine.state, text), ...reading.issues];
     if (outside.length) emit({ type: 'status', text: `Falas, gestos e leituras ainda fora das regras: ${outside.join(' ')}` });
-    // A fala pronta que repete o que a pessoa acabou de dizer na narração sai: o jogador já ouviu.
-    for (const c of Object.values(engine.state.characters)) dropRepeated(c, speech.lines.filter((l) => l.speakerId === c.id).map((l) => l.text));
+    // A fala pronta que repete o que a pessoa acabou de dizer na narração sai: o jogador já ouviu. Se
+    // ela perguntava algo a ele, as respostas prontas ficam esperando a escolha dele.
+    const playerId = engine.state.playerId;
+    for (const c of Object.values(engine.state.characters)) {
+      const said = speech.lines.filter((l) => l.speakerId === c.id);
+      const asked = dropRepeated(c, said.map((l) => l.text)).findLast((l) => l.replies?.length);
+      if (asked && playerId && said.some((l) => l.hearers.includes(playerId))) c.lines!.awaiting = asked.replies;
+    }
     this.recordSpeech(engine, speech.lines);
     engine.hearVoices(speech.lines);
     // Quem leu passa a saber o texto; a primeira leitura de um texto ainda não escrito o define.
@@ -358,8 +378,8 @@ export class GameMaster {
     }
     const shown = playerNarration(engine.state, text);
     engine.log('narration', text, shown !== text ? shown : undefined, options);
-    // Começa o turno do jogador: os passos dele pelo grid saem do ruleset, com o que este turno mudou.
-    engine.startTurnSteps();
+    // Começa o turno do jogador: o tempo que o mestre deu (set_turn_time) para ele viver o grid sem narração.
+    engine.startTurnClock();
     engine.recordFrame();
     emit({ type: 'narration', text: shown, turn: engine.state.turn, options });
     emit({ type: 'state', world: engine.snapshot() });

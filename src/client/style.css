@@ -182,13 +182,13 @@ button {
   font-size: 12px;
 }
 
-#hud-steps {
+#hud-time {
   color: #f0b35a;
   font-size: 12px;
 }
 
 #hud-sense:empty,
-#hud-steps:empty {
+#hud-time:empty {
   display: none;
 }
 
@@ -957,6 +957,52 @@ body.release .toggle {
   border-color: var(--accent);
 }
 
+/* A conversa aberta no grid: as respostas prontas, continuar, dizer outra coisa ou encerrar. */
+.talk {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.talk[hidden] {
+  display: none;
+}
+
+.talk-who {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.talk-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.talk-buttons button {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.talk-buttons button:hover,
+.talk-buttons .talk-reply {
+  border-color: var(--accent);
+}
+
+.talk-buttons .talk-end {
+  margin-left: auto;
+  color: var(--muted);
+}
+
 /* Marcas da ação: botões que inserem "fala", @Nome "sussurro", (pensamento) e *ação*. */
 .tag-bar {
   display: flex;
@@ -1151,6 +1197,27 @@ body.busy .typing {
 }
 
 #send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Pedir ao mestre para narrar: discreto enquanto há tempo, em destaque quando ele acaba. */
+#narrate {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#narrate.due {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#narrate:disabled {
   opacity: 0.45;
   cursor: default;
 }

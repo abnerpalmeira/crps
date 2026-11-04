@@ -3,14 +3,15 @@ import { modelCatalog, portable, sizeLabel, type CatalogItem } from './catalog';
 import { DECOR_IDS, ERAS, ERA_LOOK, PACK_ERA, outOfEra } from './eras';
 import { MAX_FRAMES, snapshotScene } from './frames';
 import { LEGEND, buildLocation, defaultExits, fixtureAt, isPassable, rectCenter, tileDef, tileOf, type LocationSpec } from './layout';
-import { DEFAULT_MOVEMENT, stepsFor } from './effects';
+import { VERBS } from './actions';
+import { DEFAULT_MOVEMENT, DEFAULT_PER_POINT, DEFAULT_TIME, speedFor, timeLeft } from './effects';
 import { besideRect, findPath as searchPath, nearestFree, walkGoal } from './path';
 import { OBJECT_LIBRARY, findObjectType, librarySummary, objectType, resolveType, typeChain } from './objects';
 import { DEFAULT_VISION, sightOf, type Sight } from './perception';
 import { parseDice, pickMany, randInt, rollDice } from './rng';
 import { analyzeSpeech } from './speech';
 import { buildTemplate, type TemplateName, type TemplateOptions } from './templates';
-import { addMinutes, chebyshev, clockMinutes, dirTowards, fold, formatClock, hhmm, parseHHMM, slugify } from './text';
+import { addMinutes, chebyshev, clockMinutes, dirTowards, fold, formatClock, formatDuration, hhmm, parseHHMM, slugify } from './text';
 import type {
   Character,
   Clock,
@@ -40,6 +41,8 @@ import type {
   Thread,
   ThreadStatus,
   TileDef,
+  TimeRules,
+  TurnClock,
   Visibility,
   WallMaterial,
   WorldState,
@@ -106,6 +109,7 @@ export const DEFAULT_RULESET: Ruleset = {
   vision: DEFAULT_VISION,
   reaches: DEFAULT_REACHES,
   movement: DEFAULT_MOVEMENT,
+  time: DEFAULT_TIME,
   dice: '2d6',
   difficulties: { facil: 7, normal: 9, dificil: 11, muito_dificil: 13 },
   notes: 'Atributos e perícias vão de 0 a 5 (1 = mediano, 3 = muito bom, 5 = lendário).',
@@ -138,6 +142,14 @@ function migrate(state: WorldState): WorldState {
   rules.conditions ??= structuredClone(DEFAULT_CONDITIONS);
   rules.reaches ??= { ...DEFAULT_REACHES };
   rules.movement ??= { ...DEFAULT_MOVEMENT };
+  // Saves de antes do relógio do turno: os passos por turno viram a velocidade padrão, e o tempo do
+  // turno começa vazio, até a próxima narração do mestre dar o dele.
+  if (rules.movement.speed === undefined) {
+    const { attribute } = rules.movement;
+    rules.movement = attribute ? { speed: DEFAULT_MOVEMENT.speed, attribute } : { speed: DEFAULT_MOVEMENT.speed };
+  }
+  rules.time ??= { ...DEFAULT_TIME };
+  state.turnClock ??= { turn: state.turn, budget: 0, spent: 0 };
   state.objectTypes ??= {};
   for (const l of Object.values(state.locations)) {
     l.light ??= 1;
@@ -169,6 +181,7 @@ function migrate(state: WorldState): WorldState {
     c.feelings ??= {};
     for (const r of rules.resources) c.resources[r.id] ??= r.max;
     c.knows ??= ids.filter((id) => id !== c.id);
+    delete (c as Character & { steps?: unknown }).steps;
     // Falas prontas de antes dos fatos e dos nomes: só o texto.
     if (c.lines) {
       for (const key of ['turn', 'general'] as const) {
@@ -219,11 +232,18 @@ export interface ResourceInput {
 /** Como o mestre descreve um efeito: igual a PerkGrant, com a força da luz opcional. */
 export type PerkGrantInput = Exclude<PerkGrant, { kind: 'light' }> | { kind: 'light'; radius: number; intensity?: number; color?: string };
 
-/** Passos por turno como o mestre escreve: a base e o atributo que soma passos ("" tira o atributo). */
+/** A velocidade a pé como o mestre escreve: a base e o atributo que soma velocidade ("" tira o atributo). */
 export interface MovementInput {
-  steps?: number;
+  speed?: number;
   attribute?: string;
   per_point?: number;
+}
+
+/** O custo das ações livres como o mestre escreve, em segundos. */
+export interface TimeInput {
+  talk?: number;
+  act?: number;
+  verbs?: Record<string, number>;
 }
 
 export interface PerkInput {
@@ -274,6 +294,7 @@ export interface LineInput {
   fact_id?: string;
   introduces?: boolean;
   whisper?: boolean;
+  replies?: { label: string; answer: string }[];
 }
 
 export interface ExitInput {
@@ -388,6 +409,8 @@ export class GameEngine {
       rng: seed,
       turn: 0,
       clock: { day: 1, minutes: 8 * 60 },
+      // Sem tempo até o mestre dar o do primeiro turno (o -1 diz que ainda não deu).
+      turnClock: { turn: -1, budget: 0, spent: 0 },
       ruleset: structuredClone(DEFAULT_RULESET),
       playerId: null,
       locations: {},
@@ -594,21 +617,36 @@ export class GameEngine {
     return this.nearestFreeAround(loc, this.rectOf(ref, loc), mover.pos, moverId);
   }
 
-  /** Passos do personagem neste turno: o máximo fixado quando o turno começou e quantos já andou. */
-  stepsOf(c: Character): { max: number; used: number } {
-    return c.steps ?? { max: stepsFor(this.state, c.id), used: 0 };
+  /**
+   * O tempo que o mestre dá no turno que ele está narrando: o jogador vive o grid sem ele até o tempo
+   * acabar. Zero vale: depois de um tiro, não há tempo para nada além de responder ao mestre.
+   */
+  setTurnTime(seconds: number): TurnClock {
+    if (!Number.isFinite(seconds) || seconds < 0 || seconds > 86400) throw new EngineError('O tempo do turno vai de 0 a 24 h.');
+    this.state.turnClock = { turn: this.state.turn, budget: seconds, spent: 0 };
+    return this.state.turnClock;
   }
 
-  /** Começa um turno do jogador: o máximo de passos sai do ruleset agora, e nenhum foi andado. */
-  startTurnSteps(): void {
-    const me = this.player;
-    if (me) me.steps = { max: stepsFor(this.state, me.id), used: 0 };
+  /** Se o mestre deu o tempo do turno que está narrando: a conferência cobra quando falta. */
+  turnTimeGiven(): boolean {
+    return this.state.turnClock.turn === this.state.turn;
   }
 
-  /** Quem anda pelo grid sem o mestre (free.ts) e por isso gasta os passos do turno; o mestre move sem limite. */
+  /**
+   * Começa o tempo do jogador no grid: o que o mestre deu neste turno, ou, se ele não deu nem depois
+   * da correção, o do turno anterior.
+   */
+  startTurnClock(): void {
+    this.state.turnClock = { turn: this.state.turn, budget: this.state.turnClock.budget, spent: 0 };
+  }
+
+  /** Quem anda pelo grid sem o mestre (free.ts) e por isso gasta o tempo do turno; o mestre move sem limite. */
   private onFootId: string | null = null;
 
-  /** Enquanto `run` corre, cada passo de `id` sai dos passos do turno, e o que passar deles é recusado. */
+  /** Condições que venceram enquanto o jogador gastava o tempo do turno, para free.ts contar. */
+  private expiredOnFoot: string[] = [];
+
+  /** Enquanto `run` corre, o andar de `id` sai do tempo do turno, e o que não couber é recusado. */
   async onFoot<T>(id: string, run: () => Promise<T>): Promise<T> {
     this.onFootId = id;
     try {
@@ -618,23 +656,66 @@ export class GameEngine {
     }
   }
 
-  private spendSteps(c: Character, path: Pos[] | null): void {
-    if (this.onFootId !== c.id || !path) return;
-    const walked = path.length - 1;
-    const { max, used } = this.stepsOf(c);
-    if (used + walked > max) {
-      throw new EngineError(`Longe demais para este turno: restam ${max - used} passos, e até lá são ${walked}. Escreva ao mestre para ir além.`);
-    }
-    c.steps = { max, used: used + walked };
+  /**
+   * Passa `seconds` do tempo do turno, e o relógio do mundo anda junto (60 s fazem um minuto). As
+   * condições que vencem nesse meio-tempo saem, e ficam para `drainExpired`.
+   */
+  spendTime(seconds: number): void {
+    this.state.turnClock.spent += seconds;
+    const total = (this.state.clock.seconds ?? 0) + seconds;
+    const minutes = Math.floor(total / 60);
+    const rest = total - minutes * 60;
+    if (rest > 1e-9) this.state.clock.seconds = rest;
+    else delete this.state.clock.seconds;
+    if (!minutes) return;
+    this.state.clock.minutes += minutes;
+    for (const e of this.settleClock()) this.expiredOnFoot.push(`⏳ ${e.character}: ${e.condition} passou.`);
   }
 
-  /** Os passos por turno com o que o mestre mudou: a base e o atributo que soma passos. */
+  /** As condições que venceram com o tempo do grid desde a última vez, como o jogador as lê. */
+  drainExpired(): string[] {
+    return this.expiredOnFoot.splice(0);
+  }
+
+  /** Quem anda pelo grid sem o mestre paga em tempo cada casa andada; o que não cabe no turno é recusado. */
+  private spendWalk(c: Character, path: Pos[] | null): void {
+    if (this.onFootId !== c.id || !path || path.length < 2) return;
+    const speed = speedFor(this.state, c.id);
+    if (speed <= 0) throw new EngineError(`${c.name} não consegue andar agora.`);
+    const seconds = (path.length - 1) / speed;
+    const left = timeLeft(this.state);
+    if (seconds > left + 1e-9) {
+      throw new EngineError(`Longe demais para o tempo deste turno: até lá são ${formatDuration(seconds)}, e restam ${formatDuration(left)}. Peça ao mestre para narrar.`);
+    }
+    this.spendTime(seconds);
+  }
+
+  /** A velocidade a pé com o que o mestre mudou: a base e o atributo que soma velocidade. */
   private movementRules(input: MovementInput, current: MovementRules): MovementRules {
-    const steps = input.steps ?? current.steps;
-    if (!Number.isInteger(steps) || steps < 0 || steps > 40) throw new EngineError('movement.steps precisa ser um inteiro de 0 a 40.');
+    const speed = input.speed ?? current.speed;
+    if (!Number.isFinite(speed) || speed < 0.1 || speed > 10) throw new EngineError('movement.speed vai de 0.1 a 10 casas por segundo.');
     const attribute = input.attribute === '' ? undefined : input.attribute ? this.resolveAttributeId(input.attribute) : current.attribute;
-    if (!attribute) return { steps };
-    return { steps, attribute, perPoint: clamp(input.per_point ?? current.perPoint ?? 1, 0, 5) };
+    if (!attribute) return { speed };
+    return { speed, attribute, perPoint: clamp(input.per_point ?? current.perPoint ?? DEFAULT_PER_POINT, 0, 2) };
+  }
+
+  /** O custo das ações livres com o que o mestre mudou, em segundos; só os verbos que o grid faz sem ele. */
+  private timeRules(input: TimeInput, current: TimeRules): TimeRules {
+    const seconds = (name: string, v: number) => {
+      if (!Number.isFinite(v) || v < 0 || v > 600) throw new EngineError(`time.${name} vai de 0 a 600 segundos.`);
+      return v;
+    };
+    const verbs = { ...current.verbs };
+    for (const [verb, v] of Object.entries(input.verbs ?? {})) {
+      if (!VERBS[verb]?.free) {
+        const free = Object.keys(VERBS).filter((k) => VERBS[k].free);
+        throw new EngineError(`time.verbs: "${verb}" não é uma ação que o jogador faz no grid sem você (${free.join(', ')}).`);
+      }
+      verbs[verb] = seconds(`verbs.${verb}`, v);
+    }
+    const talk = seconds('talk', input.talk ?? current.talk);
+    const act = seconds('act', input.act ?? current.act);
+    return Object.keys(verbs).length ? { talk, act, verbs } : { talk, act };
   }
 
   /** Retângulo ocupado por um móvel ou personagem (usado como alvo de "near"). */
@@ -740,6 +821,7 @@ export class GameEngine {
       c.lines.turn = [];
       c.lines.heard = 0;
       delete c.lines.initiative;
+      delete c.lines.awaiting;
     }
     return ++this.state.turn;
   }
@@ -755,6 +837,7 @@ export class GameEngine {
     notes?: string;
     era?: Era;
     movement?: MovementInput;
+    time?: TimeInput;
   }): Ruleset {
     if (Object.keys(this.state.characters).length) {
       throw new EngineError('As regras já estão em uso por personagens; para mudar no meio da campanha, use extend_ruleset.');
@@ -778,6 +861,7 @@ export class GameEngine {
       vision: { ...DEFAULT_VISION },
       reaches: { ...DEFAULT_REACHES },
       movement: { ...DEFAULT_MOVEMENT },
+      time: { ...DEFAULT_TIME },
       dice,
       difficulties,
       notes: input.notes ?? DEFAULT_RULESET.notes,
@@ -790,6 +874,7 @@ export class GameEngine {
     this.state.ruleset = rules;
     try {
       if (input.movement) rules.movement = this.movementRules(input.movement, rules.movement);
+      if (input.time) rules.time = this.timeRules(input.time, rules.time);
       for (const p of input.perks ?? []) rules.perks.push(this.perkDef(p));
       for (const p of input.conditions ?? []) rules.conditions.push(this.conditionDef(p));
     } catch (err) {
@@ -816,6 +901,7 @@ export class GameEngine {
     senses?: Record<string, number>;
     reaches?: Record<string, number>;
     movement?: MovementInput;
+    time?: TimeInput;
     /** A história foi para outra época (viagem no tempo): os lugares novos e os itens novos seguem ela. */
     era?: Era;
     reason: string;
@@ -823,7 +909,7 @@ export class GameEngine {
     const rules = this.state.ruleset;
     const characters = Object.values(this.state.characters);
     const added: {
-      kind: 'atributo' | 'recurso' | 'perk' | 'condição' | 'visibilidade' | 'modo de fala' | 'sentido' | 'alcance' | 'visão' | 'movimento' | 'época';
+      kind: 'atributo' | 'recurso' | 'perk' | 'condição' | 'visibilidade' | 'modo de fala' | 'sentido' | 'alcance' | 'visão' | 'movimento' | 'tempo' | 'época';
       id: string;
       name: string;
       visibility?: Visibility;
@@ -888,11 +974,17 @@ export class GameEngine {
       for (const c of characters) c.resources[def.id] = clamp(Math.round(r.start ?? def.max), 0, def.max);
       added.push({ kind: 'recurso', id: def.id, name: def.name, visibility: def.visibility });
     }
-    // Depois dos atributos: o que soma passos pode ter nascido nesta mesma chamada.
+    // Depois dos atributos: o que soma velocidade pode ter nascido nesta mesma chamada.
     if (input.movement) {
       rules.movement = this.movementRules(input.movement, rules.movement);
       const m = rules.movement;
-      added.push({ kind: 'movimento', id: 'movement', name: `${m.steps} passos por turno${m.attribute ? ` (+${m.perPoint ?? 1} por ponto de ${m.attribute})` : ''}`, visibility: 'hidden' });
+      added.push({ kind: 'movimento', id: 'movement', name: `${m.speed} casas por segundo${m.attribute ? ` (+${m.perPoint ?? DEFAULT_PER_POINT} por ponto de ${m.attribute})` : ''}`, visibility: 'hidden' });
+    }
+    if (input.time) {
+      rules.time = this.timeRules(input.time, rules.time);
+      const t = rules.time;
+      const verbs = Object.entries(t.verbs ?? {}).map(([v, n]) => `, ${v} ${n} s`).join('');
+      added.push({ kind: 'tempo', id: 'time', name: `conversar ${t.talk} s por fala, ações ${t.act} s${verbs}`, visibility: 'hidden' });
     }
     for (const p of input.perks ?? []) {
       const def = this.perkDef(p);
@@ -1454,8 +1546,8 @@ export class GameEngine {
           if (goal && !toExit) {
             throw new EngineError(`${c.name} não tem caminho até ${exitUsed.label} (${exitUsed.id.slice(fromLoc.id.length + 1)}).`);
           }
-          // Até a saída conta passo; a passagem em si, não.
-          this.spendSteps(c, toExit);
+          // Até a saída conta o tempo de andar; a passagem em si, não.
+          this.spendWalk(c, toExit);
           this.link(fromLoc, exitUsed, targetLoc.id);
         }
       }
@@ -1473,7 +1565,7 @@ export class GameEngine {
       if (c.pos) {
         path = this.findPath(targetLoc, c.pos, spot.pos, c.id);
         if (!path) throw new EngineError(`${c.name} não tem caminho de (${c.pos.x},${c.pos.y}) até (${spot.pos.x},${spot.pos.y}).`);
-        this.spendSteps(c, path);
+        this.spendWalk(c, path);
       }
     }
     // Quem muda de local deixa para trás as vozes que ouviu, e os outros perdem a dele.
@@ -1555,17 +1647,30 @@ export class GameEngine {
    */
   setLines(entries: { who: string; turn?: LineInput[]; general?: LineInput[]; initiative?: 'vem' | 'chama' | 'nenhuma' }[]) {
     const changed: { who: string; turn: number; general: number; initiative?: string }[] = [];
+    const squeeze = (text: string) => text.replace(/\s+/g, ' ').trim();
+    const marked = (text: string) => /^@|\{[a-z0-9_]+:/i.test(text);
     const clean = (c: Character, list: LineInput[] | undefined): ReadyLine[] | undefined =>
       list
-        ?.map((l) => ({ ...l, text: l.text.replace(/\s+/g, ' ').trim() }))
+        ?.map((l) => ({ ...l, text: squeeze(l.text) }))
         .filter((l) => l.text)
         .map((l) => {
-          if (/^@|\{[a-z0-9_]+:/i.test(l.text)) throw new EngineError(`Fala pronta de ${c.name} com marca: escreva só o que a pessoa diz, sem @id nem {gesto}.`);
+          if (marked(l.text)) throw new EngineError(`Fala pronta de ${c.name} com marca: escreva só o que a pessoa diz, sem @id nem {gesto}.`);
+          // As respostas prontas do jogador e o que a pessoa diz a cada uma: só texto, sem efeito no mundo.
+          const replies = (l.replies ?? []).map((r) => ({ label: squeeze(r.label), answer: squeeze(r.answer) })).filter((r) => r.label && r.answer);
+          if (replies.some((r) => marked(r.label) || marked(r.answer))) {
+            throw new EngineError(`Resposta pronta na fala de ${c.name} com marca: escreva só o que cada um diz, sem @id nem {gesto}.`);
+          }
           const fact = l.fact_id ? this.findFact(l.fact_id) : null;
           if (fact && !this.knows(c.id, fact)) {
             throw new EngineError(`${c.name} não sabe ${fact.id}, então não pode contar numa fala pronta. Dê a fala a quem sabe, ou registre antes como ele soube.`);
           }
-          return { text: l.text, ...(fact ? { fact: fact.id } : {}), ...(l.introduces ? { introduces: true } : {}), ...(l.whisper ? { whisper: true } : {}) };
+          return {
+            text: l.text,
+            ...(fact ? { fact: fact.id } : {}),
+            ...(l.introduces ? { introduces: true } : {}),
+            ...(l.whisper ? { whisper: true } : {}),
+            ...(replies.length ? { replies } : {}),
+          };
         });
     for (const entry of entries) {
       const c = this.findCharacter(entry.who);
@@ -1574,6 +1679,7 @@ export class GameEngine {
       lines.turn = clean(c, entry.turn) ?? lines.turn;
       lines.general = clean(c, entry.general) ?? lines.general;
       lines.heard = 0;
+      delete lines.awaiting;
       if (entry.initiative === 'nenhuma') delete lines.initiative;
       else if (entry.initiative) lines.initiative = entry.initiative;
       changed.push({ who: c.id, turn: lines.turn.length, general: lines.general.length, ...(lines.initiative ? { initiative: lines.initiative } : {}) });
@@ -2176,11 +2282,16 @@ export class GameEngine {
       if (minutes < 1 || minutes > 10080) throw new EngineError('minutes deve ficar entre 1 e 10080 (uma semana).');
       this.state.clock.minutes += minutes;
     }
+    return { from: formatClock(before), to: formatClock(this.state.clock), expired: this.settleClock() };
+  }
+
+  /** Depois de o relógio andar: a virada do dia e as condições cujo prazo passou. */
+  private settleClock(): { character_id: string; character: string; condition: string }[] {
     while (this.state.clock.minutes >= 1440) {
       this.state.clock.minutes -= 1440;
       this.state.clock.day += 1;
     }
-    return { from: formatClock(before), to: formatClock(this.state.clock), expired: this.expireConditions() };
+    return this.expireConditions();
   }
 
   /** Tira as condições cujo prazo passou e diz de quem. */

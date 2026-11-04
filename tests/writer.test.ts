@@ -43,9 +43,10 @@ const writing = (over: Partial<Writing> = {}): Writing => ({
   pensamentos: [],
   falas: [],
   minutos: 2,
+  tempo_do_turno: { quantidade: 30, unidade: 's' },
   ...over,
 });
-const line = (texto: string, cochicho = false) => ({ texto, fato: null, diz_o_nome: false, cochicho });
+const line = (texto: string, cochicho = false) => ({ texto, fato: null, diz_o_nome: false, cochicho, respostas: [] as { opcao: string; resposta: string }[] });
 
 /** Provedor com escritor: cada chamada consome uma resposta (null: fora do esquema); o mestre narra numa sessão. */
 class WritingProvider implements ModelProvider {
@@ -96,19 +97,22 @@ describe('o que o escritor muda vira chamadas das tools', () => {
           { quem: 'kenji', texto: 'Preciso falar com o diretor.' },
           { quem: 'mei', texto: 'Quer sair da sala.' },
         ],
-        falas: [{ quem: 'mei', do_turno: ['a', 'b', 'c', 'd', 'e'].map((t) => line(t)), gerais: [], iniciativa: 'vem' }],
+        falas: [{ quem: 'mei', do_turno: [{ ...line('a'), respostas: [{ opcao: 'Sim', resposta: 'Ótimo.' }] }, ...['b', 'c', 'd', 'e'].map((t) => line(t))], gerais: [], iniciativa: 'vem' }],
         minutos: 900,
       }),
       'kenji',
     );
-    expect(calls.map((c) => c.name)).toEqual(['add_fact', 'share_knowledge', 'introduce', 'set_feelings', 'update_character', 'set_lines', 'advance_time']);
+    expect(calls.map((c) => c.name)).toEqual(['add_fact', 'share_knowledge', 'introduce', 'set_feelings', 'update_character', 'set_lines', 'advance_time', 'set_turn_time']);
     const input = (name: string) => calls.find((c) => c.name === name)!.input;
     expect(input('share_knowledge')).toEqual({ fact_id: 'f1', to: ['yuki'], from: 'mei', how: 'na conversa' });
     expect(input('introduce')).toEqual({ who: ['kenji'], knows: ['mei'], mutual: false });
     expect(input('set_feelings')).toEqual({ feelings: [{ who: 'mei', toward: 'kenji', degree: 3, text: 'Confia no professor.' }] });
     expect(input('update_character')).toEqual({ character_id: 'mei', thoughts: 'Quer sair da sala.' });
-    expect(input('set_lines')).toEqual({ lines: [{ who: 'mei', turn: ['a', 'b', 'c', 'd'].map((text) => ({ text })), initiative: 'vem' }] });
+    expect(input('set_lines')).toEqual({
+      lines: [{ who: 'mei', turn: [{ text: 'a', replies: [{ label: 'Sim', answer: 'Ótimo.' }] }, ...['b', 'c', 'd'].map((text) => ({ text }))], initiative: 'vem' }],
+    });
     expect(input('advance_time')).toEqual({ minutes: 240, reason: 'a conversa' });
+    expect(input('set_turn_time')).toEqual({ amount: 30, unit: 's', reason: 'o ritmo da conversa' });
   });
 
   it('a narração leva as ações no fim, como o mestre escreve', () => {
@@ -169,8 +173,8 @@ describe('o turno de conversa pelo escritor', () => {
     expect(distanceBetween(e.state, 'kenji', 'mei')).toBeLessThanOrEqual(2);
     expect(provider.prompts[0]).toContain('O personagem do jogador vai até Mei Kato para falar');
     expect(e.state.turn).toBe(turn + 1);
-    // O turno do mestre levou o professor sem gastar passos, e o turno do jogador começa com todos.
-    expect(e.state.characters.kenji.steps).toEqual({ max: 8, used: 0 });
+    // O turno do mestre levou o professor sem gastar o tempo do grid, e o do jogador começa com o que o escritor deu.
+    expect(e.state.turnClock).toEqual({ turn: turn + 1, budget: 30, spent: 0 });
     expect(e.state.facts.map((f) => f.text)).toContain('Mei tem medo de ser expulsa.');
     expect(e.state.characters.mei.lines?.turn).toMatchObject([{ text: 'Não conta pro diretor, por favor.', whisper: true }]);
     expect(events.find((ev) => ev.type === 'narration')).toMatchObject({ options: ['"Por que, Mei?"', 'Volto para o quadro.', 'Chamo a Yuki.'] });

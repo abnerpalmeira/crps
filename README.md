@@ -280,6 +280,7 @@ Princípios que o motor impõe:
 | `add_fact` / `update_thread` | Memória da história |
 | `share_knowledge` | Quem ficou sabendo de um fato (só quem sabe pode contar) |
 | `advance_time` | Relógio |
+| `set_turn_time` | O tempo que o jogador tem no grid até a próxima narração, pelo que a cena pede |
 
 ### Ação marcada
 
@@ -340,7 +341,8 @@ narração vier sem as ações, o mestre é chamado de novo só para elas, sem r
 
 ### Grid vivo: andar e conversar sem o mestre
 
-Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e sem custo:
+Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e sem custo, pelo
+tempo que o mestre deu ao turno:
 
 - **Andar:** clicar no chão leva o personagem até o tile (numa parede, num móvel ou em alguém,
   até o livre mais perto), e "Ir até" no inspetor leva até a pessoa ou o móvel, pelas regras de
@@ -350,23 +352,37 @@ Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e
   ou móvel. A rota desvia de quem está parado; sem outra saída, passa por essa pessoa. O 3D anda
   pelo mesmo caminho, tile a tile e virado para onde vai, em vez de deslizar reto até o destino.
   Quem senta do outro lado da sala se levanta antes de sair e senta quando chega.
-- **Passos por turno:** andar pelo grid não chama o Jev nem o mestre, mas tem limite.
-  - **De onde sai o número:** quando o turno do mestre fecha, o motor fixa quantos passos o jogador
-    tem até o próximo. O número vem do `movement` do ruleset (8 por padrão), mais o atributo que o
-    mestre escolher para somar passos. Perks e condições com o efeito `move` somam passos ou
-    multiplicam (ágil +2, perna ferida ×0,5, amarrado ×0).
-  - **O que gasta passo:** cada tile andado conta, inclusive o caminho até quem o jogador vai
-    conversar ou até o móvel em que vai sentar. Andar não dispara a iniciativa dos NPCs.
-  - **Quando faltam passos:** um clique além deles leva até onde dão. Acabados, o jogador escreve
-    ao mestre para seguir. O topo da tela mostra quantos restam.
+- **Relógio do turno:** cada narração dá ao jogador um tempo para viver o grid sem o mestre
+  (`set_turn_time`), pelo que a cena pede. Se a viatura chega em 10 minutos, o turno tem 10
+  minutos; se alguém atirou nele, meio segundo. Não há tempo padrão: o mestre dá o dele a cada
+  turno, e a conferência pede correção quando falta. Se faltar mesmo assim, vale o do turno
+  anterior.
+  - **O que gasta tempo:** cada ação, por tipo, em segundos do mundo, pelo `time` do ruleset:
+    - ouvir uma fala, 5 s;
+    - cada ação do menu, 2 s (um verbo pode ter custo próprio);
+    - andar, pela velocidade do `movement`: 1 casa por segundo, mais o atributo que o mestre
+      escolher. Perks e condições com o efeito `move` somam ou multiplicam (ágil +0,5, perna
+      ferida ×0,5, amarrado ×0).
+    
+    O caminho até quem o jogador vai conversar, ou até o móvel em que vai sentar, também conta.
+    Andar não dispara a iniciativa dos NPCs.
+  - **O relógio do mundo anda junto:** o que o jogador gasta no grid passa na hora do mundo, e 60 s
+    fazem um minuto. O resumo do mestre diz quanto ele usou, para a narração seguir dali.
+  - **Só acontece o que cabe:** a ação que não cabe no que resta é recusada ("Não dá tempo: pegar
+    leva 2 s, e restam 0,5 s"). Um clique longe demais anda até onde o tempo leva. O topo da tela
+    mostra quanto resta.
+  - **Quando o tempo acaba:** só o mestre narra. "🪙 Pedir ao mestre" fica em destaque, e o texto
+    escrito vai a ele.
+  - **Toda chamada ao mestre é um turno:** a narração reescreve as falas e dá um relógio novo,
+    inclusive quando ela responde a uma fala livre na conversa.
 - **Fluido:** o personagem sai andando no clique, sem esperar o servidor, com o mesmo plano do
   motor. Anda num caminho curto e corre a partir de 5 tiles. O passo da animação acompanha a
   velocidade, para os pés não deslizarem.
 - **Antes de clicar:** o que está sob o mouse se destaca, seja o tile, o anel de uma pessoa ou a
-  caixa de um móvel ou item. Pontos laranja no chão mostram o caminho até onde os passos do turno
-  levam, com a marca no tile de chegada: o próprio tile, ou o lado livre da pessoa ou do móvel. O
+  caixa de um móvel ou item. Pontos laranja no chão mostram o caminho até onde o tempo do turno
+  leva, com a marca no tile de chegada: o próprio tile, ou o lado livre da pessoa ou do móvel. O
   resto do caminho fica em cinza. O tile aonde ele não chega fica vermelho: onde não dá para
-  ficar, sem caminho ou sem passos. O destino sai das mesmas funções que o motor usa no clique e
+  ficar, sem caminho ou sem tempo. O destino sai das mesmas funções que o motor usa no clique e
   em "Ir até" ([path.ts](src/engine/path.ts)).
 - **Escrever:** o que o jogador escreve também pode não precisar do mestre. O Jev lê o texto e
   escolhe entre as ações livres do menu naquela cena ("Vou até a Hana", "Vou para a cozinha",
@@ -381,6 +397,16 @@ Entre os turnos do mestre, o jogador vive o grid na hora, sem esperar o modelo e
   pessoa e ficam. "💬 Conversar" no inspetor leva o jogador até a pessoa e toca a próxima fala num
   balão: as do turno na ordem, depois as gerais em rodízio. Quem tem fala do turno que o jogador
   ainda não ouviu aparece com 💬 no nome.
+- **Responder:** como no Persona, a fala que pergunta algo traz respostas prontas (`replies`). O
+  painel da conversa mostra "Sim", "Não" ou o que o mestre escreveu, e a pessoa responde com a
+  dela, sem o mestre e sem mudar nada no mundo. Ele tem mais três botões:
+  - **"Continuar ▸"** ouve a próxima fala.
+  - **"✍ Dizer outra coisa… 🪙"** manda ao mestre o que o jogador escrever, já endereçado a essa
+    pessoa, e o leitor não precisa adivinhar com quem ele fala.
+  - **"Encerrar"** fecha a conversa.
+
+  Quando a própria narração faz a pergunta, a fala pronta repetida sai, mas as respostas ficam
+  esperando a escolha do jogador, e o painel abre depois da narração.
 - **Falas que revelam:** a fala que conta um fato registrado leva o id dele (`fact_id`), e quem a
   ouve fica sabendo, como em `share_knowledge`: o jogador e quem mais estava perto. Só quem sabe
   pode contar. A fala em que a pessoa diz o nome leva `introduces`, e quem ouve passa a conhecê-la.
@@ -821,27 +847,38 @@ O custo vira parte do jogo. Em vez de créditos, que são a conta do servidor em
 o jogador tem moedas, e é gastando moedas que o mestre narra. O que o motor resolve sozinho
 (andar, olhar, as ações físicas do menu, as falas prontas do grid vivo) não custa nada.
 
-- Cada turno do mestre custa moedas, pelo custo real do turno (mestre, correção, verificador e
-  ações sugeridas), e o turno mostra quanto custou.
+- Cada turno do mestre custa um preço fixo em moedas, tirado do custo de um turno quando o MVP
+  entrega jogabilidade. Hoje cada turno mostra o custo real: mestre, correção, verificador e ações
+  sugeridas.
 - Saldo, compra e margem sobre o custo, que hoje não existem. Sem moedas, o mundo continua de pé
   e o grid continua jogável, mas o mestre não narra.
 - Em aberto: se as moedas também se ganham jogando (um fio resolvido, uma conquista, um bônus por
   dia), e se há uma moeda só ou duas (uma ganha no jogo, trocada pela que faz o mestre narrar).
 
-### Grid vivo: o mestre narra possibilidades
+### O mestre planeja o turno
 
-Para cada turno render muito, o mestre deixa de narrar tudo: ele narra o que acontece e o que
-pode acontecer, e o jogador vive o resto no grid, sem esperar o modelo. Já existe (veja
-[Grid vivo](#grid-vivo-andar-e-conversar-sem-o-mestre)): andar e as ações físicas são livres; cada
-NPC em cena tem as falas do turno e as gerais (`dialogos_do_turno` e `dialogos_gerais`), que podem
-contar um fato ou o nome de quem fala; e quem tem iniciativa vem até o jogador ou chama por ele.
+Na visão do jogo, o mestre trabalha antes do turno, não depois de cada ação. No começo de cada
+turno, ele decide o que vai e o que pode acontecer, já com o resultado de sucesso e de falha de
+cada ação. O jogador vive o turno no grid sem esperar o modelo.
+
+Já existe (veja [Grid vivo](#grid-vivo-andar-e-conversar-sem-o-mestre)):
+- o tempo do turno, dado pelo mestre;
+- as falas prontas com respostas;
+- a iniciativa dos NPCs;
+- as ações físicas livres.
+
 Falta:
 
-- **O que chama o mestre, e custa moedas:** provocar, convencer, entregar, atacar, decidir algo
-  que muda a história ou dizer o que as falas prontas não cobrem.
-- **Mais vida própria:** NPCs que andam pelo lugar entre os turnos, pela agenda e pelo que querem,
-  e conversas entre eles que o jogador ouve se estiver perto.
-- Cada narração fica mais longa, com as falas prontas, mas o jogador chama o mestre menos vezes.
+- **O plano do turno:** os eventos que o mestre prevê, de ambiente, de tempo, dos NPCs, do
+  jogador, das quests, de combate e de movimento. Cada um tem o que o dispara e os efeitos de
+  sucesso e de falha, e o motor os aplica pelas mesmas tools.
+- **Armadilhas e ataques surpresa:** andar sai de graça até disparar um deles. Aí o jogo oferece
+  o botão pago para o mestre narrar.
+- **Regras de qualquer gênero:**
+  - combate por turnos que aceite armas, corpo a corpo, magia e os efeitos estranhos de artefatos;
+  - furtividade, construída sobre a percepção que o motor já tem.
+- **Mais vida própria:** NPCs que andam pelo lugar entre os turnos, pela agenda e pelo que querem.
+  O jogador ouve as conversas entre eles quando está perto.
 
 ### O mestre com o Jev
 

@@ -27,6 +27,20 @@ export function formatClock(c: Clock): string {
   return `Dia ${c.day}, ${hhmm(c.minutes)}`;
 }
 
+/** O que o jogador manda quando pede ao mestre para narrar, sem escrever: o tempo do turno acabou, ou ele quer seguir. */
+export const NARRATE_INPUT = 'Peço ao mestre que narre o que acontece agora.';
+
+/** Uma duração como se fala: "0,5 s", "45 s", "7 min 30 s", "2 h 5 min". */
+export function formatDuration(seconds: number): string {
+  if (seconds < 59.95) return `${String(Math.round(seconds * 10) / 10).replace('.', ',')} s`;
+  const total = Math.round(seconds);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return m ? `${h} h ${m} min` : `${h} h`;
+  return s ? `${m} min ${s} s` : `${m} min`;
+}
+
 /** Minutos desde o início da campanha (dia 1, 00:00), para comparar horários. */
 export function clockMinutes(c: Clock): number {
   return (c.day - 1) * 1440 + c.minutes;

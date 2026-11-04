@@ -16,6 +16,7 @@ function room(): GameEngine {
   for (const name of ['Yuki Sato', 'Ren Ito', 'Mei Kato']) e.createCharacter({ name, role: 'aluno(a)', appearance: 'uniforme', position: { seat: 'random' } });
   runTool(e, 'introduce', { group: ['kenji', 'yuki', 'ren', 'mei'] });
   runTool(e, 'set_lines', { lines: [{ who: 'yuki', turn: [{ text: 'A prova é amanhã, professor.' }], general: [{ text: 'Gosto de desenhar.' }] }] });
+  e.setTurnTime(600);
   return e;
 }
 
@@ -51,6 +52,15 @@ describe('o Jev lê o texto do jogador', () => {
     expect(r.plan).toEqual({ kind: 'line', npcId: 'yuki', line: { text: 'A prova é amanhã, professor.' }, said: 'Yuki, quando é a prova?' });
     // As respostas de cada pessoa com falas prontas vão no mesmo pedido, de antemão.
     expect(Object.keys(asked[0])).toEqual(expect.arrayContaining(['resposta_yuki']));
+    expect(Object.keys(asked[0])).not.toContain('resposta_ren');
+  });
+
+  it('na conversa aberta, com quem o jogador fala já se sabe: não pergunta, e o mestre recebe essa pessoa', async () => {
+    const e = room();
+    const { client, asked } = fakeJev(() => ({ uma: sim(), fala: sim(), fisico: sim(0.05), pede_algo: sim(0.05), resposta_yuki: escolhe('nenhuma') }));
+    const r = await new JevReader(client).read(e, 'E se eu der mais um dia?', 'yuki');
+    expect(r).toMatchObject({ plan: null, addressee: 'yuki', talk: true });
+    expect(Object.keys(asked[0])).not.toContain('com_quem');
     expect(Object.keys(asked[0])).not.toContain('resposta_ren');
   });
 

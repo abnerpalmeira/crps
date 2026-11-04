@@ -1,11 +1,12 @@
 import { actLabel, actionsFor, type ActionOption } from '../engine/actions';
-import { stepsFor } from '../engine/effects';
+import { timeLeft, timeUp } from '../engine/effects';
 import { parseSpeechLine } from '../engine/frames';
 import type { FreeAct } from '../engine/free';
+import type { Conversation } from '../engine/lines';
 import { lightAt, lightLabel, lightSources } from '../engine/light';
 import { FEELING_LABELS, feelingsHere, perceptionOf, strangerLabel } from '../engine/perception';
 import { findByName, hasMarks, parsePlayerInput, type InputSegment } from '../engine/input';
-import { chebyshev, formatClock, hhmm, signed } from '../engine/text';
+import { chebyshev, formatClock, formatDuration, hhmm, signed } from '../engine/text';
 import type { Character, LogEntry, WorldState } from '../engine/types';
 import type { GmEvent } from '../gm/gm';
 import type { CostEvent } from '../gm/pricing';
@@ -149,7 +150,8 @@ export class TurnView {
 }
 
 export class Ui {
-  onSend: (text: string) => void = () => {};
+  /** `to`: quem está na conversa aberta, quando o jogador escolheu "Dizer outra coisa". */
+  onSend: (text: string, to?: string) => void = () => {};
   onNewGame: (premise: string) => void = () => {};
   onSelect: (pick: Pick | null) => void = () => {};
   onReplay: (turn: number) => void = () => {};
@@ -157,6 +159,8 @@ export class Ui {
   onFree: (act: FreeAct) => void = () => {};
   onControl: (command: string) => void = () => {};
   onModel: (id: string) => void = () => {};
+  /** Pedir ao mestre para narrar, sem escrever: quando o tempo do turno acaba, é o que resta. */
+  onNarrate: () => void = () => {};
 
   private readonly log = $('#log');
   private readonly input = $<HTMLTextAreaElement>('#input');
@@ -173,6 +177,10 @@ export class Ui {
   private world: WorldState | null = null;
   /** As ações que o mestre sugeriu no fim da última narração. */
   private options: string[] = [];
+  /** A conversa aberta no grid, e para quem vai o próximo envio quando o jogador quer dizer outra coisa. */
+  private talk: Conversation | null = null;
+  private talkTo: string | null = null;
+  private readonly placeholder = this.input.placeholder;
   /** O último turno do registro, onde entram as ações livres feitas depois dele. */
   private lastTurn: TurnView | null = null;
   private readonly ctx: TurnContext = {
@@ -188,6 +196,7 @@ export class Ui {
     for (const button of document.querySelectorAll<HTMLButtonElement>('[data-cmd]')) {
       button.addEventListener('click', () => this.onControl(button.dataset.cmd!));
     }
+    $('#narrate').addEventListener('click', () => this.onNarrate());
     $('#composer').addEventListener('submit', (e) => {
       e.preventDefault();
       this.submit();
@@ -287,10 +296,12 @@ export class Ui {
   setBusy(busy: boolean): void {
     this.busy = busy;
     this.send.disabled = busy;
+    $<HTMLButtonElement>('#narrate').disabled = busy;
     $<HTMLButtonElement>('#model').disabled = busy || !this.model.options.length;
     if (busy) this.closeModelMenu();
     document.body.classList.toggle('busy', busy);
-    $('#options').hidden = busy || !this.options.length;
+    $('#talk').hidden = busy || !this.talk;
+    $('#options').hidden = busy || !this.options.length || Boolean(this.talk);
     if (!busy) this.input.focus();
   }
 
@@ -308,7 +319,47 @@ export class Ui {
         return button;
       }),
     );
-    box.hidden = this.busy || !options.length;
+    box.hidden = this.busy || !options.length || Boolean(this.talk);
+  }
+
+  /**
+   * A conversa aberta no grid, como no Persona: as respostas prontas (sem o mestre e sem efeito no
+   * mundo), continuar ouvindo, dizer outra coisa (o mestre responde, e isso abre um turno) ou encerrar.
+   */
+  showTalk(conversation: Conversation | null): void {
+    const world = this.world;
+    const c = conversation && world ? world.characters[conversation.with] : undefined;
+    this.talk = c ? conversation : null;
+    this.talkTo = null;
+    this.input.placeholder = this.placeholder;
+    const box = $('#talk');
+    $('#options').hidden = this.busy || !this.options.length || Boolean(this.talk);
+    if (!c || !conversation || !world?.playerId) {
+      box.hidden = true;
+      box.replaceChildren();
+      return;
+    }
+    // Pelo nome só quem o jogador conhece; os outros, pelo que ele vê.
+    const name = perceptionOf(world, world.playerId).recognize(c.id) ? c.name.split(' ')[0] : strangerLabel(c);
+    const button = (label: string, className: string, run: () => void) => {
+      const b = el('button', className, label);
+      b.type = 'button';
+      b.addEventListener('click', run);
+      return b;
+    };
+    const buttons = el('div', 'talk-buttons');
+    buttons.append(
+      ...conversation.replies.map((label, option) => button(label, 'talk-reply', () => this.onFree({ kind: 'reply', with: c.id, option }))),
+      ...(conversation.more ? [button('Continuar ▸', 'talk-more', () => this.onFree({ kind: 'talk', with: c.id }))] : []),
+      button('✍ Dizer outra coisa… 🪙', 'talk-say', () => {
+        this.talkTo = c.id;
+        this.input.placeholder = `O que você diz a ${name}? O mestre responde, e isso abre um turno.`;
+        this.input.focus();
+      }),
+      button('Encerrar', 'talk-end', () => this.showTalk(null)),
+    );
+    box.replaceChildren(el('div', 'talk-who', `💬 ${name}`), buttons);
+    box.hidden = this.busy;
   }
 
   /** Completa a ação com um texto (fala, escrita) depois do que já está escrito, com o cursor no fim. */
@@ -534,9 +585,17 @@ export class Ui {
     const loc = player?.locationId ? world.locations[player.locationId] : Object.values(world.locations).at(-1);
     $('#hud-location').textContent = loc?.name ?? 'Montando o mundo…';
     $('#hud-clock').textContent = `${formatClock(world.clock)} · turno ${world.turn}`;
-    // Quanto o jogador ainda anda pelo grid neste turno, sem o mestre.
-    const steps = player ? (player.steps ?? { max: stepsFor(world, player.id), used: 0 }) : null;
-    $('#hud-steps').textContent = steps ? `👣 ${steps.max - steps.used} de ${steps.max} passos neste turno` : '';
+    // O tempo que o mestre deu ao turno: o jogador vive o grid até ele acabar, e daí só o mestre narra.
+    const left = timeLeft(world);
+    const up = player ? timeUp(world, player.id) : false;
+    $('#hud-time').textContent = !player
+      ? ''
+      : !up
+        ? `⏱ restam ${formatDuration(left)} de ${formatDuration(world.turnClock.budget)} neste turno`
+        : left > 0
+          ? `⏱ restam ${formatDuration(left)}: não dá tempo de agir no grid`
+          : '⏱ o tempo deste turno acabou';
+    $('#narrate').classList.toggle('due', up);
     $('#hud-sense').textContent = senseText(world);
     $('#stage-empty').hidden = Boolean(loc);
     this.renderSheet(world, player);
@@ -550,6 +609,7 @@ export class Ui {
     $('#hud-location').textContent = 'CRPS';
     $('#hud-clock').textContent = '';
     $('#hud-sense').textContent = '';
+    $('#hud-time').textContent = '';
     $('#stage-empty').hidden = false;
     $('#tab-sheet').replaceChildren(el('p', 'muted', 'Seu personagem aparece aqui assim que o mundo estiver pronto.'));
     $('#tab-journal').replaceChildren();
@@ -724,7 +784,7 @@ export class Ui {
     if (!text || this.busy) return;
     this.input.value = '';
     this.renderPreview();
-    this.onSend(text);
+    this.onSend(text, this.talkTo ?? undefined);
   }
 
   private showTab(name: string): void {

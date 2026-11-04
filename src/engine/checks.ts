@@ -1,5 +1,5 @@
 import { knowsName, recognitionOf } from './perception';
-import type { Character, WorldState } from './types';
+import type { Character, ReadyLine, WorldState } from './types';
 
 /**
  * Conferências da narração que o código faz sozinho, sem modelo: o que é exato (um nome escrito,
@@ -83,10 +83,9 @@ export function repeats(line: string, said: string[]): boolean {
  * Tira das falas do turno as que repetem o que a pessoa acabou de dizer na narração: o jogador já
  * ouviu, e puxar conversa não pode tocar de novo. Devolve quantas saíram.
  */
-export function dropRepeated(c: Character, said: string[]): number {
-  if (!c.lines?.turn.length || !said.length) return 0;
-  const kept = c.lines.turn.filter((line) => !repeats(line.text, said));
-  const dropped = c.lines.turn.length - kept.length;
-  c.lines.turn = kept;
+export function dropRepeated(c: Character, said: string[]): ReadyLine[] {
+  if (!c.lines?.turn.length || !said.length) return [];
+  const dropped = c.lines.turn.filter((line) => repeats(line.text, said));
+  c.lines.turn = c.lines.turn.filter((line) => !dropped.includes(line));
   return dropped;
 }

@@ -1,12 +1,13 @@
 import { POSES, bodyPose, handsOf } from './body';
 import { itemPlace } from './reading';
+import { DEFAULT_PER_POINT } from './effects';
 import { DIFFICULTY_LABEL, VISIBILITY_LABEL, type GameEngine } from './engine';
 import { DECOR, FLOOR_LABELS, WALL_MATERIALS, locationLook } from './eras';
 import { LEGEND } from './layout';
 import { typeChain } from './objects';
 import { lightAt, lightLabel, lightSources } from './light';
 import { FEELING_LABELS, feelingsHere, perceives, perceptionOf, strangerLabel, visionOf, type Perception } from './perception';
-import { formatClock, signed, truncate } from './text';
+import { formatClock, formatDuration, signed, truncate } from './text';
 import type { Character, DifficultyName, Location, PerkDef, ReadyLine, Visibility } from './types';
 
 const MARKERS = '123456789AEFGHIJKLMNOPQRUVXYZ'.split('');
@@ -147,9 +148,12 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
       `${rules.notes}`,
   );
   const move = rules.movement;
+  const time = rules.time;
+  const verbs = Object.entries(time.verbs ?? {}).map(([v, n]) => `, ${v} ${n} s`).join('');
   out.push(
-    `Passos por turno: ${move.steps}${move.attribute ? ` (+${move.perPoint ?? 1} por ponto de ${move.attribute})` : ''}; o jogador anda isso pelo grid sem você, ` +
-      'e perks e condições com move somam ou multiplicam.',
+    `Tempo do turno: o jogador age no grid sem você pelo tempo que você der (set_turn_time), e cada ação gasta dele: andar ` +
+      `${move.speed} casa(s) por segundo${move.attribute ? ` (+${move.perPoint ?? DEFAULT_PER_POINT} por ponto de ${move.attribute})` : ''}, ` +
+      `ouvir uma fala ${time.talk} s, cada ação do menu ${time.act} s${verbs}. Perks e condições com move somam ou multiplicam a velocidade.`,
   );
   if (rules.perks.length) out.push(`Perks: ${rules.perks.map((perk) => `${perk.id} (${perk.name}: ${describePerk(perk)})`).join('; ')}.`);
   if (rules.conditions.length) out.push(`Condições: ${rules.conditions.map((d) => `${d.id} (${describePerk(d)})`).join('; ')}.`);
@@ -356,7 +360,10 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
   out.push(
     `\n## Últimos acontecimentos\n` +
       (recent.map((e) => `T${e.turn} ${who[e.kind]}: ${e.kind === 'narration' ? truncate(e.text, 1200) : e.text}`).join('\n') || '(início da campanha)') +
-      (recent.some((e) => e.kind === 'free') ? '\n(Livre: o que o jogador fez no grid depois da narração, sem você. Continue de onde ele está.)' : ''),
+      (recent.some((e) => e.kind === 'free') ? '\n(Livre: o que o jogador fez no grid depois da narração, sem você. Continue de onde ele está.)' : '') +
+      (s.turnClock.spent > 0
+        ? `\n(Tempo do turno: o jogador usou ${formatDuration(s.turnClock.spent)} de ${formatDuration(s.turnClock.budget)} no grid; o relógio do mundo já andou com isso, não o adiante de novo.)`
+        : ''),
   );
   return out.join('\n');
 }
@@ -364,7 +371,12 @@ export function compileBrief(engine: GameEngine, opts: BriefOptions = {}): strin
 /** As falas prontas do NPC, para o mestre manter a voz dele e saber quem ainda não tem as gerais. */
 function linesNote(c: Character): string {
   const quote = (list: ReadyLine[]) =>
-    list.map((l) => `«${truncate(l.text, 120)}»${l.fact ? ` (conta ${l.fact})` : ''}${l.introduces ? ' (diz o nome)' : ''}${l.whisper ? ' (cochicho)' : ''}`).join(' ');
+    list
+      .map((l) => {
+        const replies = l.replies?.length ? ` [respostas: ${l.replies.map((r) => `${r.label} → «${truncate(r.answer, 80)}»`).join('; ')}]` : '';
+        return `«${truncate(l.text, 120)}»${l.fact ? ` (conta ${l.fact})` : ''}${l.introduces ? ' (diz o nome)' : ''}${l.whisper ? ' (cochicho)' : ''}${replies}`;
+      })
+      .join(' ');
   const turn = c.lines?.turn.length ? `; falas do turno: ${quote(c.lines.turn)}` : '';
   const initiative = c.lines?.initiative ? `; iniciativa: ${c.lines.initiative}` : '';
   return `${turn}${initiative}${c.lines?.general.length ? `; falas gerais: ${quote(c.lines.general)}` : '; sem falas gerais'}`;

@@ -88,7 +88,7 @@ describe('checagens do código', () => {
     expect(repeats('Fico colado ao homem da pasta. Se ele a mexer, eu vejo. Discreto, como pediu.', said)).toBe(false);
     const e = room();
     runTool(e, 'set_lines', { lines: [{ who: 'ren', turn: [{ text: 'Professor, a prova foi difícil demais.' }, { text: 'Posso sair mais cedo hoje?' }] }] });
-    expect(dropRepeated(e.state.characters.ren, ['A prova foi difícil demais, professor!'])).toBe(1);
+    expect(dropRepeated(e.state.characters.ren, ['A prova foi difícil demais, professor!'])).toHaveLength(1);
     expect(e.state.characters.ren.lines!.turn.map((l) => l.text)).toEqual(['Posso sair mais cedo hoje?']);
   });
 });

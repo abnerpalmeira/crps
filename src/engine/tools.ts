@@ -8,7 +8,7 @@ import { librarySummary } from './objects';
 import { TEMPLATES } from './templates';
 import { lightLabel } from './light';
 import { FEELING_LABELS, knowsName, perceptionOf, strangerLabel } from './perception';
-import { signed, truncate } from './text';
+import { formatDuration, signed, truncate } from './text';
 import type { Era, Fact, Grip, ItemHolder, WallMaterial } from './types';
 
 /**
@@ -103,18 +103,26 @@ const perkGrant = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('move'),
-    bonus: z.number().optional().describe('Passos a mais por turno, ex. ágil +2.'),
-    factor: z.number().optional().describe('Multiplica os passos: 0.5 = perna ferida, 0 = amarrado ou imobilizado.'),
+    bonus: z.number().optional().describe('Casas por segundo a mais a pé, ex. ágil +0.5.'),
+    factor: z.number().optional().describe('Multiplica a velocidade: 0.5 = perna ferida, 0 = amarrado ou imobilizado.'),
   }),
 ]);
 
 const movementInput = z
   .object({
-    steps: z.number().int().min(0).max(40).optional().describe('Passos de todos por turno (padrão 8).'),
-    attribute: z.string().optional().describe('Atributo que soma passos, ex. "agilidade"; "" tira.'),
-    per_point: z.number().optional().describe('Passos que cada ponto do atributo soma (padrão 1).'),
+    speed: z.number().min(0.1).max(10).optional().describe('Casas por segundo de todos a pé (padrão 1; uma casa tem cerca de 1 m).'),
+    attribute: z.string().optional().describe('Atributo que soma velocidade, ex. "agilidade"; "" tira.'),
+    per_point: z.number().optional().describe('Casas por segundo que cada ponto do atributo soma (padrão 0.1).'),
   })
-  .describe('Quanto o jogador anda pelo grid entre um turno e outro, sem você; perks e condições com move somam ou multiplicam.');
+  .describe('A velocidade a pé no grid, que gasta o tempo do turno; perks e condições com move somam ou multiplicam.');
+
+const timeInput = z
+  .object({
+    talk: z.number().min(0).max(600).optional().describe('Segundos de cada fala que o jogador ouve numa conversa (padrão 5).'),
+    act: z.number().min(0).max(600).optional().describe('Segundos de cada ação do menu: sentar, pegar, acender, passar… (padrão 2).'),
+    verbs: z.record(z.string(), z.number().min(0).max(600)).optional().describe('Custo próprio de um desses verbos, ex. {"acender": 1}.'),
+  })
+  .describe('Quanto cada ação do jogador no grid gasta do tempo do turno, em segundos do mundo.');
 
 const lightInput = z.object({
   radius: z.number().describe('Alcance da luz em tiles: vela 2, lanterna 5, holofote 10.'),
@@ -155,6 +163,16 @@ const readyLine = z.object({
   fact_id: z.string().optional().describe('Fato registrado que a fala conta: quem ouvir passa a saber. Só quem sabe pode contar.'),
   introduces: z.boolean().optional().describe('A pessoa diz o próprio nome nesta fala: quem ouvir passa a conhecê-la.'),
   whisper: z.boolean().optional().describe('Cochicho: quem fala chega perto, e só o jogador ouve. Para segredos.'),
+  replies: z
+    .array(
+      z.object({
+        label: z.string().max(40).describe('O que o jogador responde, curto: "Sim", "Não", "Depois eu vejo".'),
+        answer: z.string().max(240).describe('O que a pessoa diz a essa resposta.'),
+      }),
+    )
+    .max(3)
+    .optional()
+    .describe('Para a fala que pergunta algo ao jogador: as respostas prontas dele e o que a pessoa diz a cada uma. Não mudam nada no mundo.'),
 });
 
 const placement = z
@@ -313,6 +331,7 @@ export const TOOLS = [
         .describe('Padrão para 2d6: fácil 7, normal 9, difícil 11, muito difícil 13.'),
       notes: z.string().optional(),
       movement: movementInput.optional(),
+      time: timeInput.optional(),
       era: era.optional().describe(`${era.description} Informe sempre: é a época da premissa.`),
     }),
     mutates: true,
@@ -331,7 +350,7 @@ export const TOOLS = [
       'Muda as regras no meio da campanha, quando a história muda de rumo (a aula vira uma epidemia, a investigação vira ' +
       'tiroteio): novos atributos (ex.: pontaria), recursos (ex.: infecção), perks, condições (ex.: envenenado), a ' +
       'visibilidade de atributos e recursos, modos de fala (ex.: telepatia), sentidos base, canais que exigem ver quem emite ' +
-      '(ex.: língua de sinais), limiares de visão, alcances de ação (ex.: tiro) e os passos por turno. Quem já existe recebe o valor padrão ' +
+      '(ex.: língua de sinais), limiares de visão, alcances de ação (ex.: tiro), a velocidade a pé e o custo em tempo das ações no grid. Quem já existe recebe o valor padrão ' +
       '(attributes.default, padrão 0; resources.start, padrão o máximo); ajuste os relevantes com update_character. Chame ' +
       'antes de usar a regra nova.',
     schema: z.object({
@@ -353,6 +372,7 @@ export const TOOLS = [
       senses: z.record(z.string(), z.number()).optional().describe('Multiplicador base de um canal para todos, ex. {"olfato": 1}.'),
       reaches: z.record(z.string(), z.number()).optional().describe('Alcance de ações com alvo, ex. {"tiro_pistola": 20}.'),
       movement: movementInput.optional(),
+      time: timeInput.optional(),
       sight_channels: z.array(z.string()).optional().describe('Canais que só funcionam vendo quem emite, ex. ["sinais"].'),
       vision: z
         .object({
@@ -573,7 +593,9 @@ export const TOOLS = [
       'trocar). Uma a três de cada, curtas, só o que ele diz, com a voz dele (um gesto curto entre asteriscos cabe). A fala que ' +
       'conta um fato registrado leva fact_id (só quem sabe pode contar; quem ouvir passa a saber), e a fala em que a pessoa diz ' +
       'o próprio nome leva introduces (quem ouvir passa a conhecê-la); o segredo vai com whisper, e só o jogador ouve (em voz ' +
-      'normal, quem estiver perto também fica sabendo). Fora isso, valem as regras da narração: ninguém chama ' +
+      'normal, quem estiver perto também fica sabendo). A fala que pergunta algo ao jogador leva replies: até três respostas ' +
+      'curtas dele ("Sim", "Não") e o que a pessoa diz a cada uma, sem efeito no mundo; o que mudaria a história, o jogador ' +
+      'escreve, e você narra. Fora isso, valem as regras da narração: ninguém chama ' +
       'pelo nome quem o jogador não conhece, e nenhuma fala muda o estado. initiative, até o seu próximo turno: "vem", o NPC ' +
       'vai até o jogador e diz a primeira fala do turno; "chama", diz de onde está; sem ela, só fala se o jogador puxar ' +
       'conversa. A lista que vier substitui a anterior; a que não vier fica como estava.',
@@ -999,6 +1021,26 @@ export const TOOLS = [
       const r = engine.advanceTime(input);
       const ended = r.expired.map((e) => `${e.character}: ${e.condition} passou`);
       return { content: r, summary: `🕒 ${r.from} → ${r.to}${ended.length ? ` · ${ended.join('; ')}` : ''}` };
+    },
+  }),
+
+  tool({
+    name: 'set_turn_time',
+    description:
+      'Quanto tempo do mundo o jogador tem para agir no grid sem você, até você narrar de novo: diga a cada turno, pelo ' +
+      'que a cena pede. A viatura chega em 10 minutos: 10 min. Alguém atirou nele: 0.5 s, e ele só responde a você. A cena ' +
+      'está calma: o tempo até o próximo acontecimento que você prevê. Andar, ouvir falas e as ações do menu gastam esse ' +
+      'tempo, e o relógio do mundo anda junto; quando acaba, só você narra.',
+    schema: z.object({
+      amount: z.number().min(0).describe('Quanto tempo, na unidade de unit.'),
+      unit: z.enum(['s', 'min', 'h']).describe('s (segundos), min (minutos) ou h (horas).'),
+      reason: z.string().describe('O que na cena decide esse tempo, em poucas palavras.'),
+    }),
+    mutates: true,
+    run(engine, input) {
+      const seconds = input.amount * { s: 1, min: 60, h: 3600 }[input.unit];
+      const clock = engine.setTurnTime(seconds);
+      return { content: clock, summary: `⏱ Tempo do turno: ${formatDuration(clock.budget)} (${input.reason})` };
     },
   }),
 ];

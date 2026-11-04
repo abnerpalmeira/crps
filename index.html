@@ -13,7 +13,7 @@
         <div id="hud">
           <strong id="hud-location">CRPS</strong>
           <span id="hud-clock"></span>
-          <span id="hud-steps"></span>
+          <span id="hud-time"></span>
           <span id="hud-sense"></span>
           <span id="hud-replay">revendo o passado</span>
         </div>
@@ -55,6 +55,7 @@
           <section id="tab-journal" class="tab" hidden></section>
         </div>
         <form id="composer">
+          <div id="talk" class="talk" role="group" aria-label="Conversa" hidden></div>
           <div id="options" class="options" role="group" aria-label="Ações sugeridas pelo mestre" hidden></div>
           <div class="tag-bar" role="toolbar" aria-label="Marcar a ação">
             <button type="button" data-tag="fala" title='Falar: texto entre "aspas"'>💬 Falar</button>
@@ -72,6 +73,7 @@
           <div class="composer-row">
             <label class="toggle"><input id="backstage" type="checkbox" /> bastidores</label>
             <span class="typing">o mestre está narrando<span>.</span><span>.</span><span>.</span></span>
+            <button id="narrate" type="button" title="O mestre narra o que acontece agora, sem você escrever: abre um turno novo.">🪙 Pedir ao mestre</button>
             <button id="send" type="submit">Enviar</button>
           </div>
           <div id="usage" class="muted small"></div>

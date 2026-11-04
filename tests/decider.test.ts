@@ -20,6 +20,7 @@ function room(): GameEngine {
   e.createCharacter({ name: 'Kenji Tanaka', role: 'professor', appearance: 'gravata torta', is_player: true, position: { near: 'sala/quadro-1' } });
   for (const name of ['Yuki Sato', 'Ren Ito', 'Mei Kato']) e.createCharacter({ name, role: 'aluno(a)', appearance: 'uniforme', position: { seat: 'random' } });
   runTool(e, 'introduce', { group: ['kenji', 'yuki', 'ren', 'mei'] });
+  e.setTurnTime(600);
   return e;
 }
 

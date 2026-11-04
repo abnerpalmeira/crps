@@ -111,12 +111,27 @@ function setupSteps(): StepResult[] {
               turn: [{ text: 'Professor, se tiver prova surpresa, eu nem vim hoje, tá?' }],
               general: [{ text: 'Viu o jogo de ontem? Que virada!' }, { text: 'Eu estudo depois, prometo.' }],
             },
-            { who: 'aiko', turn: [{ text: 'Não liga para o Haruto, professor. Ele inventa tudo.' }], general: [{ text: 'Eu fiz o resumo do capítulo 4, se o senhor quiser ver.' }] },
+            {
+              who: 'aiko',
+              turn: [{ text: 'Não liga para o Haruto, professor. Ele inventa tudo.' }],
+              // A fala que oferece algo traz as respostas prontas do professor, sem efeito no mundo.
+              general: [
+                {
+                  text: 'Eu fiz o resumo do capítulo 4, se o senhor quiser ver.',
+                  replies: [
+                    { label: 'Quero ver.', answer: 'Tá aqui! *estende o caderno, orgulhosa*' },
+                    { label: 'Depois eu vejo.', answer: 'Tudo bem, fica comigo então.' },
+                  ],
+                },
+              ],
+            },
             { who: 'yuki', turn: [{ text: 'Professor… eu ainda não entreguei o trabalho de história. Desculpa.', fact_id: 'fato_1', whisper: true }] },
             { who: 'ren', general: [{ text: '*boceja* …só mais cinco minutos.' }] },
             { who: 'mei', turn: [{ text: 'Bom dia, professor. *volta os olhos para o caderno*' }], general: [{ text: '*sorri sem graça e continua desenhando*' }] },
           ],
         }),
+        // A turma ainda se acomoda: o professor tem uns minutos pela sala antes de começar a aula.
+        call('set_turn_time', { amount: 5, unit: 'min', reason: 'a turma se acomodando antes da aula' }),
       ],
     },
     {
@@ -207,7 +222,12 @@ function turnSteps(action: string, ctx: TurnContext): StepResult[] {
         { who: 'haruto', turn: [{ text: 'O senhor tá de bom humor hoje, né? *sorriso amarelo*' }] },
       ],
     }),
+    // Um tiro não deixa tempo para nada: o professor só responde ao mestre.
+    /tiro|estampido/.test(said)
+      ? call('set_turn_time', { amount: 0.5, unit: 's', reason: 'um tiro no corredor' })
+      : call('set_turn_time', { amount: 2, unit: 'min', reason: 'a aula segue' }),
   );
+  if (/tiro|estampido/.test(said)) events.push('Um estampido seco ecoa no corredor, e a turma inteira congela.');
   return [
     { text: '', stop: 'tool_use', toolCalls: tools },
     {

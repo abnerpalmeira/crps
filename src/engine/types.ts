@@ -9,6 +9,8 @@ export interface Pos {
 export interface Clock {
   day: number;
   minutes: number;
+  /** Segundos que o grid gastou além do minuto (o relógio mostra só HH:MM); 60 deles viram um minuto. */
+  seconds?: number;
 }
 
 /** Quem vê o valor: public (o jogador vê de todos), self (só o próprio), hidden (só o mestre). */
@@ -46,8 +48,8 @@ export interface LightSpec {
  * sensorial qualquer (som, labios, mente, visao ou um canal novo criado pelo mestre): multiplier
  * substitui o multiplicador base do canal, bonus soma tiles de alcance e factor multiplica o
  * resultado (0 = perdeu o sentido). `light` faz o dono emitir luz. `conjure` deixa o dono tirar
- * itens do nada (um mágico, um bolso sem fundo), com custo opcional num recurso. `move` mexe nos
- * passos por turno: bonus soma passos (ágil), factor multiplica (perna ferida 0.5, amarrado 0).
+ * itens do nada (um mágico, um bolso sem fundo), com custo opcional num recurso. `move` mexe na
+ * velocidade a pé: bonus soma casas por segundo (ágil), factor multiplica (perna ferida 0.5, amarrado 0).
  */
 export type PerkGrant =
   | { kind: 'see_stat'; stat: string }
@@ -58,12 +60,35 @@ export type PerkGrant =
   | { kind: 'conjure'; note?: string; cost?: { resource: string; amount: number } }
   | { kind: 'move'; bonus?: number; factor?: number };
 
-/** Quanto se anda pelo grid entre um turno do mestre e o próximo, sem ele: passos (tiles) por turno. */
+/** Quanto se anda pelo grid sem o mestre: casas (tiles) por segundo, que gastam o tempo do turno. */
 export interface MovementRules {
-  steps: number;
-  /** Atributo que soma passos (ex.: agilidade), cada ponto valendo `perPoint` passos. */
+  speed: number;
+  /** Atributo que soma velocidade (ex.: agilidade), cada ponto valendo `perPoint` casas por segundo. */
   attribute?: string;
   perPoint?: number;
+}
+
+/**
+ * Quanto cada tipo de ação gasta do tempo do turno, em segundos do mundo. O tempo do turno não fica
+ * aqui: quem o dá é o mestre, a cada narração (set_turn_time).
+ */
+export interface TimeRules {
+  /** Cada fala que o jogador ouve numa conversa. */
+  talk: number;
+  /** Cada ação do menu (sentar, pegar, acender, passar…), salvo as de `verbs`. */
+  act: number;
+  /** Custo próprio de um verbo livre, ex. { acender: 1 }. */
+  verbs?: Record<string, number>;
+}
+
+/**
+ * O relógio do turno: o tempo que o mestre deu (`budget`) no turno `turn` para o jogador viver o
+ * grid sem ele, e quanto já passou (`spent`), em segundos. Acabou o tempo, só o mestre narra.
+ */
+export interface TurnClock {
+  turn: number;
+  budget: number;
+  spent: number;
 }
 
 /** Um jeito de falar: até onde o alvo pode estar e até onde cada canal leva o conteúdo. */
@@ -115,6 +140,7 @@ export interface Ruleset {
   /** Alcance (tiles) de ações com alvo: toque, corpo_a_corpo, arremesso… */
   reaches: Record<string, number>;
   movement: MovementRules;
+  time: TimeRules;
   /** Teste = dados + atributo + perícia + modificador >= dificuldade. */
   dice: string;
   difficulties: Record<DifficultyName, number>;
@@ -173,11 +199,6 @@ export interface Character {
   facing: Dir;
   seatId: string | null;
   /**
-   * Passos do jogador pelo grid neste turno: o máximo, fixado quando o turno começou (pelo ruleset),
-   * e quantos ele já andou sem o mestre. Sem isso, o máximo é o do ruleset agora, e nenhum andado.
-   */
-  steps?: { max: number; used: number };
-  /**
    * Pose do corpo (body.ts: ajoelhado, mirando, caído…); sem ela, de pé. Sentar num assento e
    * deitar numa cama vêm do assento, e quem fica com a vida em 0 cai sozinho. Andar desfaz a pose.
    */
@@ -198,8 +219,15 @@ export interface Character {
    * As do turno falam do que acabou de acontecer e somem no próximo turno do mestre; as gerais são
    * do jeito da pessoa e ficam. `heard` conta as que o jogador já ouviu desde a última troca.
    * `initiative`, do turno: o NPC não espera e vem até o jogador ("vem") ou chama de onde está ("chama").
+   * `awaiting`: as respostas prontas da fala que o jogador acabou de ouvir dele, à espera da escolha.
    */
-  lines?: { turn: ReadyLine[]; general: ReadyLine[]; heard: number; initiative?: 'vem' | 'chama' };
+  lines?: { turn: ReadyLine[]; general: ReadyLine[]; heard: number; initiative?: 'vem' | 'chama'; awaiting?: Reply[] };
+}
+
+/** Uma resposta pronta do jogador a uma fala de NPC ("Sim", "Não") e o que o NPC diz a ela; não muda nada no mundo. */
+export interface Reply {
+  label: string;
+  answer: string;
 }
 
 /** Uma fala pronta e o que ela revela a quem ouve. */
@@ -211,6 +239,8 @@ export interface ReadyLine {
   introduces?: boolean;
   /** Cochichada: quem fala chega perto, e só o jogador ouve (o segredo fica entre os dois). */
   whisper?: boolean;
+  /** Para a fala que pergunta algo: as respostas prontas do jogador e o que o NPC diz a cada uma. */
+  replies?: Reply[];
 }
 
 /** Como um item é empunhado (body.ts): decide a mão, o encaixe no 3D e as animações de quem o segura. */
@@ -444,6 +474,8 @@ export interface WorldState {
   rng: number;
   turn: number;
   clock: Clock;
+  /** O tempo que o jogador tem no grid até o mestre narrar de novo. */
+  turnClock: TurnClock;
   ruleset: Ruleset;
   playerId: string | null;
   locations: Record<string, Location>;
